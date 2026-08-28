@@ -15,7 +15,87 @@ SMP3 Multipath Kit 是一个下游实验性多路径传输方案，用于将**�
 
 ---
 
-## 1. 这个版本适合做什么
+## 1. 快速开始（使用方法）
+
+下面是“Linux 落地服务器 + Windows 客户端”的最短部署路径。正式部署前，请替换所有 `YOUR_*` 和 `CHANGE_*` 占位符。网络结构和安全边界见[这个版本适合做什么](#2-这个版本适合做什么)。
+
+### 1. 构建并验证
+
+在 Debian、Ubuntu 或 WSL 中执行。构建过程会下载固定版本的 sing-box 源码，并可能下载所需的 Go toolchain，因此需要网络访问。
+
+```bash
+mkdir -p "$HOME/go-tmp" "$HOME/go-build-cache"
+
+GOTMPDIR="$HOME/go-tmp" \
+GOCACHE="$HOME/go-build-cache" \
+./validate-kit.sh
+
+GOTMPDIR="$HOME/go-tmp" \
+GOCACHE="$HOME/go-build-cache" \
+./build.sh
+```
+
+预期生成：`dist/smp3-proxy-linux-amd64` 和 `dist/smp3-proxy-windows-amd64.exe`。
+
+### 2. 生成独立密钥
+
+```bash
+./scripts/gen-secrets.sh
+```
+
+将生成的 SMP3 password 和 Snell PSK 写入配置；Hysteria2 password 需要另外使用密码学安全的随机生成器生成。不要提交实际密钥、证书或部署配置。
+
+### 3. 配置并安装 Linux 落地服务器
+
+```bash
+cp config/server-hy2-snell.example.json config/server.json
+```
+
+编辑 `config/server.json`，替换落地地址、carrier 凭据、证书路径和 SMP3 password 等全部占位符。然后在 Linux 落地服务器上校验并安装：
+
+```bash
+./dist/smp3-proxy-linux-amd64 check -c ./config/server.json
+sudo ./install-server.sh ./config/server.json
+```
+
+查看服务状态和实时日志：
+
+```bash
+systemctl status smp3-proxy --no-pager
+journalctl -u smp3-proxy -f --no-pager
+```
+
+### 4. 配置并安装 Windows 客户端
+
+在 Windows 上复制 adaptive 客户端示例并替换占位符。两个 endpoint 都填写私网 SMP3 聚合地址；每条 leg 如何到达该地址由对应的 child outbound 决定。
+
+```powershell
+Copy-Item .\config\client-adaptive.example.json .\config\client.json
+.\dist\smp3-proxy-windows-amd64.exe check -c .\config\client.json
+PowerShell -ExecutionPolicy Bypass -File .\install-client.ps1
+```
+
+安装脚本会创建 `smp3-multipath` 计划任务并启动客户端。
+
+### 5. 接入本地代理并验证
+
+在 Mihomo 中使用 `127.0.0.1:2080` 作为本地 SOCKS5 地址，例如参考 `config/mihomo-snippet.yaml`。然后检查客户端是否监听：
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 2080
+```
+
+排查问题时可以以前台方式启动客户端：
+
+```powershell
+.\dist\smp3-proxy-windows-amd64.exe run -c .\config\client.json
+```
+
+后续章节提供详细的配置、安装、运行状态检查和故障排查说明。
+
+---
+
+## 2. 这个版本适合做什么
 
 典型部署结构是在客户端和同一台落地服务器之间准备两条互相独立的链路：
 
@@ -60,7 +140,7 @@ SMP3 Listener 会通过 HMAC 对 HELLO 进行认证，但 SMP3 本身并不是�
 
 ---
 
-## 2. r10 主要改进
+## 3. r10 主要改进
 
 `alpha2.3-r10` 主要解决两个问题：
 
@@ -104,7 +184,7 @@ R10 没有修改：
 
 ---
 
-## 3. 当前能力
+## 4. 当前能力
 
 - 一条逻辑 TCP 连接可承载在两条独立 child outbound 上。
 - 优选 `leg0` + 按需参与的 `leg1` Booster。
@@ -125,7 +205,7 @@ R10 没有修改：
 
 ---
 
-## 4. 已知限制
+## 5. 已知限制
 
 当前仍然属于实验版本，尤其需要注意：
 
@@ -137,7 +217,7 @@ R10 没有修改：
 
 ---
 
-## 5. r10 已完成验收
+## 6. r10 已完成验收
 
 ### 源码 / 单元测试验证
 
@@ -201,13 +281,13 @@ UPLOADED=524288000
 
 ---
 
-## 6. 发布包内容
+## 7. 发布包内容
 
 纯净的 **source release** 包含：
 
 ```text
 README.md
-README-zh_CN.md
+README.zh-CN.md
 RELEASE_NOTES.md
 CHANGELOG.md
 BUILD_STATUS.md
@@ -256,7 +336,7 @@ dist/SHA256SUMS
 
 ---
 
-## 7. 环境要求与构建
+## 8. 环境要求与构建
 
 推荐环境：Debian / Ubuntu / WSL，并建议在 Linux 文件系统内完成构建。
 
@@ -324,7 +404,7 @@ PowerShell：
 
 ---
 
-## 8. 生成部署密钥
+## 9. 生成部署密钥
 
 每套部署环境都应重新生成独立密钥：
 
@@ -354,7 +434,7 @@ Hysteria2 密码建议另外使用密码学安全的随机生成器生成。
 
 ---
 
-## 9. 配置模型
+## 10. 配置模型
 
 ### 推荐 Adaptive Client
 
@@ -424,7 +504,7 @@ Windows：
 
 ---
 
-## 10. Linux 落地服务器安装
+## 11. Linux 落地服务器安装
 
 先复制示例配置，不要直接修改发布包中的 example：
 
@@ -469,7 +549,7 @@ grep -Ei 'multipath|session|leg 0|leg 1|join|rejoin|closed|failed|error'
 
 ---
 
-## 11. Windows 客户端安装
+## 12. Windows 客户端安装
 
 复制 adaptive 示例：
 
@@ -513,7 +593,7 @@ Test-NetConnection 127.0.0.1 -Port 2080
 
 ---
 
-## 12. 运行状态验证
+## 13. 运行状态验证
 
 ### 客户端 Health Log
 
@@ -556,7 +636,7 @@ multipath leg 0 joined/rejoined session ...
 
 ---
 
-## 13. Adaptive Hy2 -> Snell 行为
+## 14. Adaptive Hy2 -> Snell 行为
 
 `client-adaptive.example.json` 默认将 Hy2 配置为公网 `leg1` 的优选 carrier，并将 Snell 设置为 fallback。
 
@@ -598,7 +678,7 @@ CHANGELOG.md
 
 ---
 
-## 14. 升级兼容性
+## 15. 升级兼容性
 
 Wire 兼容关系：
 
@@ -617,7 +697,7 @@ R10 本身不要求从之前的 alpha2.3 revision 迁移 JSON schema。
 
 ---
 
-## 15. 可复现构建与发布完整性
+## 16. 可复现构建与发布完整性
 
 Build Script 会执行：
 
@@ -650,7 +730,7 @@ sha256sum -c SHA256SUMS
 
 ---
 
-## 16. 纯净发布策略
+## 17. 纯净发布策略
 
 发布脚本通过 whitelist / staging directory 生成正式包，并明确排除常见的本地文件与实际部署文件。
 
@@ -683,7 +763,7 @@ CHANGE_*
 
 ---
 
-## 17. 常见问题排查
+## 18. 常见问题排查
 
 ### `missing/non-executable final Linux binary`
 
@@ -737,7 +817,7 @@ R10 应该对已经超时的累计 ACK blocker 进行 ACK-paced repair，同时�
 
 ---
 
-## 18. 开发说明
+## 19. 开发说明
 
 R10 主要实现文件：
 
@@ -776,7 +856,7 @@ patches/alpha2.2-to-alpha2.3.diff
 
 ---
 
-## 19. License / Attribution
+## 20. License / Attribution
 
 参见：
 

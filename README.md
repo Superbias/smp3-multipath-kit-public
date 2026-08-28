@@ -15,7 +15,87 @@ It is **not an official sing-box feature or SagerNet release**. The generated ex
 
 ---
 
-## 1. What this release is for
+## 1. Quick start
+
+This is the shortest path to a working deployment with a Linux landing server and a Windows client. Replace every `YOUR_*` and `CHANGE_*` value before starting a real deployment. For the topology and security boundary, see [What this release is for](#2-what-this-release-is-for).
+
+### 1. Build and validate
+
+Run these commands in Debian, Ubuntu, or WSL. The build downloads the pinned sing-box source and may download the required Go toolchain, so network access is required.
+
+```bash
+mkdir -p "$HOME/go-tmp" "$HOME/go-build-cache"
+
+GOTMPDIR="$HOME/go-tmp" \
+GOCACHE="$HOME/go-build-cache" \
+./validate-kit.sh
+
+GOTMPDIR="$HOME/go-tmp" \
+GOCACHE="$HOME/go-build-cache" \
+./build.sh
+```
+
+The expected binaries are `dist/smp3-proxy-linux-amd64` and `dist/smp3-proxy-windows-amd64.exe`.
+
+### 2. Generate fresh secrets
+
+```bash
+./scripts/gen-secrets.sh
+```
+
+Use the generated SMP3 password and Snell PSK in the configurations. Generate the Hysteria2 password separately with a cryptographically secure random generator. Never commit real secrets, certificates, or deployment configurations.
+
+### 3. Configure and install the Linux landing server
+
+```bash
+cp config/server-hy2-snell.example.json config/server.json
+```
+
+Edit `config/server.json`, replacing all placeholders with the landing address, carrier credentials, certificate paths, and the SMP3 password. Then validate and install it on the Linux landing server:
+
+```bash
+./dist/smp3-proxy-linux-amd64 check -c ./config/server.json
+sudo ./install-server.sh ./config/server.json
+```
+
+Check the service and follow its logs:
+
+```bash
+systemctl status smp3-proxy --no-pager
+journalctl -u smp3-proxy -f --no-pager
+```
+
+### 4. Configure and install the Windows client
+
+On Windows, copy the adaptive client example and replace its placeholders. Set both endpoint entries to the private SMP3 aggregation address; the child outbounds determine how each leg reaches it.
+
+```powershell
+Copy-Item .\config\client-adaptive.example.json .\config\client.json
+.\dist\smp3-proxy-windows-amd64.exe check -c .\config\client.json
+PowerShell -ExecutionPolicy Bypass -File .\install-client.ps1
+```
+
+The installer creates the `smp3-multipath` scheduled task and starts the client.
+
+### 5. Connect the local proxy and verify it
+
+Use `127.0.0.1:2080` as the local SOCKS5 endpoint in Mihomo, for example with `config/mihomo-snippet.yaml`. Then verify that the client is listening:
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 2080
+```
+
+For a foreground client run while troubleshooting:
+
+```powershell
+.\dist\smp3-proxy-windows-amd64.exe run -c .\config\client.json
+```
+
+Detailed configuration, installation, health checks, and troubleshooting are covered in the sections below.
+
+---
+
+## 2. What this release is for
 
 The typical deployment has two independent paths between the client and one landing server:
 
@@ -56,7 +136,7 @@ Do **not** publish a raw SMP3 listener to the Internet unless you have independe
 
 ---
 
-## 2. r10 highlights
+## 3. r10 highlights
 
 `alpha2.3-r10` focuses on cumulative-ACK head-of-line repair and same-leg-ID transport replacement.
 
@@ -91,7 +171,7 @@ Upgrade both endpoints together for deterministic testing and support.
 
 ---
 
-## 3. Current capabilities
+## 4. Current capabilities
 
 - One logical TCP connection over two independent child outbounds.
 - Preferred `leg0` plus on-demand `leg1` booster.
@@ -112,7 +192,7 @@ Upgrade both endpoints together for deterministic testing and support.
 
 ---
 
-## 4. Known limitations
+## 5. Known limitations
 
 This is still an experimental release. In particular:
 
@@ -124,7 +204,7 @@ This is still an experimental release. In particular:
 
 ---
 
-## 5. Verified r10 acceptance
+## 6. Verified r10 acceptance
 
 ### Source/unit verification
 
@@ -183,13 +263,13 @@ These numbers are environment-specific and should only be used to compare behavi
 
 ---
 
-## 6. Release contents
+## 7. Release contents
 
 A clean **source release** contains:
 
 ```text
 README.md
-README-zh_CN.md
+README.zh-CN.md
 RELEASE_NOTES.md
 CHANGELOG.md
 BUILD_STATUS.md
@@ -222,7 +302,7 @@ dist/SHA256SUMS
 
 ---
 
-## 7. Requirements and build
+## 8. Requirements and build
 
 Recommended environment: Debian/Ubuntu/WSL Linux filesystem.
 
@@ -288,7 +368,7 @@ Expected version string:
 
 ---
 
-## 8. Generate deployment secrets
+## 9. Generate deployment secrets
 
 Generate fresh secrets for every deployment:
 
@@ -318,7 +398,7 @@ All JSON files shipped under `config/*.example.json` use placeholder values and 
 
 ---
 
-## 9. Configuration model
+## 10. Configuration model
 
 ### Recommended adaptive client
 
@@ -379,7 +459,7 @@ Windows:
 
 ---
 
-## 10. Linux landing-server installation
+## 11. Linux landing-server installation
 
 Copy an example first; do not edit the shipped example in place:
 
@@ -424,7 +504,7 @@ grep -Ei 'multipath|session|leg 0|leg 1|join|rejoin|closed|failed|error'
 
 ---
 
-## 11. Windows client installation
+## 12. Windows client installation
 
 Copy the adaptive example:
 
@@ -462,7 +542,7 @@ Test-NetConnection 127.0.0.1 -Port 2080
 
 ---
 
-## 12. Operational verification
+## 13. Operational verification
 
 ### Client health log
 
@@ -505,7 +585,7 @@ A repaired leg should **join/rejoin the existing session**, not create a new des
 
 ---
 
-## 13. Adaptive Hy2 -> Snell behavior
+## 14. Adaptive Hy2 -> Snell behavior
 
 `client-adaptive.example.json` configures Hy2 as the preferred public `leg1` carrier and Snell as fallback.
 
@@ -537,7 +617,7 @@ See `CHANGELOG.md` for the detailed adaptive evolution and regression fixes.
 
 ---
 
-## 14. Upgrade compatibility
+## 15. Upgrade compatibility
 
 Wire compatibility:
 
@@ -556,7 +636,7 @@ R10 itself does not require a JSON schema migration from earlier alpha2.3 revisi
 
 ---
 
-## 15. Reproducibility and release integrity
+## 16. Reproducibility and release integrity
 
 The build script:
 
@@ -583,7 +663,7 @@ sha256sum -c SHA256SUMS
 
 ---
 
-## 16. Clean-release policy
+## 17. Clean-release policy
 
 The release packaging script uses a whitelist/staging directory and explicitly excludes common local/deployment artifacts.
 
@@ -609,7 +689,7 @@ Example JSON secret fields are checked to ensure they remain `YOUR_*` / `CHANGE_
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 ### `missing/non-executable final Linux binary`
 
@@ -643,7 +723,7 @@ Inspect `ack_progress_age`, `ack_frontier_age`, `ack_frontier_leg`, `ack_frontie
 
 ---
 
-## 18. Development notes
+## 19. Development notes
 
 Important r10 implementation files:
 
@@ -662,7 +742,7 @@ Historical diffs are retained under `patches/` for traceability. `patches/alpha2
 
 ---
 
-## 19. License / attribution
+## 20. License / attribution
 
 See `NOTICE.md`.
 
