@@ -1,0 +1,53 @@
+{
+  "log": { "level": "info", "timestamp": true },
+  "inbounds": [
+    {
+      "type": "snell",
+      "tag": "public-carrier",
+      "listen": "0.0.0.0",
+      "listen_port": 23456,
+      "version": 5,
+      "psk": "CHANGE_PUBLIC_SNELL_PSK"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "public-hy2-carrier",
+      "listen": "0.0.0.0",
+      "listen_port": 23457,
+      "users": [
+        {
+          "name": "smp3",
+          "password": "CHANGE_PUBLIC_HY2_PASSWORD"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "/etc/smp3/server.crt",
+        "key_path": "/etc/smp3/server.key"
+      }
+    },
+    {
+      "type": "multipath",
+      "tag": "mp-in",
+      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
+      "listen_port": 24444,
+      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+
+      "activation_threshold_mbps": 80,
+      "activation_window": "1s",
+      "chunk_size": 65536,
+      "queue_frames": 256,
+      "bandwidth_mbps": [100, 500],
+
+      "max_reorder_frames": 4096,
+      "max_inflight_frames": 1024,
+      "ack_interval": "20ms",
+      "retransmit_timeout": "1500ms",
+      "recovery_timeout": "15s"
+    }
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": { "final": "direct" }
+}

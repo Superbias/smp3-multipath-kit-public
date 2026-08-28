@@ -1,0 +1,6 @@
+kit_version=alpha2.3
+kit_revision=alpha2.3-r10
+wire_protocol=SMP3
+sing_box_base=v1.14.0-beta.14
+sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+go_toolchain=go1.25.5

@@ -1,0 +1,761 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/BUILD_STATUS.md /mnt/data/smp3-multipath-kit-alpha2.3-r5/BUILD_STATUS.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/BUILD_STATUS.md	2026-08-27 12:07:39.651493806 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/BUILD_STATUS.md	2026-08-27 12:20:57.126691881 +0000
+@@ -1,15 +1,35 @@
+-# Alpha2.3-r4 verification status
++# Alpha2.3-r5 verification status
+ 
+-R4 source changes are complete. The standalone SMP3 core/adaptive suite passes
+-under the sandbox's local Go 1.23.2 toolchain with race detection. R4 also adds
+-injected-package tests for the server secondary-before-primary wait and duplicate
+-join serialization; those tests run as part of `go test ./protocol/multipath`
+-inside `build.sh` on the pinned sing-box tree.
+-
+-The release intentionally does **not** include prebuilt Linux or Windows binaries.
+-The pinned sing-box revision requires Go 1.25.5, while this sandbox has Go 1.23.2
+-and cannot fetch the required toolchain/modules because outbound network/DNS is
+-unavailable.
++R5 source changes are complete. The server no longer waits for leg0 before
++accepting leg1: the first authenticated SMP3 leg atomically creates the logical
++server core, while path scheduling roles remain unchanged (leg0 preferred,
++leg1 lazy booster/fallback path).
++
++Validation completed in this sandbox:
++
++- standalone SMP3 core/adaptive/protocol tests: **45 PASS**
++- standalone `go test -race -count=5`: **PASS**
++- standalone `go vet`: **PASS**
++- `gofmt`: **PASS**
++- JSON syntax / shell syntax / Python injector syntax: validated by
++  `validate-kit.sh` after packaging
++- new core regression proving a leg1-only core can transfer payload before
++  leg0 joins: **PASS**
++- scheduler regression proving a later leg0 immediately regains the inactive/
++  preferred scheduling role after leg1-created operation: **PASS**
++
++Injected-package tests added for R5:
++
++- leg1 may create the server session before leg0;
++- concurrent leg0/leg1 first arrivals converge on exactly one server session;
++- duplicate same-leg JOIN remains rejected.
++
++Those `inbound_test.go` tests require the pinned sing-box dependency graph and
++therefore run inside `build.sh` as part of `go test ./protocol/multipath`.
++This sandbox cannot finish that full package build because required Go modules
++are not all cached and outbound module download is unavailable. The source is
++formatted and the standalone transport suite is fully validated here; perform
++the final injected-package test/build in WSL.
+ 
+ Build in WSL:
+ 
+@@ -21,9 +41,9 @@
+ Expected binary version:
+ 
+ ```text
+-1.14.0-beta.14-smp3-alpha2.3-r4
++1.14.0-beta.14-smp3-alpha2.3-r5
+ ```
+ 
+-For the live r4 validation, upgrade the landing-server binary as well as the
+-Windows client. The key r4 fix is server-side; running an r4 client against the
+-old r2/r3 server will keep the secondary-HELLO ordering race.
++For live R5 validation, upgrade the landing-server binary. Upgrading the Windows
++client at the same time is recommended so both ends report the same release,
++although the SMP3 wire/hello version remains `4` and the JSON schema is unchanged.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/CHANGELOG.md /mnt/data/smp3-multipath-kit-alpha2.3-r5/CHANGELOG.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/CHANGELOG.md	2026-08-27 12:07:39.588095995 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/CHANGELOG.md	2026-08-27 12:16:02.944310260 +0000
+@@ -1,5 +1,16 @@
+ # Changelog
+ 
++## alpha2.3-r5 — first authenticated leg establishes the server core
++
++- Removed the R4 fixed 10-second secondary-before-primary ordering grace. Ordering is no longer a prerequisite for correctness.
++- After SMP3 HMAC, replay-nonce, leg-ID, destination, and session-ID validation, either leg 0 or leg 1 may atomically create the logical server session when no matching session exists.
++- Session creation is serialized by the server session-map mutex. The creator installs its transport leg before publishing the session, so a concurrent arrival can only JOIN a fully initialized core; exactly one routed destination connection is created.
++- Session creator and scheduling role are deliberately separate: leg0 remains preferred when present and the client still controls lazy leg1 activation. A leg1-created session is not promoted to preferred path.
++- The core already supports operation with only leg1 present; when leg0 later JOINs, new inactive/preferred traffic naturally returns to leg0 while already-outstanding frames retain normal ACK/retransmit behavior.
++- True duplicate same-ID legs remain rejected because wire v4 has no leg-generation counter.
++- Added regression tests for secondary-first creation, concurrent leg0/leg1 first arrival converging on one session, and leg1-only core data transfer.
++- SMP3 wire/hello version remains `4`; no configuration schema change is required.
++
+ ## alpha2.3-r4 — server secondary-HELLO ordering fix
+ 
+ - Live client/server logs proved that public Hy2/Snell leg1 can reach the landing SMP3 listener before the preferred-line leg0 has registered the logical session. The old server rejected such an authenticated secondary immediately as an orphan, producing a false zero-useful EOF and eventually adaptive fallback.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/README-zh_CN.md /mnt/data/smp3-multipath-kit-alpha2.3-r5/README-zh_CN.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/README-zh_CN.md	2026-08-27 12:07:39.592096092 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/README-zh_CN.md	2026-08-27 12:16:01.973215521 +0000
+@@ -5,18 +5,15 @@
+ 地址、证书和随机密钥；不要把真实部署配置提交到仓库或发布包。
+ 
+ 
+-## alpha2.3-r4 服务端乱序修复
++## alpha2.3-r5：first authenticated leg 建立 session
+ 
+-R3 实机双端日志已经定位到一个比 EOF 归因更底层的竞态：客户端虽然先创建 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`。旧服务端在尚未看到该 session ID 的 leg0 时会立即拒绝 leg1，于是客户端表现为 `leg1 ready -> EOF -> repeated_zero_useful_eof -> fallback`。
++R3/R4 双端日志已经证明，要求“leg0 必须先注册 session、leg1 只能 JOIN”会让协议正确性依赖两条 carrier 的实际到达顺序。R5 从根本上取消这个依赖：
+ 
+-R4 保持 wire/hello v4 不变，服务端对**已经通过 SMP3 HMAC 验证**、但暂时找不到 primary session 的 leg1 增加最多 10 秒的 ordering grace。leg0 在窗口内注册后，等待中的 leg1 直接 JOIN 同一个 core；HELLO 后已经进入 carrier 缓冲区的数据不会被重新解释为新 session。
++- `leg0`、`leg1` 都携带经过 HMAC 验证的同一 session ID 与 destination；**哪条合法 HELLO 先到服务器，哪条就可以原子创建 logical core**。
++- “谁创建 session”与“谁是 preferred path”完全分离。客户端仍然只在 activation/故障条件满足后才拨 leg1；scheduler 中 `leg0` 仍是首选路径，`leg1` 仍是 Hy2 优先、Snell fallback 的 booster。
++- leg1 先创建时，可以先单腿承载逻辑流；leg0 后到后直接 JOIN。同一个 core、序列号、ACK、outstanding window 都不重建。
++- leg0/leg1 几乎同时到达时，server session map 的创建临界区保证只有一个 creator，另一条只会 JOIN 已经完整安装首腿的 core，不会创建两个目标连接。
++- 不再依赖 R4 的固定 10 秒等待窗口，因此 10 秒以上的跨路径乱序也不会因为“secondary orphan”而被主动拒绝。
++- wire/hello 仍是 v4，配置 schema 不变。真正的同 leg-ID duplicate 仍保守拒绝，因为 v4 没有 generation 字段，不能安全猜测哪条同 ID transport 更新。
+ 
+-同时新增服务端诊断日志：
+-
+-- `multipath secondary leg waited ... for primary session to register`
+-- `multipath leg 1 join rejected ...`
+-- `multipath secondary leg has no active session after wait ...`
+-
+-同一 session 的并发 attach 会串行化。R4 仍然保守拒绝真正的 duplicate leg ID，不盲目替换，因为 wire v4 没有 monotonic leg generation，无法可靠判断两个同 ID transport 哪一个更新。
+-
+-R3 的客户端修复继续保留：首次 ambiguous zero-useful EOF 不直接毒化 Hy2 健康状态；同一故障 burst 只建立一次 cooldown。
++R3 的 EOF attribution 与 cooldown burst 修复继续保留。
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/README.md /mnt/data/smp3-multipath-kit-alpha2.3-r5/README.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/README.md	2026-08-27 12:07:39.611092214 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/README.md	2026-08-27 12:16:01.973065451 +0000
+@@ -2,7 +2,7 @@
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.3-r4**
++> **当前版本：alpha2.3-r5**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -67,16 +67,19 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
+-## 2.0.1 alpha2.3-r4 server ordering fix
++## 2.0.1 alpha2.3-r5 first-authenticated-leg session establishment
+ 
+-alpha2.3-r4 keeps SMP3 wire/hello version `4` unchanged. Live R3 logs exposed a server-side ordering race that the client EOF classifier could only mask:
++alpha2.3-r5 keeps SMP3 wire/hello version `4` and the existing configuration schema unchanged. R3/R4 live logs proved that requiring leg0 to publish the server session before leg1 can JOIN makes correctness depend on cross-carrier arrival order. R5 removes that dependency at the session-registry layer:
+ 
+-- The client creates leg0 first, but the public Hy2/Snell leg1 can physically reach `:24444` before the preferred-line leg0 HELLO has registered the session on the landing server.
+-- r3 server immediately rejected a secondary whose session ID was not yet present. The client therefore saw `leg1 ready -> EOF`, retried, and could eventually report `repeated_zero_useful_eof` even though the public carrier itself was healthy.
+-- r4 server holds an authenticated early secondary for up to 10 seconds waiting for the matching primary session to be published. Once leg0 appears, the same connection joins the existing core; bytes already buffered after the HELLO are then consumed normally.
+-- Server now logs explicit `join rejected` reasons and secondary wait timeout events. Same-ID duplicate joins remain rejected rather than blindly replacing a possibly newer transport because wire v4 has no leg-generation counter.
++- **Either authenticated leg may establish the logical core.** `leg0` and `leg1` carry the same HMAC-authenticated session ID and destination metadata, so whichever valid HELLO reaches `:24444` first atomically creates the server session.
++- **Creation authority does not change path roles.** `leg0` remains the preferred path in the core scheduler; `leg1` remains a lazy booster selected by the client and can still use Hy2 with Snell fallback. If leg1 happens to create the server core first, it is only the creator, not the new preferred path.
++- **Concurrent first arrivals converge on one core.** The server session-map lock serializes the create-vs-join decision. The winning leg installs itself before publication; the other leg then JOINs that fully initialized core. No fixed 10-second ordering window is needed.
++- **A leg1-only core is valid.** Before leg0 arrives, the core can temporarily send and receive over leg1. When leg0 later JOINs, inactive/preferred scheduling naturally returns new traffic to leg0 without forcibly moving already-outstanding frames, avoiding artificial reorder churn.
++- **True same-ID duplicate legs are still rejected.** Wire v4 has no monotonic leg-generation field, so R5 does not guess which of two simultaneously valid transports with the same leg ID is newer.
+ 
+-The r3 client fixes remain in place: ambiguous first zero-useful Hy2 EOF is not an immediate carrier failure, and concurrent failure bursts cannot multiply one cooldown transition.
++This means ordinary reordering of 1 ms, 1 s, 10 s, or longer no longer decides whether a session can be established. If one path never arrives, the authenticated surviving path can still own the logical core until normal recovery/close rules decide otherwise.
++
++The R3 adaptive fixes remain in place: ambiguous first zero-useful Hy2 EOF is not an immediate carrier failure, and concurrent failure bursts cannot multiply one cooldown transition.
+ 
+ ## 2.1 alpha2.3 自适应公网 carrier
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/TEST_RESULTS.txt /mnt/data/smp3-multipath-kit-alpha2.3-r5/TEST_RESULTS.txt
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/TEST_RESULTS.txt	2026-08-27 11:35:29.607600895 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/TEST_RESULTS.txt	2026-08-27 12:20:57.126823192 +0000
+@@ -1,36 +1,52 @@
+-SMP3 alpha2.3-r4 source verification
++SMP3 alpha2.3-r5 source verification
+ Date: 2026-08-27
+ 
+-Live evidence behind r4
+-- Public Hy2 and public Snell both reached 10.66.66.1:24444.
+-- Only a subset of those secondary connections logged "leg 1 joined/rejoined".
+-- Later retries could join successfully, proving session ID/wire compatibility.
+-- The old server rejected leg1 immediately when its matching primary session had
+-  not yet been published; the rejection path was previously not explicit in logs.
++Live evidence behind r5
++- Public Hy2 and public Snell both reached the landing SMP3 listener.
++- Server logs proved that successful leg1 JOINs are possible over both carrier
++  types, excluding basic password/wire/session-ID incompatibility as the root
++  cause.
++- Earlier connections could reach :24444 before their matching leg0 session was
++  registered, proving that cross-carrier HELLO arrival order is not deterministic.
++- R4 bounded that race with a 10s wait; R5 removes the ordering dependency rather
++  than extending the timeout.
+ 
+-R4 changes
+-1. Authenticated secondary-before-primary ordering grace
+-   - leg1 waits up to 10s for the same session ID to appear.
+-   - leg1 still cannot create a routed logical session by itself.
+-   - no wire or config-schema change.
+-2. Server diagnostics
+-   - explicit join-rejected reason.
+-   - explicit no-active-session-after-wait warning.
+-3. Same-session attach serialization
+-   - concurrent JOIN handlers do not race core.addLeg.
+-   - true duplicate same-ID legs remain conservatively rejected in wire v4.
+-4. R3 adaptive fixes retained unchanged.
++R5 changes
++1. First authenticated leg establishes the server core
++   - either leg0 or leg1 may create a missing logical session after full HELLO
++     authentication/validation;
++   - creator identity does not change scheduling roles;
++   - leg0 remains preferred when present;
++   - leg1 remains client-controlled lazy booster / Hy2->Snell adaptive path.
++2. Atomic create-vs-join
++   - the server session-map mutex serializes first arrival;
++   - creator installs its leg before publishing the session;
++   - a concurrent second leg can only JOIN the same fully initialized core;
++   - only one routed destination connection is created.
++3. Leg1-only temporary operation
++   - core scheduler can send/receive using leg1 while leg0 is absent;
++   - when leg0 later joins, new inactive/preferred traffic naturally returns to
++     leg0 without forcibly moving already-outstanding frames.
++4. Duplicate safety retained
++   - true duplicate same-ID legs remain rejected because wire v4 has no monotonic
++     leg-generation field.
++5. R3 adaptive fixes retained unchanged
++   - ambiguous first zero-useful EOF suppression;
++   - repeated still-live zero-useful failure escalation;
++   - cooldown burst coalescing and probation backoff.
+ 
+ Validation completed in this sandbox
+-- standalone core/adaptive/protocol tests: PASS
++- standalone core/adaptive/protocol tests: 45 PASS
+ - standalone go test -race -count=5: PASS
++- standalone go vet: PASS
++- leg1-only core round-trip regression: PASS
++- late-leg0 preferred-scheduler regression: PASS
+ - gofmt: PASS
+-- JSON syntax / shell syntax / Python injector syntax: PASS (via local checks)
+ 
+ Validation deferred to WSL build
+-- injected sing-box package test, including inbound_test.go
+-- Linux/Windows final build with Go 1.25.5
+-Reason: sandbox cannot download Go 1.25.5 or missing sing-box modules.
++- injected sing-box package test, including R5 inbound first-leg-wins tests
++- Linux/Windows final build with pinned sing-box dependency graph
++Reason: required external Go modules are not fully cached in this sandbox.
+ 
+ Expected final binary version
+-  1.14.0-beta.14-smp3-alpha2.3-r4
++  1.14.0-beta.14-smp3-alpha2.3-r5
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/VERSION /mnt/data/smp3-multipath-kit-alpha2.3-r5/VERSION
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/VERSION	2026-08-27 11:35:26.487532846 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/VERSION	2026-08-27 12:16:01.130332120 +0000
+@@ -1,5 +1,5 @@
+ kit_version=alpha2.3
+-kit_revision=alpha2.3-r4
++kit_revision=alpha2.3-r5
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/build.sh /mnt/data/smp3-multipath-kit-alpha2.3-r5/build.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/build.sh	2026-08-27 11:35:26.487624103 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/build.sh	2026-08-27 12:16:01.130484843 +0000
+@@ -48,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r4 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r5 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/dist/BUILD_REQUIRED.md /mnt/data/smp3-multipath-kit-alpha2.3-r5/dist/BUILD_REQUIRED.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/dist/BUILD_REQUIRED.md	2026-08-27 11:35:26.487921594 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/dist/BUILD_REQUIRED.md	2026-08-27 12:16:01.130812582 +0000
+@@ -1,8 +1,14 @@
+ # Build required
+ 
+-This alpha2.3-r4 artifact is a clean source package. No binary is bundled,
+-because the current sandbox cannot fetch the pinned Go 1.25.5 toolchain needed
+-by sing-box v1.14.0-beta.14.
++This alpha2.3-r5 artifact is a clean source package. No binary is bundled.
++Run `./build.sh` on a machine with Go/toolchain/module access.
+ 
+-Run `./build.sh` in the existing WSL build environment. The resulting binaries
+-must report `1.14.0-beta.14-smp3-alpha2.3-r4` before deployment.
++Expected version after build:
++
++```text
++1.14.0-beta.14-smp3-alpha2.3-r5
++```
++
++For live validation, upgrade both landing-server and client binaries. The key
++r5 change is server-side first-authenticated-leg session establishment; wire
++version remains SMP3 hello v4 and existing JSON configuration remains valid.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/package-release.sh /mnt/data/smp3-multipath-kit-alpha2.3-r5/package-release.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/package-release.sh	2026-08-27 11:35:26.487713059 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/package-release.sh	2026-08-27 12:16:01.130642127 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-NAME="smp3-multipath-kit-alpha2.3-r4"
++NAME="smp3-multipath-kit-alpha2.3-r5"
+ STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
+ STAGE="$STAGE_ROOT/$NAME"
+ OUT_ZIP="${1:-$ROOT/$NAME.zip}"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/scripts/apply_source.py /mnt/data/smp3-multipath-kit-alpha2.3-r5/scripts/apply_source.py
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/scripts/apply_source.py	2026-08-27 11:35:26.487800787 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/scripts/apply_source.py	2026-08-27 12:16:01.130750577 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.3-r4 source installed')
++print('[+] SMP3 multipath alpha2.3-r5 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/src/protocol/multipath/core_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/core_test.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/src/protocol/multipath/core_test.go	2026-08-27 13:45:24.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/core_test.go	2026-08-27 12:20:16.838465052 +0000
+@@ -683,3 +683,66 @@
+ 		t.Fatal("rejoined carrier did not restore both legs")
+ 	}
+ }
++
++func TestCoreSecondaryOnlyRoundTripBeforePrimaryJoin(t *testing.T) {
++	leftCore, leftApp := newCore(testCoreConfig())
++	rightCore, rightApp := newCore(testCoreConfig())
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a, b := net.Pipe()
++	if err := leftCore.addLeg(1, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("secondary-first"), 4096)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() {
++		_, err := io.ReadFull(rightApp, got)
++		readDone <- err
++	}()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("secondary-only round trip timed out")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("secondary-only payload mismatch")
++	}
++}
++
++func TestCorePrimaryPreferenceRestoredAfterLateLeg0Join(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60 // keep scheduler inactive/preferred for the assertion
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	leg1, peer1 := net.Pipe()
++	defer peer1.Close()
++	if err := core.addLeg(1, leg1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if chosen := core.chooseLeg(false, -1); chosen == nil || chosen.id != 1 {
++		t.Fatalf("secondary-only core did not use surviving leg1: %#v", chosen)
++	}
++
++	leg0, peer0 := net.Pipe()
++	defer peer0.Close()
++	if err := core.addLeg(0, leg0, nil); err != nil {
++		t.Fatal(err)
++	}
++	if chosen := core.chooseLeg(false, -1); chosen == nil || chosen.id != 0 {
++		t.Fatalf("late leg0 did not regain preferred scheduling role: %#v", chosen)
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/src/protocol/multipath/inbound.go /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/src/protocol/multipath/inbound.go	2026-08-27 11:34:04.852627083 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound.go	2026-08-27 12:11:53.410691161 +0000
+@@ -21,8 +21,6 @@
+ 	inbound.Register[option.MultipathInboundOptions](registry, C.TypeMultipath, NewInbound)
+ }
+ 
+-const secondarySessionWait = 10 * time.Second
+-
+ type serverSession struct {
+ 	id          [16]byte
+ 	destination M.Socksaddr
+@@ -132,79 +130,85 @@
+ 		return
+ 	}
+ 
+-	i.access.Lock()
+-	session := i.sessions[hello.Session]
+-	i.access.Unlock()
+-	if session == nil && hello.LegID == 1 {
+-		// Different carriers can reorder the SMP3 HELLOs even though the client
+-		// creates leg 0 first. In live tests the public Hy2/Snell secondary often
+-		// reached the landing server before the slower preferred-line leg 0.
+-		// Rejecting it immediately creates a false EOF/fallback loop. Hold the
+-		// authenticated secondary briefly and let leg 0 register the logical
+-		// session; DATA already queued behind this HELLO remains buffered by the
+-		// transport and is consumed after the join succeeds.
+-		waitStarted := time.Now()
+-		session = i.waitForSession(ctx, hello.Session, secondarySessionWait)
+-		if session != nil {
+-			i.logger.InfoContext(ctx, "multipath secondary leg waited ", time.Since(waitStarted), " for primary session to register")
+-		}
+-	}
+-	if session != nil {
+-		if session.destination.String() != destination.String() {
+-			N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath session destination mismatch"))
+-			return
+-		}
+-		attachErr := session.attachLeg(hello.LegID, conn, onClose)
+-		if attachErr != nil {
+-			i.logger.WarnContext(ctx, "multipath leg ", hello.LegID, " join rejected for ", destination, ": ", attachErr)
+-			N.CloseOnHandshakeFailure(conn, onClose, attachErr)
+-			return
++	// Session establishment is intentionally independent from path role. The
++	// client still decides when leg 1 may be dialed and still treats leg 0 as the
++	// preferred path, but once an authenticated HELLO reaches the server either
++	// leg is allowed to create the logical core. This removes cross-carrier HELLO
++	// ordering as a correctness dependency: a faster Hy2/Snell leg 1 no longer
++	// waits for, races with, or gets rejected behind a slower line-path leg 0.
++	session, created, err := i.createOrJoinSession(ctx, hello, destination, conn, onClose)
++	if err != nil {
++		if !created {
++			i.logger.WarnContext(ctx, "multipath leg ", hello.LegID, " join rejected for ", destination, ": ", err)
+ 		}
++		N.CloseOnHandshakeFailure(conn, onClose, err)
++		return
++	}
++	if !created {
+ 		i.logger.InfoContext(ctx, "multipath leg ", hello.LegID, " joined/rejoined session for ", destination)
+ 		return
+ 	}
+ 
+-	// Only leg 0 may create a logical session. A secondary that still has no
+-	// session after the bounded ordering grace must not create a second routed
+-	// connection.
+-	if hello.LegID != 0 {
+-		i.logger.WarnContext(ctx, "multipath secondary leg has no active session after wait for ", destination)
+-		N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath secondary leg has no active session"))
+-		return
++	metadata.Inbound = i.Tag()
++	metadata.InboundType = i.Type()
++	metadata.Destination = destination
++	i.logger.InfoContext(ctx, "multipath session established to ", destination, " on first authenticated leg ", hello.LegID)
++	logicalOnClose := N.OnceClose(func(closeErr error) {
++		// Ordinary routed EOF/close must not discard response bytes that have
++		// already been accepted into SMP3 but are still awaiting cumulative ACKs.
++		// The session remains registered until core.Done(), allowing any transport
++		// repair needed during the graceful tail drain to rejoin the same core.
++		session.core.startGracefulClose(closeErr)
++	})
++	i.router.RouteConnectionEx(ctx, session.appConn, metadata, logicalOnClose)
++}
++
++// createOrJoinSession performs the only create-vs-join decision for a logical
++// session. The sessions-map mutex is the creation serialization point: if leg 0
++// and leg 1 arrive concurrently, exactly one of them publishes the core and the
++// other observes that same fully initialized core and joins it. Holding the map
++// lock through newCore/addLeg is deliberate; addLeg is local/non-blocking and it
++// prevents a joiner from observing a half-created session.
++func (i *Inbound) createOrJoinSession(ctx context.Context, hello helloMessage, destination M.Socksaddr, conn net.Conn, onClose N.CloseHandlerFunc) (*serverSession, bool, error) {
++	i.access.Lock()
++	if existing := i.sessions[hello.Session]; existing != nil {
++		i.access.Unlock()
++		if existing.destination.String() != destination.String() {
++			return existing, false, E.New("multipath session destination mismatch")
++		}
++		if err := existing.attachLeg(hello.LegID, conn, onClose); err != nil {
++			return existing, false, err
++		}
++		return existing, false, nil
+ 	}
+ 
+ 	cfg := i.cfg
+-	cfg.OnFutureAck = func(next, max, count uint64) {
+-		i.logger.WarnContext(ctx, "multipath server ignored future ACK for ", destination, ": next=", next, " tx_seq=", max, " count=", count)
+-	}
+-	cfg.OnActivate = func() {
+-		i.logger.InfoContext(ctx, "multipath server booster activated for ", destination)
+-	}
+-	cfg.OnLegDown = func(id uint8, legErr error) {
+-		i.logger.WarnContext(ctx, "multipath server leg ", id, " down for ", destination, ": ", legErr)
++	if i.logger != nil {
++		cfg.OnFutureAck = func(next, max, count uint64) {
++			i.logger.WarnContext(ctx, "multipath server ignored future ACK for ", destination, ": next=", next, " tx_seq=", max, " count=", count)
++		}
++		cfg.OnActivate = func() {
++			i.logger.InfoContext(ctx, "multipath server booster activated for ", destination)
++		}
++		cfg.OnLegDown = func(id uint8, legErr error) {
++			i.logger.WarnContext(ctx, "multipath server leg ", id, " down for ", destination, ": ", legErr)
++		}
+ 	}
+ 	core, appConn := newCore(cfg)
+-	session = &serverSession{
++	session := &serverSession{
+ 		id:          hello.Session,
+ 		destination: destination,
+ 		core:        core,
+ 		appConn:     appConn,
+ 	}
+-	if err = core.addLeg(hello.LegID, conn, onClose); err != nil {
+-		appConn.Close()
+-		N.CloseOnHandshakeFailure(conn, onClose, err)
+-		return
+-	}
+-	// Publish the primary-created session only after leg 0 is installed. A
+-	// secondary waiting in waitForSession() can then attach immediately without
+-	// observing a half-created core.
+-	i.access.Lock()
+-	if existing := i.sessions[hello.Session]; existing != nil {
++	if err := core.addLeg(hello.LegID, conn, onClose); err != nil {
+ 		i.access.Unlock()
+-		core.Close()
+-		N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath duplicate primary session"))
+-		return
++		_ = appConn.Close()
++		_ = core.Close()
++		return nil, true, err
+ 	}
++	// Publish only after the creator leg is installed. A concurrent arrival can
++	// therefore never join a core that has zero transport legs.
+ 	i.sessions[hello.Session] = session
+ 	i.access.Unlock()
+ 
+@@ -212,19 +216,7 @@
+ 		<-core.Done()
+ 		i.removeSession(hello.Session, session)
+ 	}()
+-
+-	metadata.Inbound = i.Tag()
+-	metadata.InboundType = i.Type()
+-	metadata.Destination = destination
+-	i.logger.InfoContext(ctx, "multipath session established to ", destination, " on leg ", hello.LegID)
+-	logicalOnClose := N.OnceClose(func(closeErr error) {
+-		// Ordinary routed EOF/close must not discard response bytes that have
+-		// already been accepted into SMP3 but are still awaiting cumulative ACKs.
+-		// The session remains registered until core.Done(), allowing any transport
+-		// repair needed during the graceful tail drain to rejoin the same core.
+-		core.startGracefulClose(closeErr)
+-	})
+-	i.router.RouteConnectionEx(ctx, appConn, metadata, logicalOnClose)
++	return session, true, nil
+ }
+ 
+ func (s *serverSession) attachLeg(id uint8, conn net.Conn, onClose func(error)) error {
+@@ -237,40 +229,13 @@
+ 	default:
+ 	}
+ 
+-	// Serialize concurrent joins for the same logical session. We intentionally
+-	// keep duplicate-leg rejection in r4: without a wire-level generation number
+-	// the server cannot safely decide whether a late authenticated connection is
+-	// newer than the currently installed transport. The explicit join-rejected
+-	// log added in r4 will tell us if stale duplicate state is a separate live
+-	// problem after the primary/secondary ordering race is removed.
++	// Serialize concurrent joins for the same logical session. Duplicate leg IDs
++	// remain conservatively rejected in r5: wire v4 has no monotonic generation
++	// field, so the server must not guess which of two simultaneously valid
++	// same-ID transports is newer.
+ 	return s.core.addLeg(id, conn, onClose)
+ }
+ 
+-func (i *Inbound) waitForSession(ctx context.Context, id [16]byte, timeout time.Duration) *serverSession {
+-	if timeout <= 0 {
+-		return nil
+-	}
+-	deadline := time.NewTimer(timeout)
+-	defer deadline.Stop()
+-	ticker := time.NewTicker(10 * time.Millisecond)
+-	defer ticker.Stop()
+-	for {
+-		i.access.Lock()
+-		session := i.sessions[id]
+-		i.access.Unlock()
+-		if session != nil {
+-			return session
+-		}
+-		select {
+-		case <-ctx.Done():
+-			return nil
+-		case <-deadline.C:
+-			return nil
+-		case <-ticker.C:
+-		}
+-	}
+-}
+-
+ func (i *Inbound) removeSession(id [16]byte, session *serverSession) {
+ 	i.access.Lock()
+ 	if current := i.sessions[id]; current == session {
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=alpha2.3-r4-to-r5.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r4/src/protocol/multipath/inbound_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound_test.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r4/src/protocol/multipath/inbound_test.go	2026-08-27 11:34:20.467645828 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound_test.go	2026-08-27 12:12:22.342945438 +0000
+@@ -3,57 +3,130 @@
+ import (
+ 	"context"
+ 	"net"
++	"sync"
+ 	"testing"
+ 	"time"
+ 
+ 	M "github.com/sagernet/sing/common/metadata"
+ )
+ 
+-func TestInboundWaitForSessionAllowsSecondaryBeforePrimary(t *testing.T) {
+-	inbound := &Inbound{sessions: make(map[[16]byte]*serverSession)}
++func newTestInboundForSessionCreation() *Inbound {
++	cfg := testCoreConfig()
++	// Keep tests focused on session creation/join. A positive threshold avoids
++	// immediate activation callbacks before a logger is installed.
++	cfg.ThresholdBytesPS = 1 << 60
++	return &Inbound{
++		sessions: make(map[[16]byte]*serverSession),
++		cfg:      cfg,
++	}
++}
++
++func TestInboundSecondaryCanCreateSessionBeforePrimary(t *testing.T) {
++	inbound := newTestInboundForSessionCreation()
+ 	var id [16]byte
+ 	id[0] = 0x42
+-	ctx, cancel := context.WithCancel(context.Background())
+-	defer cancel()
++	destination := M.ParseSocksaddr("example.com:443")
+ 
+-	result := make(chan *serverSession, 1)
+-	go func() {
+-		result <- inbound.waitForSession(ctx, id, 500*time.Millisecond)
+-	}()
++	leg1, peer1 := net.Pipe()
++	defer peer1.Close()
++	hello1 := helloMessage{Session: id, LegID: 1, Destination: destination.String()}
++	session, created, err := inbound.createOrJoinSession(context.Background(), hello1, destination, leg1, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer session.core.Close()
++	defer session.appConn.Close()
++	if !created {
++		t.Fatal("secondary first arrival did not create session")
++	}
++	if !session.core.hasLeg(1) || session.core.hasLeg(0) {
++		t.Fatalf("unexpected initial legs: leg0=%v leg1=%v", session.core.hasLeg(0), session.core.hasLeg(1))
++	}
+ 
+-	time.Sleep(40 * time.Millisecond)
+-	core, appConn := newCore(testCoreConfig())
+-	defer core.Close()
+-	defer appConn.Close()
+-	session := &serverSession{
+-		id:          id,
+-		destination: M.ParseSocksaddr("example.com:443"),
+-		core:        core,
+-		appConn:     appConn,
+-	}
+-	inbound.access.Lock()
+-	inbound.sessions[id] = session
+-	inbound.access.Unlock()
+-
+-	select {
+-	case got := <-result:
+-		if got != session {
+-			t.Fatalf("waitForSession returned wrong session: got=%p want=%p", got, session)
+-		}
+-	case <-time.After(time.Second):
+-		t.Fatal("secondary did not observe primary session publication")
++	leg0, peer0 := net.Pipe()
++	defer peer0.Close()
++	hello0 := helloMessage{Session: id, LegID: 0, Destination: destination.String()}
++	joined, created, err := inbound.createOrJoinSession(context.Background(), hello0, destination, leg0, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if created {
++		t.Fatal("primary arrival created a second session")
++	}
++	if joined != session {
++		t.Fatalf("primary joined wrong session: got=%p want=%p", joined, session)
++	}
++	if !session.core.hasLeg(0) || !session.core.hasLeg(1) {
++		t.Fatalf("both legs not present after join: leg0=%v leg1=%v", session.core.hasLeg(0), session.core.hasLeg(1))
+ 	}
+ }
+ 
+-func TestInboundWaitForSessionTimesOut(t *testing.T) {
+-	inbound := &Inbound{sessions: make(map[[16]byte]*serverSession)}
++func TestInboundConcurrentFirstLegsCreateExactlyOneSession(t *testing.T) {
++	inbound := newTestInboundForSessionCreation()
+ 	var id [16]byte
+-	started := time.Now()
+-	if got := inbound.waitForSession(context.Background(), id, 60*time.Millisecond); got != nil {
+-		t.Fatal("unexpected session")
++	id[0] = 0x99
++	destination := M.ParseSocksaddr("speed.cloudflare.com:443")
++
++	type result struct {
++		session *serverSession
++		created bool
++		err     error
++	}
++	results := make(chan result, 2)
++	start := make(chan struct{})
++	var peers []net.Conn
++	var peersMu sync.Mutex
++	for legID := uint8(0); legID < 2; legID++ {
++		legID := legID
++		go func() {
++			conn, peer := net.Pipe()
++			peersMu.Lock()
++			peers = append(peers, peer)
++			peersMu.Unlock()
++			<-start
++			hello := helloMessage{Session: id, LegID: legID, Destination: destination.String()}
++			session, created, err := inbound.createOrJoinSession(context.Background(), hello, destination, conn, nil)
++			results <- result{session: session, created: created, err: err}
++		}()
++	}
++	close(start)
++
++	var got [2]result
++	for idx := range got {
++		select {
++		case got[idx] = <-results:
++		case <-time.After(2 * time.Second):
++			t.Fatal("concurrent create/join timed out")
++		}
++		if got[idx].err != nil {
++			t.Fatal(got[idx].err)
++		}
++	}
++	defer func() {
++		peersMu.Lock()
++		defer peersMu.Unlock()
++		for _, peer := range peers {
++			_ = peer.Close()
++		}
++	}()
++
++	createdCount := 0
++	for _, item := range got {
++		if item.created {
++			createdCount++
++		}
++	}
++	if createdCount != 1 {
++		t.Fatalf("expected exactly one creator, got %d", createdCount)
++	}
++	if got[0].session == nil || got[1].session == nil || got[0].session != got[1].session {
++		t.Fatalf("concurrent legs did not converge on one session: %p %p", got[0].session, got[1].session)
+ 	}
+-	if elapsed := time.Since(started); elapsed < 40*time.Millisecond {
+-		t.Fatalf("wait returned too early: %v", elapsed)
++	session := got[0].session
++	defer session.core.Close()
++	defer session.appConn.Close()
++	if !session.core.hasLeg(0) || !session.core.hasLeg(1) {
++		t.Fatalf("concurrent first legs not both attached: leg0=%v leg1=%v", session.core.hasLeg(0), session.core.hasLeg(1))
+ 	}
+ }
+ 

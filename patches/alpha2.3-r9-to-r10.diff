@@ -1,0 +1,886 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/BUILD_STATUS.md r10work/smp3-multipath-kit-alpha2.3-r10/BUILD_STATUS.md
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/BUILD_STATUS.md	2026-08-27 17:29:06.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/BUILD_STATUS.md	2026-08-28 00:45:28.621595247 +0000
+@@ -1,23 +1,38 @@
+-# Alpha2.3-r9 verification status
++# Alpha2.3-r10 verification status
+ 
+-R9 addresses the live R8 data-plane stall reproduced under forced leg1-first + 3s slow-leg0 upload testing. R8 correctly stopped blaming healthy Hy2 for a leg0-owned cumulative-ACK frontier, but the sender could still pin the frontier in `inTransit` on a delayed/backpressured leg0 writer. Because the old retry path skipped every `inTransit` record, the same seq could not be replayed on leg1; the 1024-frame inflight window then filled and application forward progress stalled.
++R10 addresses the remaining R9 upload-throughput scheduling bottleneck observed in the live 500 MiB upload benchmark. R9 completed the full upload correctly (`HTTP=200`, 524288000 bytes) and no longer entered `tx_ack_stall` / fallback, but the sender often kept `tx_outstanding=1024` while `frontier_rescues` advanced at roughly the 250ms retransmit-ticker cadence.
++
++R10 keeps rescue semantics deliberately narrow: only the proven cumulative blocker `outstanding[ackedNext]` may receive a concurrent alternate-leg DATA attempt. It does not introduce a fixed rescue burst because SMP3 v4 has cumulative ACK but no SACK.
++
++Implementation changes:
++- cumulative ACK progress coalesces an O(1) `frontierRescueCh` wake;
++- `scheduleFrontierRescue()` is separated from the full outstanding retry scan;
++- timer / leg-repair events retain ordinary retry recovery plus frontier safety-net checking;
++- non-overdue ACK wakeups return before taking a transport snapshot/allocation;
++- rescue cooldown is committed only after the priority queue accepts the attempt; failed/abandoned rescue attempts roll the current cooldown back;
++- a failed concrete leg generation invalidates outstanding `lastSentLeg` ownership for that ID, so same-ID replacements replay old DATA correctly;
++- dead-leg retry candidates are sorted by sequence so cumulative-ACK frontier DATA is replayed before future frames;
++- `retransmit_timeout`, rescue queue size, wire version, config schema, and adaptive thresholds remain unchanged.
+ 
+ Completed in this sandbox:
+-- standalone SMP3 core/adaptive/protocol tests: 60 tests
++- standalone SMP3 core/adaptive/protocol tests: 65 tests
++- `go test`: PASS
+ - `go test -race -count=5`: PASS
+ - standalone `go vet`: PASS
+ - gofmt: PASS
+-- source injector syntax / shell syntax / JSON validation: covered by `validate-kit.sh`
++- `validate-kit.sh`: PASS
+ 
+-New R9 regressions include:
+-- an ACK-frontier DATA frame blocked in a live leg0 write is concurrently rescued through leg1 before the original write is released;
+-- concurrent leg0+leg1 attempts for one frontier are reported as multipath ownership;
+-- adaptive TX attribution does not blame Hy2 while the frontier has attempts on both paths;
+-- a single transient leg1-frontier sample is insufficient to enter TX SUSPECT; persistent exclusive leg1 ownership still reaches SUSPECT/FALLBACK.
+-
+-R9 keeps one logical DATA seq while permitting a second transport attempt for the overdue cumulative-ACK frontier. Rescue DATA uses a separate per-leg priority queue and remains wire-compatible because the receiver already deduplicates by seq. R8 frontier attribution, R7 per-leg ACK/control isolation, R6 lifecycle/tombstone/same-ID retirement protections, and R5 first-authenticated-leg establishment remain retained.
++New R10 regressions include:
++- cumulative ACK progress exposes an already-overdue next frontier and queues its rescue before the 250ms periodic safety-net ticker;
++- one frontier check never speculatively queues a later seq beyond `ackedNext`;
++- a full rescue queue does not consume `lastRescueAt`/retransmit cooldown and can retry immediately after queue recovery;
++- same-ID transport failure invalidates stale generation ownership;
++- dead-leg replay is strictly frontier-first;
++- the healthy/non-overdue frontier fast path performs zero allocations in the standalone allocation regression.
+ 
+ The injected full sing-box package test and final Linux/Windows binaries remain deferred to the user's WSL build because this sandbox does not have the pinned external sing-box dependency tree/toolchain cache.
+ 
++Live R10 acceptance is still required against the same 500 MiB upload benchmark. R9 baseline: 524288000 bytes in 456.219367s at 1,149,201 B/s. R10 should preserve HTTP/data integrity and avoid false fallback while materially reducing long `tx_outstanding=1024` plateaus and total upload time.
++
+ Expected binary version:
+-`1.14.0-beta.14-smp3-alpha2.3-r9`
++`1.14.0-beta.14-smp3-alpha2.3-r10`
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/CHANGELOG.md r10work/smp3-multipath-kit-alpha2.3-r10/CHANGELOG.md
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/CHANGELOG.md	2026-08-27 17:28:44.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/CHANGELOG.md	2026-08-28 00:44:15.453221172 +0000
+@@ -1,5 +1,18 @@
+ # Changelog
+ 
++## alpha2.3-r10 — ACK-paced cumulative-frontier rescue
++
++- Kept R9's single-sequence concurrent frontier rescue semantics, but removed the extra periodic-ticker delay after cumulative ACK progress. When an ACK advances `ackedNext`, R10 immediately wakes an O(1) check of the newly exposed `outstanding[ackedNext]` frontier.
++- Split frontier repair from the full retry scan. ACK-driven wakeups no longer scan the complete outstanding map; dead-leg replay and ordinary recovery still run on the existing retry/timer path.
++- Intentionally did **not** add fixed multi-frame rescue bursts. SMP3 v4 only has cumulative ACK, not SACK, so later sequences may already be buffered by the receiver. R10 continues to rescue exactly one proven blocker at a time and lets cumulative ACK retirement release any already-received tail.
++- ACK-paced wakeups do not bypass `retransmit_timeout`. They only eliminate the additional 0–250ms scheduling wait when the next frontier is already overdue.
++- Pre-deployment review hardened rescue enqueue accounting: a full/retiring rescue queue no longer commits `lastRescueAt`, so an attempt that never entered the priority queue cannot consume a full retransmit cooldown. Failed queued writes also roll their cooldown state back.
++- Invalidated `lastSentLeg` ownership when the concrete transport generation carrying that leg ID fails. A same-ID replacement can therefore replay old unacked DATA instead of being mistaken for the retired writer.
++- Made ordinary dead-leg replay deterministic and cumulative-ACK friendly by sorting retry candidates by sequence, so the oldest outstanding/frontier is queued before later DATA instead of inheriting Go map iteration order.
++- Moved the healthy frontier age check ahead of transport snapshots; non-overdue ACK wakeups return without the previous leg-slice/map allocation work.
++- Added regressions proving a newly exposed overdue frontier is queued before the 250ms safety-net ticker, rescue never speculatively bursts past `ackedNext`, failed rescue enqueue does not consume cooldown, same-ID failure invalidates stale ownership, and dead-leg replay is frontier-first.
++- Wire/hello version remains `4`; configuration schema, rescue queue size, and adaptive fallback thresholds are unchanged.
++
+ ## alpha2.3-r9 — concurrent ACK-frontier rescue
+ 
+ - Fixed the live R8 data-plane stall where a cumulative-ACK frontier could remain `inTransit` on a heavily delayed/backpressured leg0, preventing the existing retry scheduler from duplicating that missing seq onto healthy leg1. This could fill the entire 1024-frame inflight window and stop application forward progress even while Hy2 remained healthy.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/README-zh_CN.md r10work/smp3-multipath-kit-alpha2.3-r10/README-zh_CN.md
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/README-zh_CN.md	2026-08-27 17:29:35.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/README-zh_CN.md	2026-08-28 00:44:15.453903478 +0000
+@@ -1,13 +1,13 @@
+ # SMP3 Multipath Kit
+ 
+-> 当前 revision：alpha2.3-r9 alpha2.3
++> 当前 revision：alpha2.3-r10 alpha2.3
+ 
+ 本项目说明与 alpha2.3 自适应 Hy2/Snell carrier 的健康语义见
+ [README.md](README.md)。发布包中的示例配置均为占位符，部署前请替换为你自己的
+ 地址、证书和随机密钥；不要把真实部署配置提交到仓库或发布包。
+ 
+ 
+-## alpha2.3-r5/r6/r7/r8/r9：到达乱序、生命周期、控制面与 frontier rescue
++## alpha2.3-r5/r6/r7/r8/r9/r10：到达乱序、生命周期、控制面与 frontier rescue
+ 
+ R5 将服务端 session 建立从“必须 leg0 先注册”改为 **first authenticated leg establishes core**：leg0/leg1 谁先通过完整 SMP3 HELLO 认证并到达 `:24444`，谁就可以原子创建 logical core；另一条随后 JOIN。creator 不改变路径角色，leg0 仍然是 preferred，leg1 仍然是 lazy booster / Hy2 -> Snell fallback。
+ 
+@@ -26,5 +26,7 @@
+ 
+ R9 进一步修复数据面 HOL：如果 ACK frontier 已经在慢 leg0 的队列/写调用里保持 `inTransit` 超过 `retransmit_timeout`，同一 seq 可以同时通过 leg1 的优先 rescue lane 发送第二个 DATA attempt。接收端继续按 seq 去重，谁先到就先补洞；旧副本晚到会被丢弃。Adaptive 同时要求 frontier 连续且独占归属 leg1 才能判定 TX stall，双路径 rescue 或单次 ownership 抖动不会处罚 Hy2。wire version 和配置 schema 仍保持不变。
+ 
+-R9 不改变 wire version、配置字段或 adaptive carrier 语义。它解决的是已经启动并写出 HELLO 的 carrier 在服务端的跨路径到达乱序，以及多 carrier 控制面互相阻塞问题；如果 preferred leg0 在客户端最初拨号阶段就直接失败，bootstrap failover 仍是后续独立能力。
++R10 在 r9 基础上把 frontier repair 改为 ACK-paced：累计 ACK 真正推进时立即检查新的 `ackedNext`。如果新 blocker 早已 overdue，就立刻进入单-seq rescue，而不是继续等下一次最多 250ms 的周期检查。R10 刻意不做固定多帧 burst，因为当前只有 cumulative ACK，没有 SACK，发送端并不知道后续 seq 是否已经在接收端 pending/reorder buffer。完整 retry scan 仍只在 timer/leg-repair 路径运行，ACK 快路径只做 O(1) frontier lookup。上线前 review 进一步保证：rescue queue 满/关闭导致的未入队 attempt 不会写入 `lastRescueAt`；旧 leg generation 失败会清除旧 `lastSentLeg` ownership，允许同 ID replacement 重放；dead-leg retry 按 seq 升序从 cumulative frontier 开始，避免随机 map 顺序把未来 DATA 塞到 blocker 前面；健康 ACK wake 在 non-overdue 时不再先创建 leg snapshot。
++
++R10 不改变 wire version、配置字段或 adaptive carrier 语义；preferred leg0 在客户端最初拨号阶段就直接失败时，bootstrap failover 仍是后续独立能力。
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/README.md r10work/smp3-multipath-kit-alpha2.3-r10/README.md
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/README.md	2026-08-27 17:28:44.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/README.md	2026-08-28 00:44:15.453775906 +0000
+@@ -2,7 +2,7 @@
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.3-r9**
++> **当前版本：alpha2.3-r10**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -67,7 +67,7 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
+-## 2.0.1 alpha2.3-r5/r6/r7/r8/r9 session ordering、生命周期与数据面救援
++## 2.0.1 alpha2.3-r5/r6/r7/r8/r9/r10 session ordering、生命周期与数据面救援
+ 
+ alpha2.3-r5/r6/r7 保持 SMP3 wire/hello version `4` 和现有配置 schema 不变。实机双端日志证明：客户端虽然先启动 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`，因此服务端不能把“leg0 先注册”当成协议正确性的前提。
+ 
+@@ -81,6 +81,7 @@
+ - **r7：per-leg ACK/control writer。** ACK/ACTIVATE/CLOSE 不再由一个跨路径同步 writer 串行写两条 carrier；一条阻塞路径不会直接卡住另一条 carrier 的控制帧发送。
+ - **r8：cumulative-ACK frontier attribution。** SMP3 v4 仍只有一个全局累计 ACK，因此更早的慢 leg0 frame 会阻止更晚的 leg1 frame 被累计确认。adaptive `tx_ack_stall` 现在只有在当前累计 ACK frontier 本身归属 leg1 时才会归因 Hy2；如果 frontier 是 leg0，就不会因为跨路径重排而误判 Hy2。
+ - **r9：concurrent frontier rescue。** 当累计 ACK frontier 已经 queued/writing 在慢路径且超过 `retransmit_timeout`，同一 seq 允许在另一条健康路径产生第二个优先 DATA attempt；接收端继续按 seq 去重。这样慢 leg0 的 `inTransit` 不再阻止 Hy2 补洞，也避免 1024-frame inflight window 被单个慢写长期占满。adaptive 还要求 ACK frontier 连续、独占归属 leg1 后才允许判定 `tx_ack_stall`；双路径同时救援时不会把 Hy2 误判为故障。
++- **r10：ACK-paced frontier rescue。** 保留 r9 “只复制当前 `ackedNext` blocker”的正确性边界，但 cumulative ACK 每次真正推进后会立即唤醒新的 O(1) frontier 检查。若新 frontier 早已超过 `retransmit_timeout`，无需再额外等待最多 250ms 的 retransmit ticker；如果它还不 overdue，则仍由原 timer safety net 在到期后处理。r10 不做固定 8/16-frame burst，因为 wire v4 没有 SACK，发送端无法证明后续 seq 尚未在接收端 reorder buffer 中。上线前 review 还补了三处恢复边界：未成功进入 rescue queue 的 attempt 不消耗 cooldown；旧 transport generation 失败时会清除同 ID 的 `lastSentLeg` ownership；dead-leg replay 固定按 seq 从 ACK frontier 向后排队，避免 Go map 随机顺序制造新的 HOL。健康 ACK fast path 也会在检查 leg snapshot 前先做 overdue 早退。
+ - **r7：per-leg ACK/control isolation。** ACK 不再由一个 goroutine 依次同步写所有 carrier；每条 leg 独立维护 cumulative `ackPending` 并由自己的 writer 发送，因此一条慢/黑洞路径不会把另一条健康路径的 ACK 一起堵住。ACK/ACTIVATE/CLOSE 在 wire frame 边界优先于已排队 DATA；已经开始写出的单个 DATA frame 不会被不安全地中断。
+ - **r7：graceful-close repair boundary。** CLOSING 阶段只要仍有 outstanding DATA 就继续允许 transport repair；一旦 TX tail 已全部 ACK，竞态到达的 carrier EOF 不再触发 booster/reconnect/recovery。
+ - **r7：control/logging hardening。** CLOSE 先投递到所有 live legs，健康路径成功写出 logical EOF 后不会继续被阻塞路径拖住；adaptive leg-down 日志在状态切换前记录实际 failure carrier，避免 Hy2 故障被误写成 `via public-snell`。
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/TEST_RESULTS.txt r10work/smp3-multipath-kit-alpha2.3-r10/TEST_RESULTS.txt
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/TEST_RESULTS.txt	2026-08-27 17:29:06.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/TEST_RESULTS.txt	2026-08-28 00:45:28.630976290 +0000
+@@ -1,5 +1,5 @@
+-SMP3 alpha2.3-r9 source verification
+-=====================================
++SMP3 alpha2.3-r10 source verification
++======================================
+ 
+ Standalone package scope:
+   src/protocol/multipath/core.go
+@@ -8,12 +8,23 @@
+   + corresponding standalone tests
+ 
+ Result:
+-  tests discovered: 60
++  tests discovered: 65
++  go test: PASS
+   go test -race -count=5: PASS
+   go vet: PASS
+   gofmt: PASS
++  validate-kit.sh: PASS
+ 
+-R9-specific coverage:
++R10-specific coverage:
++  - ACK progress wakes a newly exposed overdue frontier before the 250ms safety-net ticker
++  - ACK fast path performs a dedicated frontier check instead of a full outstanding retry scan
++  - healthy/non-overdue frontier fast path avoids leg-snapshot allocation
++  - frontier rescue remains single-seq and never speculatively bursts past ackedNext
++  - failed/full rescue enqueue does not consume retransmit cooldown
++  - same-ID leg failure invalidates retired-generation lastSentLeg ownership
++  - dead-leg replay is ordered from the cumulative ACK frontier forward
++
++Retained R9/R8 coverage:
+   - blocked inTransit ACK frontier is concurrently rescued on alternate leg
+   - rescue lane bypasses ordinary DATA queue pressure
+   - concurrent frontier attempts are marked multipath
+@@ -25,6 +36,8 @@
+ Compatibility:
+   wire hello version: 4 (unchanged)
+   configuration schema: unchanged
++  adaptive thresholds: unchanged
++  rescue queue size: unchanged
+ 
+ Expected built binary version:
+-  1.14.0-beta.14-smp3-alpha2.3-r9
++  1.14.0-beta.14-smp3-alpha2.3-r10
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/VERSION r10work/smp3-multipath-kit-alpha2.3-r10/VERSION
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/VERSION	2026-08-27 17:20:20.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/VERSION	2026-08-27 18:20:42.000000000 +0000
+@@ -1,5 +1,5 @@
+ kit_version=alpha2.3
+-kit_revision=alpha2.3-r9
++kit_revision=alpha2.3-r10
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/build.sh r10work/smp3-multipath-kit-alpha2.3-r10/build.sh
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/build.sh	2026-08-27 17:28:44.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/build.sh	2026-08-27 18:20:42.000000000 +0000
+@@ -48,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r9 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r10 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/package-release.sh r10work/smp3-multipath-kit-alpha2.3-r10/package-release.sh
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/package-release.sh	2026-08-27 17:28:44.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/package-release.sh	2026-08-27 18:20:42.000000000 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-NAME="smp3-multipath-kit-alpha2.3-r9"
++NAME="smp3-multipath-kit-alpha2.3-r10"
+ STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
+ STAGE="$STAGE_ROOT/$NAME"
+ OUT_ZIP="${1:-$ROOT/$NAME.zip}"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/scripts/apply_source.py r10work/smp3-multipath-kit-alpha2.3-r10/scripts/apply_source.py
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/scripts/apply_source.py	2026-08-27 17:28:44.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/scripts/apply_source.py	2026-08-27 18:20:42.000000000 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.3-r9 source installed')
++print('[+] SMP3 multipath alpha2.3-r10 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/src/protocol/multipath/core.go r10work/smp3-multipath-kit-alpha2.3-r10/src/protocol/multipath/core.go
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/src/protocol/multipath/core.go	2026-08-27 17:24:58.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/src/protocol/multipath/core.go	2026-08-28 00:41:22.570674374 +0000
+@@ -5,6 +5,7 @@
+ 	"errors"
+ 	"io"
+ 	"net"
++	"sort"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -202,6 +203,10 @@
+ 	ackedNext   uint64
+ 	inflight    chan struct{}
+ 	retryCh     chan struct{}
++	// frontierRescueCh is a coalesced O(1) wakeup for the cumulative-ACK
++	// frontier. R10 uses it when ACK progress exposes a new overdue head so the
++	// next repair does not have to wait for the periodic retransmit ticker.
++	frontierRescueCh chan struct{}
+ 
+ 	ingressBytes atomic.Uint64
+ 	active       atomic.Bool
+@@ -258,20 +263,21 @@
+ 	}
+ 	appConn, pipeConn := net.Pipe()
+ 	c := &mpCore{
+-		cfg:         cfg,
+-		appConn:     appConn,
+-		pipeConn:    pipeConn,
+-		legs:        make(map[uint8]*mpLeg),
+-		retiring:    make(map[uint8]*mpLeg),
+-		incoming:    make(chan dataFrame, cfg.QueueFrames*2),
+-		done:        make(chan struct{}),
+-		txStopped:   make(chan struct{}),
+-		gracefulCh:  make(chan struct{}),
+-		activeCh:    make(chan struct{}),
+-		outstanding: make(map[uint64]*txRecord),
+-		inflight:    make(chan struct{}, cfg.MaxInflightFrames),
+-		retryCh:     make(chan struct{}, 1),
+-		ackWakeCh:   make(chan struct{}, 1),
++		cfg:              cfg,
++		appConn:          appConn,
++		pipeConn:         pipeConn,
++		legs:             make(map[uint8]*mpLeg),
++		retiring:         make(map[uint8]*mpLeg),
++		incoming:         make(chan dataFrame, cfg.QueueFrames*2),
++		done:             make(chan struct{}),
++		txStopped:        make(chan struct{}),
++		gracefulCh:       make(chan struct{}),
++		activeCh:         make(chan struct{}),
++		outstanding:      make(map[uint64]*txRecord),
++		inflight:         make(chan struct{}, cfg.MaxInflightFrames),
++		retryCh:          make(chan struct{}, 1),
++		frontierRescueCh: make(chan struct{}, 1),
++		ackWakeCh:        make(chan struct{}, 1),
+ 	}
+ 	c.bufferPool.New = func() any {
+ 		return make([]byte, cfg.ChunkSize)
+@@ -847,25 +853,47 @@
+ 	return true
+ }
+ 
+-func (c *mpCore) markRescueTransit(record *txRecord, legID uint8) bool {
++func (c *mpCore) markRescueTransit(record *txRecord, legID uint8) (time.Time, bool) {
+ 	c.txMu.Lock()
+ 	defer c.txMu.Unlock()
+ 	if current := c.outstanding[record.seq]; current != record || record.rescueInTransit {
+-		return false
++		return time.Time{}, false
+ 	}
+ 	// A rescue must add path diversity. Never queue a duplicate attempt onto the
+ 	// same carrier that is already holding the normal attempt/current ownership.
+ 	if record.inTransit && record.transitLeg == legID {
+-		return false
++		return time.Time{}, false
+ 	}
+ 	if !record.inTransit && record.lastSentLeg == int16(legID) {
+-		return false
++		return time.Time{}, false
+ 	}
+ 	now := time.Now()
+ 	record.rescueInTransit = true
+ 	record.rescueLeg = legID
+ 	record.rescueSince = now
+-	record.lastRescueAt = now
++	// Do not consume the rescue cooldown here. The priority queue may be full or
++	// the leg may already be retiring. lastRescueAt is committed only after the
++	// attempt is actually accepted by leg.rescue.
++	return now, true
++}
++
++func (c *mpCore) markRescueQueued(record *txRecord, legID uint8, started time.Time) bool {
++	c.txMu.Lock()
++	defer c.txMu.Unlock()
++	if c.outstanding[record.seq] != record {
++		return false
++	}
++	// The writer can race the enqueueing goroutine. A valid queued rescue is
++	// either still the current rescue attempt, or it has already completed and
++	// markAttemptSent recorded the same attempt start timestamp. A write failure
++	// clears rescueInTransit without advancing lastSentAttemptAt, so it does not
++	// accidentally consume the cooldown.
++	pending := record.rescueInTransit && record.rescueLeg == legID && record.rescueSince.Equal(started)
++	sent := record.lastSentAttemptAt.Equal(started)
++	if !pending && !sent {
++		return false
++	}
++	record.lastRescueAt = started
+ 	c.frontierRescueAttempts.Add(1)
+ 	return true
+ }
+@@ -875,6 +903,12 @@
+ 	if current := c.outstanding[record.seq]; current == record {
+ 		if rescue {
+ 			if record.rescueInTransit && record.rescueLeg == legID {
++				// Failed/abandoned rescue attempts must not delay the next ACK-paced
++				// repair. If this exact attempt had already committed its queue time,
++				// roll the cooldown back before clearing the transient state.
++				if record.lastRescueAt.Equal(record.rescueSince) {
++					record.lastRescueAt = time.Time{}
++				}
+ 				record.rescueInTransit = false
+ 				record.rescueSince = time.Time{}
+ 			}
+@@ -977,7 +1011,8 @@
+ 	if leg == nil || leg.closed.Load() {
+ 		return false
+ 	}
+-	if !c.markRescueTransit(record, leg.id) {
++	started, marked := c.markRescueTransit(record, leg.id)
++	if !marked {
+ 		c.txMu.Lock()
+ 		already := c.outstanding[record.seq] != record || record.rescueInTransit
+ 		c.txMu.Unlock()
+@@ -989,6 +1024,9 @@
+ 		c.clearAttempt(record, leg.id, true)
+ 		return false
+ 	case leg.rescue <- attempt:
++		// Commit cooldown/diagnostic state only after the priority queue accepted
++		// this attempt. A full queue therefore remains immediately retryable.
++		c.markRescueQueued(record, leg.id, started)
+ 		if leg.closed.Load() {
+ 			c.clearAttempt(record, leg.id, true)
+ 			return false
+@@ -1249,9 +1287,19 @@
+ 			record.transitSince = time.Time{}
+ 		}
+ 		if record.rescueInTransit && record.rescueLeg == leg.id {
++			if record.lastRescueAt.Equal(record.rescueSince) {
++				record.lastRescueAt = time.Time{}
++			}
+ 			record.rescueInTransit = false
+ 			record.rescueSince = time.Time{}
+ 		}
++		// lastSentLeg is an 8-bit logical leg id, not a transport-generation id.
++		// Once this concrete leg instance dies, ownership by that id must be
++		// invalidated so a same-ID replacement is allowed to replay old unacked
++		// DATA instead of being mistaken for the original writer.
++		if record.lastSentLeg == int16(leg.id) {
++			record.lastSentLeg = -1
++		}
+ 	}
+ 	c.txMu.Unlock()
+ 
+@@ -1325,6 +1373,13 @@
+ 	}
+ }
+ 
++func (c *mpCore) kickFrontierRescue() {
++	select {
++	case c.frontierRescueCh <- struct{}{}:
++	default:
++	}
++}
++
+ func (c *mpCore) kickAck() {
+ 	select {
+ 	case c.ackWakeCh <- struct{}{}:
+@@ -1352,27 +1407,34 @@
+ 		case <-c.done:
+ 			return
+ 		case <-ticker.C:
++			c.scheduleRetries()
++			c.scheduleFrontierRescue()
+ 		case <-c.retryCh:
++			c.scheduleRetries()
++			c.scheduleFrontierRescue()
++		case <-c.frontierRescueCh:
++			// ACK progress only needs an O(1) check of outstanding[ackedNext].
++			// Do not rescan the entire outstanding map on every cumulative ACK.
++			c.scheduleFrontierRescue()
+ 		}
+-		c.scheduleRetries()
+ 	}
+ }
+ 
++type retryCandidate struct {
++	record *txRecord
++	avoid  int16
++}
++
+ func (c *mpCore) scheduleRetries() {
+ 	legs := c.availableLegs()
+ 	if len(legs) == 0 {
+ 		return
+ 	}
+-	now := time.Now()
+ 	available := make(map[uint8]struct{}, len(legs))
+ 	for _, leg := range legs {
+ 		available[leg.id] = struct{}{}
+ 	}
+-	var retry []*txRecord
+-	var avoids []int16
+-	var rescue *txRecord
+-	var rescueAvoid int16 = -1
+-	activateForStall := false
++	var retry []retryCandidate
+ 	c.txMu.Lock()
+ 	// Frames with no live attempt need ordinary replay. A separate rescue attempt
+ 	// is treated as live work too; do not enqueue a second normal copy while it is
+@@ -1382,68 +1444,102 @@
+ 			continue
+ 		}
+ 		if record.lastSentLeg < 0 {
+-			retry = append(retry, record)
+-			avoids = append(avoids, -1)
++			retry = append(retry, retryCandidate{record: record, avoid: -1})
+ 			continue
+ 		}
+ 		lastID := uint8(record.lastSentLeg)
+ 		if _, lastAlive := available[lastID]; !lastAlive {
+-			retry = append(retry, record)
+-			avoids = append(avoids, record.lastSentLeg)
++			retry = append(retry, retryCandidate{record: record, avoid: record.lastSentLeg})
+ 		}
+ 	}
++	c.txMu.Unlock()
+ 
+-	// R9 frontier rescue: queueing/writing on a slow carrier is not proof of
+-	// delivery. Once the cumulative-ACK frontier is overdue, allow the same
+-	// logical seq to have a second, priority DATA attempt on the other carrier.
+-	// The receiver already deduplicates DATA by seq, so the first arriving copy
+-	// repairs the hole and later copies are harmless. This deliberately bypasses
+-	// the old single inTransit gate that could pin all 1024 inflight frames behind
+-	// one backpressured leg0 write.
+-	if head := c.outstanding[c.ackedNext]; head != nil && !head.rescueInTransit {
+-		owner := int16(-1)
+-		if head.inTransit {
+-			owner = int16(head.transitLeg)
+-		} else if head.lastSentLeg >= 0 {
+-			owner = head.lastSentLeg
+-		}
+-
+-		// Throttle rescue attempts from the newest relevant activity. In
+-		// particular, a very old still-writing leg0 attempt must not cause a new
+-		// leg1 duplicate every retransmit-loop tick after a successful rescue.
+-		reference := head.createdAt
+-		for _, candidate := range []time.Time{head.transitSince, head.lastSentAt, head.lastRescueAt} {
+-			if candidate.After(reference) {
+-				reference = candidate
+-			}
+-		}
+-		overdue := !reference.IsZero() && now.Sub(reference) >= c.cfg.RetransmitTimeout
+-		if overdue {
+-			if len(legs) == 1 && !c.active.Load() {
+-				activateForStall = true
+-			} else if len(legs) > 1 && owner >= 0 {
+-				if _, ownerAlive := available[uint8(owner)]; ownerAlive {
+-					rescue = head
+-					rescueAvoid = owner
+-				}
+-			}
++	// Cumulative ACK makes the oldest outstanding sequence the only proven HOL
++	// blocker. Go map iteration is deliberately unordered, so always replay from
++	// the ACK frontier forward rather than letting future DATA fill the surviving
++	// leg queue ahead of the frame that can advance cumulative ACK.
++	sort.Slice(retry, func(i, j int) bool {
++		return retry[i].record.seq < retry[j].record.seq
++	})
++	for _, candidate := range retry {
++		if err := c.enqueueRecord(candidate.record, candidate.avoid); err != nil && !errors.Is(err, errCoreClosed) {
++			c.fail(err)
++			return
+ 		}
+ 	}
++}
++
++// scheduleFrontierRescue performs the R10 ACK-paced repair check. SMP3 v4 only
++// has a cumulative ACK, so the sender can prove exactly one blocking sequence:
++// outstanding[ackedNext]. We intentionally rescue only that record instead of
++// guessing at later frames that may already be buffered by the receiver.
++//
++// The periodic retransmit loop remains a safety net for a frontier that never
++// gets any ACK activity. The fast path is handleAck(): whenever cumulative ACK
++// progress exposes a new head, it coalesces a frontierRescueCh wake so an old,
++// already-overdue blocker can be repaired immediately rather than waiting up to
++// another retransmit-loop interval.
++func (c *mpCore) scheduleFrontierRescue() {
++	now := time.Now()
++	var rescue *txRecord
++	var owner int16 = -1
++
++	// Healthy ACK progress is the hot path. Decide whether the current frontier
++	// is actually overdue before snapshotting legs or allocating an availability
++	// map. enqueueRescue revalidates the record/leg state before queueing, so it is
++	// safe for transport membership to change after this short TX snapshot.
++	c.txMu.Lock()
++	head := c.outstanding[c.ackedNext]
++	if head == nil || head.rescueInTransit {
++		c.txMu.Unlock()
++		return
++	}
++	if head.inTransit {
++		owner = int16(head.transitLeg)
++	} else if head.lastSentLeg >= 0 {
++		owner = head.lastSentLeg
++	}
++	reference := head.createdAt
++	for _, candidate := range []time.Time{head.transitSince, head.lastSentAt, head.lastRescueAt} {
++		if candidate.After(reference) {
++			reference = candidate
++		}
++	}
++	if reference.IsZero() || now.Sub(reference) < c.cfg.RetransmitTimeout {
++		c.txMu.Unlock()
++		return
++	}
++	rescue = head
+ 	c.txMu.Unlock()
+-	if activateForStall {
+-		c.activate()
++
++	legs := c.availableLegs()
++	if len(legs) == 0 {
++		return
+ 	}
+-	for idx, record := range retry {
+-		if err := c.enqueueRecord(record, avoids[idx]); err != nil && !errors.Is(err, errCoreClosed) {
+-			c.fail(err)
+-			return
++	if len(legs) == 1 {
++		if !c.active.Load() {
++			c.activate()
+ 		}
++		return
+ 	}
+-	if rescue != nil {
+-		if err := c.enqueueRescue(rescue, rescueAvoid); err != nil && !errors.Is(err, errCoreClosed) {
+-			c.fail(err)
++	if owner < 0 {
++		return
++	}
++	ownerAlive := false
++	for _, leg := range legs {
++		if int16(leg.id) == owner {
++			ownerAlive = true
++			break
+ 		}
+ 	}
++	if !ownerAlive {
++		// Ordinary retry/rejoin recovery owns dead-generation replay. Rescue is
++		// only for adding diversity to a still-live current owner.
++		return
++	}
++	if err := c.enqueueRescue(rescue, owner); err != nil && !errors.Is(err, errCoreClosed) {
++		c.fail(err)
++	}
+ }
+ 
+ func (c *mpCore) handleAck(next uint64) error {
+@@ -1489,6 +1585,11 @@
+ 		c.lastAckProgressNs.Store(time.Now().UnixNano())
+ 	}
+ 	c.releaseInflight(released)
++	// R10: cumulative ACK progress can expose another already-overdue blocker.
++	// Wake the O(1) frontier checker immediately instead of waiting for the next
++	// retransmit ticker. Duplicate/non-progress ACKs returned above and do not
++	// create repair work.
++	c.kickFrontierRescue()
+ 	return nil
+ }
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' r9orig/smp3-multipath-kit-alpha2.3-r9/src/protocol/multipath/core_test.go r10work/smp3-multipath-kit-alpha2.3-r10/src/protocol/multipath/core_test.go
+--- r9orig/smp3-multipath-kit-alpha2.3-r9/src/protocol/multipath/core_test.go	2026-08-27 17:27:00.000000000 +0000
++++ r10work/smp3-multipath-kit-alpha2.3-r10/src/protocol/multipath/core_test.go	2026-08-28 00:42:03.195041091 +0000
+@@ -295,6 +295,250 @@
+ 	}
+ }
+ 
++func TestCoreAckProgressWakesNextOverdueFrontierRescueBeforeTicker(t *testing.T) {
++	cfg := testCoreConfig()
++	// retransmitLoop caps its periodic safety-net ticker at 250ms. Give the
++	// frontier a much older send time and require the ACK-driven wake to queue
++	// its rescue well before that ticker could fire.
++	cfg.RetransmitTimeout = 4 * time.Second
++	now := time.Now().Add(-10 * time.Second)
++	leg0 := &mpLeg{
++		id:     0,
++		send:   make(chan txSendAttempt, 4),
++		rescue: make(chan txSendAttempt, 4),
++		done:   make(chan struct{}),
++	}
++	leg1 := &mpLeg{
++		id:     1,
++		send:   make(chan txSendAttempt, 4),
++		rescue: make(chan txSendAttempt, 4),
++		done:   make(chan struct{}),
++	}
++	core := &mpCore{
++		cfg:              cfg,
++		legs:             map[uint8]*mpLeg{0: leg0, 1: leg1},
++		retiring:         make(map[uint8]*mpLeg),
++		outstanding:      make(map[uint64]*txRecord),
++		done:             make(chan struct{}),
++		retryCh:          make(chan struct{}, 1),
++		frontierRescueCh: make(chan struct{}, 1),
++	}
++	core.active.Store(true)
++	core.txSeq.Store(2)
++	core.outstanding[0] = &txRecord{
++		seq:         0,
++		data:        []byte("already-acked-head"),
++		createdAt:   now,
++		lastSentAt:  now,
++		lastSentLeg: 0,
++	}
++	core.outstanding[1] = &txRecord{
++		seq:         1,
++		data:        []byte("new-overdue-frontier"),
++		createdAt:   now,
++		lastSentAt:  now,
++		lastSentLeg: 0,
++	}
++
++	go core.retransmitLoop()
++	defer close(core.done)
++
++	if err := core.handleAck(1); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case attempt := <-leg1.rescue:
++		if attempt.record != core.outstanding[1] || !attempt.rescue {
++			t.Fatalf("unexpected ACK-paced rescue: %+v", attempt)
++		}
++	case <-time.After(150 * time.Millisecond):
++		t.Fatal("new overdue ACK frontier waited for periodic retransmit ticker")
++	}
++	if got := core.frontierRescueAttempts.Load(); got != 1 {
++		t.Fatalf("frontier rescue attempts=%d, want 1", got)
++	}
++}
++
++func TestCoreFrontierRescueNeverBurstsPastAckedNext(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.RetransmitTimeout = 20 * time.Millisecond
++	now := time.Now().Add(-time.Second)
++	leg0 := &mpLeg{
++		id:     0,
++		send:   make(chan txSendAttempt, 4),
++		rescue: make(chan txSendAttempt, 4),
++		done:   make(chan struct{}),
++	}
++	leg1 := &mpLeg{
++		id:     1,
++		send:   make(chan txSendAttempt, 4),
++		rescue: make(chan txSendAttempt, 4),
++		done:   make(chan struct{}),
++	}
++	core := &mpCore{
++		cfg:              cfg,
++		legs:             map[uint8]*mpLeg{0: leg0, 1: leg1},
++		retiring:         make(map[uint8]*mpLeg),
++		outstanding:      make(map[uint64]*txRecord),
++		ackedNext:        10,
++		done:             make(chan struct{}),
++		frontierRescueCh: make(chan struct{}, 1),
++	}
++	core.active.Store(true)
++	core.txSeq.Store(12)
++	head := &txRecord{seq: 10, data: []byte("head"), createdAt: now, lastSentAt: now, lastSentLeg: 0}
++	next := &txRecord{seq: 11, data: []byte("later"), createdAt: now, lastSentAt: now, lastSentLeg: 0}
++	core.outstanding[10] = head
++	core.outstanding[11] = next
++
++	core.scheduleFrontierRescue()
++	select {
++	case attempt := <-leg1.rescue:
++		if attempt.record != head || !attempt.rescue {
++			t.Fatalf("rescued non-frontier record: %+v", attempt)
++		}
++	default:
++		t.Fatal("overdue ACK frontier was not rescued")
++	}
++	select {
++	case attempt := <-leg1.rescue:
++		t.Fatalf("frontier rescue burst past ackedNext to seq=%d", attempt.record.seq)
++	default:
++	}
++	if next.rescueInTransit {
++		t.Fatal("later unknown sequence was speculatively marked for rescue")
++	}
++}
++
++func TestCoreFailedRescueEnqueueDoesNotConsumeCooldown(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.RetransmitTimeout = time.Second
++	now := time.Now().Add(-2 * time.Second)
++	leg0 := &mpLeg{
++		id:     0,
++		send:   make(chan txSendAttempt, 2),
++		rescue: make(chan txSendAttempt, 1),
++		done:   make(chan struct{}),
++	}
++	leg1 := &mpLeg{
++		id:     1,
++		send:   make(chan txSendAttempt, 2),
++		rescue: make(chan txSendAttempt, 1),
++		done:   make(chan struct{}),
++	}
++	// Saturate the alternate leg's priority queue. This rescue attempt must fail
++	// before enqueue and therefore must not consume RetransmitTimeout.
++	leg1.rescue <- txSendAttempt{record: &txRecord{seq: 999}, rescue: true}
++	core := &mpCore{
++		cfg:         cfg,
++		legs:        map[uint8]*mpLeg{0: leg0, 1: leg1},
++		retiring:    make(map[uint8]*mpLeg),
++		outstanding: make(map[uint64]*txRecord),
++		ackedNext:   5,
++		done:        make(chan struct{}),
++	}
++	core.active.Store(true)
++	head := &txRecord{seq: 5, data: []byte("frontier"), createdAt: now, lastSentAt: now, lastSentLeg: 0}
++	core.outstanding[5] = head
++
++	core.scheduleFrontierRescue()
++	if head.rescueInTransit {
++		t.Fatal("failed rescue enqueue left rescueInTransit set")
++	}
++	if !head.lastRescueAt.IsZero() {
++		t.Fatalf("failed rescue enqueue consumed cooldown at %v", head.lastRescueAt)
++	}
++	if got := core.frontierRescueAttempts.Load(); got != 0 {
++		t.Fatalf("failed rescue enqueue counted as attempt: %d", got)
++	}
++
++	<-leg1.rescue // free the queue and retry immediately, without waiting 1s
++	core.scheduleFrontierRescue()
++	select {
++	case attempt := <-leg1.rescue:
++		if attempt.record != head || !attempt.rescue {
++			t.Fatalf("unexpected immediate rescue after queue recovery: %+v", attempt)
++		}
++	default:
++		t.Fatal("frontier remained throttled after failed rescue enqueue")
++	}
++	if got := core.frontierRescueAttempts.Load(); got != 1 {
++		t.Fatalf("successful rescue attempts=%d, want 1", got)
++	}
++	if head.lastRescueAt.IsZero() {
++		t.Fatal("successful rescue enqueue did not commit cooldown")
++	}
++}
++
++func TestCoreDeadLegReplayIsFrontierFirst(t *testing.T) {
++	cfg := testCoreConfig()
++	leg1 := &mpLeg{
++		id:     1,
++		send:   make(chan txSendAttempt, 16),
++		rescue: make(chan txSendAttempt, 2),
++		done:   make(chan struct{}),
++	}
++	core := &mpCore{
++		cfg:         cfg,
++		legs:        map[uint8]*mpLeg{1: leg1},
++		retiring:    make(map[uint8]*mpLeg),
++		outstanding: make(map[uint64]*txRecord),
++		ackedNext:   40,
++		done:        make(chan struct{}),
++	}
++	core.active.Store(true)
++	// These were last written by dead leg0. Map iteration order must never decide
++	// the replay order because cumulative ACK can only advance from seq 40.
++	for _, seq := range []uint64{47, 42, 45, 40, 46, 41, 44, 43} {
++		core.outstanding[seq] = &txRecord{
++			seq:         seq,
++			data:        []byte{byte(seq)},
++			createdAt:   time.Now().Add(-time.Second),
++			lastSentAt:  time.Now().Add(-time.Second),
++			lastSentLeg: 0,
++		}
++	}
++
++	core.scheduleRetries()
++	for want := uint64(40); want <= 47; want++ {
++		select {
++		case attempt := <-leg1.send:
++			if attempt.record == nil || attempt.record.seq != want {
++				t.Fatalf("replay order seq=%v, want %d", func() any {
++					if attempt.record == nil {
++						return nil
++					}
++					return attempt.record.seq
++				}(), want)
++			}
++		case <-time.After(time.Second):
++			t.Fatalf("missing replay seq=%d", want)
++		}
++	}
++}
++
++func TestCoreHealthyFrontierFastPathAvoidsLegSnapshotAllocation(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.RetransmitTimeout = time.Hour
++	core := &mpCore{
++		cfg: cfg,
++		legs: map[uint8]*mpLeg{
++			0: {id: 0, done: make(chan struct{})},
++			1: {id: 1, done: make(chan struct{})},
++		},
++		retiring:    make(map[uint8]*mpLeg),
++		outstanding: make(map[uint64]*txRecord),
++		ackedNext:   1,
++		done:        make(chan struct{}),
++	}
++	now := time.Now()
++	core.outstanding[1] = &txRecord{seq: 1, createdAt: now, lastSentAt: now, lastSentLeg: 0}
++
++	if allocs := testing.AllocsPerRun(1000, func() { core.scheduleFrontierRescue() }); allocs != 0 {
++		t.Fatalf("healthy frontier fast path allocations=%v, want 0", allocs)
++	}
++}
++
+ func TestSnapshotStatsMarksConcurrentFrontierAttemptsMultipath(t *testing.T) {
+ 	now := time.Now()
+ 	core := &mpCore{
+@@ -923,9 +1167,26 @@
+ 	if old == nil {
+ 		t.Fatal("old leg missing")
+ 	}
++	record := &txRecord{
++		seq:         0,
++		data:        []byte("unacked-old-generation"),
++		createdAt:   time.Now().Add(-time.Second),
++		lastSentAt:  time.Now().Add(-time.Second),
++		lastSentLeg: 0,
++	}
++	core.txMu.Lock()
++	core.outstanding[0] = record
++	core.txMu.Unlock()
++	core.txSeq.Store(1)
+ 
+ 	// Drive failure externally so the old read worker can be held after Close.
+ 	core.handleLegFailure(old, io.ErrClosedPipe)
++	core.txMu.Lock()
++	ownerAfterFailure := record.lastSentLeg
++	core.txMu.Unlock()
++	if ownerAfterFailure != -1 {
++		t.Fatalf("dead leg generation retained ownership=%d, want -1", ownerAfterFailure)
++	}
+ 	deadline := time.Now().Add(time.Second)
+ 	for {
+ 		core.legsMu.RLock()

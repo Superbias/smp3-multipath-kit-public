@@ -1,0 +1,4361 @@
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/BUILD_STATUS.md alpha2.3/BUILD_STATUS.md
+--- alpha2.2/BUILD_STATUS.md	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/BUILD_STATUS.md	2026-08-27 07:20:46.684680929 +0000
+@@ -1,35 +1,17 @@
+-# Alpha2.2 verification status
++# Alpha2.3-r2 verification status
+ 
+-Verified in the artifact build environment on 2026-08-26:
++Verified in the artifact environment on 2026-08-27:
+ 
+-- JSON syntax for both example configs.
+-- Python source injector syntax.
+-- Bash syntax for build/server/validation scripts.
+-- SMP3 standalone core + hello/protocol tests.
+-- SMP3 standalone tests with the Go race detector (`-count=5`).
+-- `go vet` on the standalone core/protocol/tests.
+-- Existing hard-leg failure, ACK-timeout replay, one-way control black-hole, silent-stall activation, recovery-timer reset, final-frame drain, and alpha2.1 future-ACK regression tests continue to pass.
+-- New regression: graceful tail draining is governed by *lack of ACK progress*, not a fixed total close deadline. The test keeps making cumulative-ACK progress for longer than one configured recovery window and verifies the drain does not return early.
+-- New regression: after all DATA is ACKed, the logical CLOSE control frame causes the peer core to finish promptly instead of waiting for carrier recovery timeout.
++- JSON example syntax: PASS.
++- Standalone SMP3 core/adaptive/protocol tests: PASS.
++- Standalone race detector (`-race -count=5`): PASS.
++- Standalone `go vet`: PASS.
++- Regression coverage includes directional RX/TX health, leg attribution, current-gap age, no-baseline severe RX/TX black holes, single probation canary, useful-data recovery gates, canary idle-continuity reset, cross-connection initial-failure learning, concurrent failure-burst cooldown coalescing, real-data active-success gating, same-session carrier replacement/replay, and alpha2.2 reliability/close behavior.
+ 
+-Live behavior that motivated alpha2.2:
++Pinned integration build status in this artifact environment:
+ 
+-- The user's alpha2.1 long-download test successfully established the preferred leg, activated the public booster, and kept leg 1 joined for roughly twenty seconds without the alpha2 reconnect storm.
+-- Near the response tail, both carriers were then closed while the Windows curl still had data left to receive. alpha2.1 contained an absolute graceful-drain deadline capped at 5 seconds; this could close the logical core while a large outstanding tail was still making ACK progress.
+-- alpha2.2 removes that absolute cap, keeps server-side routed EOF in graceful-drain state, and adds an explicit logical CLOSE marker.
++- NOT COMPLETED here because the runtime cannot reach `proxy.golang.org` to obtain the pinned Go 1.25.5 toolchain/modules. `build.sh` was attempted and failed before source integration/build at the external toolchain download step.
++- Therefore this clean source release intentionally does **not** certify or ship the stale binaries from the submitted archive. Run `./build.sh` in the normal WSL/Linux build environment with network/module access, then run `./package-release.sh` to produce the final binary release.
++- `build.sh` now writes portable relative `dist/SHA256SUMS`; `package-release.sh` stages a whitelist-only release and excludes `.git`, `.work`, deployment configs, caches, and stale archives.
+ 
+-Wire compatibility:
+-
+-- The wire magic remains SMP3.
+-- The hello version byte is **4** in alpha2.2 (alpha2/alpha2.1 used 3).
+-- Both endpoints must be upgraded together. Mixed alpha2.1/alpha2.2 peers are intentionally rejected at hello rather than silently using incompatible close semantics.
+-- JSON configuration schema is unchanged.
+-
+-Not executed in this artifact environment:
+-
+-- A complete checkout + full `go build` of the pinned upstream sing-box revision, because this environment cannot resolve GitHub/Go module hosts.
+-- A two-host live alpha2.2 interoperability/throughput test.
+-
+-`build.sh` performs the missing integration checks on the deployment machine: it checks out the exact pinned revision, injects the alpha2.2 sources, runs `go test ./protocol/multipath`, and only then builds the Linux/Windows binaries.
+-
+-Treat alpha2.2 as experimental until the full integrated build and the same 256 MiB landing-local regression test pass with both endpoints upgraded.
++Wire compatibility remains SMP3 hello version `4`; no frame or hello layout changes were made.
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/CHANGELOG.md alpha2.3/CHANGELOG.md
+--- alpha2.2/CHANGELOG.md	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/CHANGELOG.md	2026-08-27 07:19:51.711291628 +0000
+@@ -1,5 +1,32 @@
+ # Changelog
+ 
++## alpha2.3 — adaptive public carrier
++
++### r2 stabilization
++
++- Added conservative no-baseline severe-stall detection so a Hy2 carrier that is effectively black-holed from its first active samples can still enter SUSPECT and eventually fall back without requiring a previously learned goodput baseline.
++- Recovery canary and ordinary active-success windows now require continuous real leg1 useful traffic; long idle gaps reset their stable window instead of being counted as healthy Hy2 time.
++- Coalesced global initial-dial failure bursts so concurrently failing Hy2 dials trigger one cooldown transition rather than multiplying 90s -> 180s -> 300s inside the same burst.
++- Global initial-failure history is only cleared after sustained, real Hy2 useful contribution rather than logical demand carried solely by leg0.
++- Added regression tests for no-baseline RX/TX black holes, idle canary continuity, concurrent initial-failure bursts, and real-data active-success gating.
++- Release tooling now emits relative binary checksums and provides a clean whitelist-based staging script that excludes `.git`, `.work`, real deployment configs, caches, and stale archives.
++
++- Added Hy2-preferred `leg1` with Snell fallback inside the SMP3 multipath outbound.
++- Added user-impact-based health detection with HEALTHY/SUSPECT/FALLBACK hysteresis.
++- Added logical useful-goodput, reorder-pressure, outstanding-window, ACK-progress, and per-leg attribution snapshots.
++- Added same-session carrier replacement without closing the logical SOCKS TCP connection or changing wire protocol.
++- Added global Hy2 cooldown and real-traffic canary recovery for new logical connections.
++- Fixed stale `RxGapAge` attribution by tracking the expected sequence of the current unresolved gap.
++- Changed health attribution to a per-leg useful-goodput/ACK heuristic so slow leg0 traffic does not blame healthy Hy2.
++- Changed the goodput baseline to fast-rise/slow-decay and freeze it while SUSPECT is active.
++- Added single-owner Hy2 probation canary concurrency, normal-close owner release, and failed-probation cooldown backoff.
++- Split RX/TX logical goodput and baselines so healthy upload cannot mask broken download, or vice versa.
++- Added a 1 MiB / 3 active-window useful-data gate for probation recovery and a cross-connection 3/30s initial-failure learner.
++- Changed continuous-pending gap age to start from the current unresolved expected sequence instead of an old pending-frame timestamp.
++- Rebuilt Windows from the pinned alpha2.3 source and removed stale/secret deployment artifacts from the release tree.
++- Expanded deterministic long-duration, leg-attribution, canary, gap-age, carrier-switch, race, and regression coverage.
++- Preserved alpha2.2 server compatibility, hello version `4`, logical CLOSE, replay, and graceful tail behavior.
++
+ ## alpha2.2 — graceful tail + logical CLOSE
+ 
+ - Replaced the fixed graceful-drain deadline (maximum 5 seconds) with ACK-progress-based draining. `recovery_timeout` now acts as a stall/no-progress timeout during graceful close.
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/NOTICE.md alpha2.3/NOTICE.md
+--- alpha2.2/NOTICE.md	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/NOTICE.md	2026-08-27 10:25:12.000000000 +0000
+@@ -1,10 +1,10 @@
+-# Downstream / license notice
+-
+-This kit contains original experimental SMP3 multipath source and a source injector that modifies a fixed upstream sing-box source revision at build time.
+-
+-Upstream project: https://github.com/SagerNet/sing-box
+-Pinned revision: 4902660f8424fef3c2a60dfcdce7aeadfe3f3b88 (v1.14.0-beta.14)
+-
+-This kit is not an official sing-box release and is not affiliated with or endorsed by SagerNet. The generated downstream executable is named `smp3-proxy` to avoid implying that it is an official upstream binary.
+-
+-When building, redistributing, or modifying the combined work, review and comply with the upstream repository's license terms at the pinned revision. Keep the corresponding source and modifications available as required by those terms.
++# Downstream / license notice
++
++This kit contains original experimental SMP3 multipath source and a source injector that modifies a fixed upstream sing-box source revision at build time.
++
++Upstream project: https://github.com/SagerNet/sing-box
++Pinned revision: 4902660f8424fef3c2a60dfcdce7aeadfe3f3b88 (v1.14.0-beta.14)
++
++This kit is not an official sing-box release and is not affiliated with or endorsed by SagerNet. The generated downstream executable is named `smp3-proxy` to avoid implying that it is an official upstream binary.
++
++When building, redistributing, or modifying the combined work, review and comply with the upstream repository's license terms at the pinned revision. Keep the corresponding source and modifications available as required by those terms.
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/README-zh_CN.md alpha2.3/README-zh_CN.md
+--- alpha2.2/README-zh_CN.md	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/README-zh_CN.md	2026-08-27 07:19:51.712151440 +0000
+@@ -0,0 +1,12 @@
++# SMP3 Multipath Kit alpha2.3
++
++本项目说明与 alpha2.3 自适应 Hy2/Snell carrier 的健康语义见
++[README.md](README.md)。发布包中的示例配置均为占位符，部署前请替换为你自己的
++地址、证书和随机密钥；不要把真实部署配置提交到仓库或发布包。
++
++
++## alpha2.3-r2 稳定性补丁
++
++本轮进一步处理了四个边界：无健康 baseline 的首发黑洞、canary/active-success 的 idle 时间误计、
++并发 initial dial failure 对 cooldown 的重复放大，以及仅 leg0 有流量时错误清除 Hy2 failure history。
++完整算法和参数说明见 `README.md`。
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/README.md alpha2.3/README.md
+--- alpha2.2/README.md	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/README.md	2026-08-27 07:19:51.711990463 +0000
+@@ -1,8 +1,8 @@
+-# SMP3 Multipath Kit alpha2.2
++# SMP3 Multipath Kit alpha2.3
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.2**  
++> **当前版本：alpha2.3**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -27,9 +27,10 @@
+     │      │
+     │      └── 专线 Snell ── 专线机 ── WG ──┐
+     │                                         │
+-    └── leg1 / public-path                    │
++    └── leg1 / adaptive public carrier       │
+            │                                  │
+-           └── 公网 Snell ────────────────────┤
++           ├── Hy2 preferred ─────────────────┤
++           └── Snell fallback ────────────────┤
+                                               ▼
+                                    SMP3 Server :24444
+                                               │
+@@ -66,7 +67,57 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
+-alpha2.2 的 SMP3 hello/wire version 与 alpha2/alpha2.1 不兼容，**客户端和服务器必须一起升级到 alpha2.2**。
++## 2.1 alpha2.3 自适应公网 carrier
++
++alpha2.3 保持 SMP3 wire protocol 不变（magic `SMP3`、hello version `4`），只在
++multipath outbound 内部增加可选的 `leg1` carrier 自适应：
++
++- `public-hy2` 是 preferred public carrier。
++- `public-snell` 是 fallback carrier，切换时复用同一个 logical session、session ID、序列号、ACK 状态和 leg ID `1`。
++- fallback 不关闭本地 SOCKS TCP，也不创建第二套 reconnect worker；沿用 alpha2.2 的 leg rejoin/replay 链路。
++- 新 logical connection 在 Hy2 cooldown 内直接使用 Snell；cooldown 到期后用真实业务流量 canary Hy2。
++
++自适应健康判断关注的是用户可见的 logical stream，而不是底层 UDP 是否“漂亮”：
++
++> Adaptive health does not judge whether UDP is perfect. Normal packet loss, jitter,
++> QUIC retransmission or short-term rate variation do not by themselves cause fallback.
++> Fallback only happens when degradation causes sustained logical-stream impact such as
++> reorder pressure, ACK stalls, outstanding backlog and degraded useful goodput.
++
++自适应默认值为 evaluation `1s`、warmup `5s`、SUSPECT `8s`、hard failure `2 / 15s`、
++cooldown `90s`（上限 `5m`）、recovery active window `20s`、goodput ratio `40%`。
++完整客户端示例见 `config/client-adaptive.example.json`；服务器同时监听 Snell
++TCP `23456`、Hy2 UDP `23457` 和 SMP3 TCP `24444` 的示例见
++`config/server-hy2-snell.example.json`。
++
++### Adaptive Hy2 health semantics
++
++控制器将 RX 和 TX 分开观察：应用层交付的 `RxLogicalGoodput`、累计 ACK 推进得到的
++`TxLogicalGoodput`，以及各自的 `RxBaseline`/`TxBaseline`、`Leg1RxGoodput`/
++`Leg1TxGoodput` 和对应 baseline；同时结合 outstanding frame、重排 pending frame 和
++当前缺口年龄。只有在对应方向有真实 demand 时，同时出现该方向持续逻辑压力、leg1/Hy2
++对应方向 useful contribution 明显下降、对应方向 goodput 低于慢速 baseline，并持续超过
++SUSPECT 窗口，才会把 leg1 切到 Snell。UDP 丢包、抖动、RTT、QUIC 重传或短时速率变化
++单独出现时不会触发 fallback。
++
++Per-leg useful-goodput attribution is a heuristic because SMP3 may replay an outstanding
++frame on another transport leg; it is not a wire-level ownership claim. 因此实现优先避免把
++leg0 的慢速误归因给健康的 Hy2，同时仍会在 Hy2 对用户可见的逻辑流造成持续退化时切换。
++
++cooldown 到期后最多只允许一个逻辑连接占用 Hy2 probation canary；其它连接继续使用 Snell。
++Canary 必须在 recovery stable window 内累计至少 `1 MiB` Hy2 useful DATA，并经过至少
++`3` 个有效 active windows，才允许恢复全局 Hy2；仅 leg0 有流量、拨号成功或 socket 存活
++都不算成功。拨号失败、重复传输失败或 probation 期间的软 fallback 会重新进入带
++90s/180s/300s 上限的退避 cooldown。initial Hy2 dial failure 则跨 logical connection
++按默认 `3 / 30s` 滑动窗口学习，单次或低于阈值不会触发全局 cooldown；同一波并发失败只会
++触发一次 cooldown，不会在数毫秒内把退避直接放大到上限。Canary/active-success 的 20s 稳定窗口只统计
++持续存在真实 leg1 useful DATA 的时间，长 idle 会重置连续窗口。若 Hy2 从第一批样本起就近似黑洞、
++来不及建立健康 baseline，控制器还保留一个更保守的 no-baseline severe-stall 路径：只有 logical
++useful progress 为 0、leg1 contribution 为 0、队列/重排压力达到更高阈值且持续严重 stall，才进入
++SUSPECT，之后仍需经过完整 `suspect_window` 才 fallback。
++
++alpha2.3 保持与 alpha2.2 相同的 SMP3 hello/wire version `4`，因此 alpha2.3
++客户端和 alpha2.2 服务器仍可互通；alpha2/alpha2.1 使用 version `3`，不兼容。
+ 
+ ---
+ 
+@@ -118,7 +169,7 @@
+ ### 4.1 校验源码包
+ 
+ ```bash
+-cd ~/smp3-multipath-kit-alpha2.2
++cd ~/smp3-multipath-kit-alpha2.3
+ 
+ mkdir -p ~/go-tmp ~/go-build-cache
+ 
+@@ -203,6 +254,20 @@
+       "psk": "YOUR_PUBLIC_SNELL_PSK"
+     },
+     {
++      "type": "hysteria2",
++      "tag": "public-hy2-carrier",
++      "listen": "0.0.0.0",
++      "listen_port": 23457,
++      "users": [
++        { "name": "smp3", "password": "YOUR_PUBLIC_HY2_PASSWORD" }
++      ],
++      "tls": {
++        "enabled": true,
++        "certificate_path": "/etc/smp3/server.crt",
++        "key_path": "/etc/smp3/server.key"
++      }
++    },
++    {
+       "type": "multipath",
+       "tag": "mp-in",
+       "listen": "10.66.66.1",
+@@ -253,13 +318,14 @@
+ 检查监听：
+ 
+ ```bash
+-ss -lntp | grep -E ':23456|:24444'
++ss -lntp | grep -E ':23456|:23457|:24444'
+ ```
+ 
+ 正常应看到类似：
+ 
+ ```text
+ 0.0.0.0:23456
++0.0.0.0:23457/udp
+ 10.66.66.1:24444
+ ```
+ 
+@@ -276,7 +342,7 @@
+ ```bash
+ cat >/etc/systemd/system/smp3-proxy.service <<'EOF_SERVICE'
+ [Unit]
+-Description=SMP3 Multipath Proxy alpha2.2
++Description=SMP3 Multipath Proxy alpha2.3
+ After=network-online.target wg-quick@wg0.service
+ Wants=network-online.target wg-quick@wg0.service
+ 
+@@ -756,6 +822,47 @@
+ 
+ ---
+ 
++### `leg1_fallback` 与 `leg1_adaptive`
++
++alpha2.2 配置不包含这两个字段时，行为保持不变：`outbounds[1]` 直接作为
++leg1，并按原有阈值、ACK 超时和重连逻辑工作。
++
++启用 alpha2.3 自适应时，`outbounds[1]` 应指向 `public-hy2`，并额外指定：
++
++```json
++"leg1_fallback": "public-snell",
++"leg1_adaptive": {
++  "enabled": true,
++  "evaluation_interval": "1s",
++  "warmup": "5s",
++  "suspect_window": "8s",
++  "hard_failure_threshold": 2,
++  "hard_failure_window": "15s",
++  "cooldown": "90s",
++  "max_cooldown": "5m",
++  "recovery_stable_window": "20s",
++  "min_tx_outstanding_frames": 64,
++  "tx_ack_stall": "2s",
++  "min_rx_reorder_frames": 64,
++  "rx_gap_stall": "1500ms",
++  "goodput_degrade_ratio": 0.4,
++  "min_canary_useful_bytes": 1048576,
++  "min_canary_active_windows": 3,
++  "initial_failure_threshold": 3,
++  "initial_failure_window": "30s"
++}
++```
++
++控制器只在对应方向有真实业务 demand 时建立对应的 goodput baseline。RX 使用实际交付到
++`appConn` 的 DATA bytes，TX 使用累计 ACK 确认的 unique DATA bytes；leg1 RX/TX
++contribution 分别使用 RX first-arrival 和 TX last-sent-leg 的 heuristic。普通 jitter、
++少量 loss、QUIC recovery、短暂 reorder 或瞬时低速不会单独触发 fallback。
++只有对应方向的压力、leg1 对应方向 contribution 和对应方向 useful goodput 恶化持续跨过
++SUSPECT 窗口才从 Hy2 切换到 Snell。
++切换后本 logical connection 不再自动切回 Hy2。
++
++---
++
+ ## 13. 大文件测试
+ 
+ 为了排除第三方测速服务器限制，可以直接在落地机创建本地测试文件。
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/UPGRADE-alpha2-to-alpha2.1.md alpha2.3/UPGRADE-alpha2-to-alpha2.1.md
+--- alpha2.2/UPGRADE-alpha2-to-alpha2.1.md	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/UPGRADE-alpha2-to-alpha2.1.md	2026-08-27 10:25:12.000000000 +0000
+@@ -1,30 +1,30 @@
+-# Upgrade alpha2 -> alpha2.1
+-
+-No configuration schema or SMP3 password change is required. Both client and server binaries should be rebuilt/replaced together.
+-
+-Recommended flow:
+-
+-```bash
+-# WSL/Linux build machine
+-cd smp3-multipath-kit-alpha2.1
+-./validate-kit.sh
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
+-```
+-
+-Then replace the landing binary and Windows binary with the newly built alpha2.1 outputs. Keep the existing `config.json` files.
+-
+-Before replacement, stop the foreground test instances. After replacement:
+-
+-```bash
+-# landing
+-/opt/smp3/smp3-proxy check -c /opt/smp3/config.json
+-/opt/smp3/smp3-proxy run -c /opt/smp3/config.json
+-```
+-
+-```powershell
+-# Windows
+-.\smp3-proxy.exe check -c .\config.json
+-.\smp3-proxy.exe run -c .\config.json
+-```
+-
+-For the first retest, keep `activation_threshold_mbps` low (for example 5 Mbps), repeat the landing-local HTTP download, and verify that leg 1 remains up instead of cycling through `Remote EOF`.
++# Upgrade alpha2 -> alpha2.1
++
++No configuration schema or SMP3 password change is required. Both client and server binaries should be rebuilt/replaced together.
++
++Recommended flow:
++
++```bash
++# WSL/Linux build machine
++cd smp3-multipath-kit-alpha2.1
++./validate-kit.sh
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
++```
++
++Then replace the landing binary and Windows binary with the newly built alpha2.1 outputs. Keep the existing `config.json` files.
++
++Before replacement, stop the foreground test instances. After replacement:
++
++```bash
++# landing
++/opt/smp3/smp3-proxy check -c /opt/smp3/config.json
++/opt/smp3/smp3-proxy run -c /opt/smp3/config.json
++```
++
++```powershell
++# Windows
++.\smp3-proxy.exe check -c .\config.json
++.\smp3-proxy.exe run -c .\config.json
++```
++
++For the first retest, keep `activation_threshold_mbps` low (for example 5 Mbps), repeat the landing-local HTTP download, and verify that leg 1 remains up instead of cycling through `Remote EOF`.
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/UPGRADE-alpha2.1-to-alpha2.2.md alpha2.3/UPGRADE-alpha2.1-to-alpha2.2.md
+--- alpha2.2/UPGRADE-alpha2.1-to-alpha2.2.md	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/UPGRADE-alpha2.1-to-alpha2.2.md	2026-08-27 10:25:12.000000000 +0000
+@@ -1,35 +1,35 @@
+-# Upgrade alpha2.1 -> alpha2.2
+-
+-alpha2.2 keeps the same JSON configuration schema, secrets, ports, child outbounds and SMP3 aggregation addresses. Only the binaries need to be rebuilt/replaced.
+-
+-**Upgrade both Windows and landing-server binaries together.** alpha2.2 bumps the SMP3 hello version byte to 4 because it adds the logical CLOSE frame. Mixing alpha2.1 and alpha2.2 is intentionally rejected at handshake time.
+-
+-## Build
+-
+-```bash
+-cd smp3-multipath-kit-alpha2.2
+-mkdir -p ~/go-tmp ~/go-build-cache
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./validate-kit.sh
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
+-```
+-
+-Outputs remain:
+-
+-```text
+-dist/smp3-proxy-linux-amd64
+-dist/smp3-proxy-windows-amd64.exe
+-```
+-
+-## Live regression test
+-
+-Keep the existing configs. Replace both binaries, start both processes, then repeat the same 256 MiB local landing test without restarting any process during the transfer. Expected behavior:
+-
+-```text
+-preferred leg connects
+-booster activates
+-leg 1 joins and remains stable
+-256 MiB reaches 100%
+-normal logical CLOSE ends the session without a reconnect loop
+-```
+-
+-The server must no longer truncate the tail because a fixed 5-second drain deadline expired.
++# Upgrade alpha2.1 -> alpha2.2
++
++alpha2.2 keeps the same JSON configuration schema, secrets, ports, child outbounds and SMP3 aggregation addresses. Only the binaries need to be rebuilt/replaced.
++
++**Upgrade both Windows and landing-server binaries together.** alpha2.2 bumps the SMP3 hello version byte to 4 because it adds the logical CLOSE frame. Mixing alpha2.1 and alpha2.2 is intentionally rejected at handshake time.
++
++## Build
++
++```bash
++cd smp3-multipath-kit-alpha2.2
++mkdir -p ~/go-tmp ~/go-build-cache
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./validate-kit.sh
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
++```
++
++Outputs remain:
++
++```text
++dist/smp3-proxy-linux-amd64
++dist/smp3-proxy-windows-amd64.exe
++```
++
++## Live regression test
++
++Keep the existing configs. Replace both binaries, start both processes, then repeat the same 256 MiB local landing test without restarting any process during the transfer. Expected behavior:
++
++```text
++preferred leg connects
++booster activates
++leg 1 joins and remains stable
++256 MiB reaches 100%
++normal logical CLOSE ends the session without a reconnect loop
++```
++
++The server must no longer truncate the tail because a fixed 5-second drain deadline expired.
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/VERSION alpha2.3/VERSION
+--- alpha2.2/VERSION	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/VERSION	2026-08-27 07:19:51.711075762 +0000
+@@ -1,5 +1,5 @@
+-kit_version=alpha2.2
+-kit_revision=alpha2.2-r1
++kit_version=alpha2.3
++kit_revision=alpha2.3-r2
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/build.sh alpha2.3/build.sh
+--- alpha2.2/build.sh	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/build.sh	2026-08-27 07:19:51.710860386 +0000
+@@ -23,14 +23,17 @@
+ echo '[+] running standalone SMP3 core reliability tests'
+ (
+   cd "$ROOT/src/protocol/multipath"
+-  go test core.go protocol.go core_test.go -v
++  go test core.go protocol.go adaptive.go core_test.go adaptive_test.go protocol_test.go -v
+ )
+ 
+ if [ ! -d "$SRC/.git" ]; then
+   git clone https://github.com/SagerNet/sing-box.git "$SRC"
+ fi
+ cd "$SRC"
+-git fetch --all --tags --prune
++if ! git cat-file -e "$BASE_REV^{commit}" 2>/dev/null; then
++  echo "[+] fetching pinned revision only (HTTP/1.1, no tag enumeration)"
++  git -c http.version=HTTP/1.1 -c http.maxRequests=1 fetch --no-tags --filter=blob:none origin "$BASE_REV"
++fi
+ git reset --hard
+ git clean -fdx
+ git checkout --detach "$BASE_REV"
+@@ -45,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.2 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+@@ -56,6 +59,9 @@
+ echo '[+] building windows/amd64'
+ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags "$LDFLAGS" -o "$OUT/smp3-proxy-windows-amd64.exe" ./cmd/sing-box
+ 
+-sha256sum "$OUT"/* | tee "$OUT/SHA256SUMS"
++(
++  cd "$OUT"
++  sha256sum smp3-proxy-linux-amd64 smp3-proxy-windows-amd64.exe | tee SHA256SUMS
++)
+ echo '[+] done:'
+ ls -lh "$OUT"
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/config/client-adaptive.example.json alpha2.3/config/client-adaptive.example.json
+--- alpha2.2/config/client-adaptive.example.json	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/config/client-adaptive.example.json	2026-08-27 14:28:30.000000000 +0000
+@@ -0,0 +1,86 @@
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
++    {
++      "type": "mixed",
++      "tag": "mihomo-local",
++      "listen": "127.0.0.1",
++      "listen_port": 2080
++    }
++  ],
++  "outbounds": [
++    {
++      "type": "snell",
++      "tag": "line-path",
++      "server": "YOUR_LINE_ENTRY",
++      "server_port": 12345,
++      "version": 4,
++      "psk": "YOUR_LINE_SNELL_PSK"
++    },
++    {
++      "type": "hysteria2",
++      "tag": "public-hy2",
++      "server": "YOUR_LANDING_PUBLIC_IP",
++      "server_port": 23457,
++      "password": "YOUR_PUBLIC_HY2_PASSWORD",
++      "tls": {
++        "enabled": true,
++        "server_name": "YOUR_HY2_SERVER_NAME",
++        "insecure": false
++      }
++    },
++    {
++      "type": "snell",
++      "tag": "public-snell",
++      "server": "YOUR_LANDING_PUBLIC_IP",
++      "server_port": 23456,
++      "version": 4,
++      "psk": "YOUR_PUBLIC_SNELL_PSK"
++    },
++    {
++      "type": "multipath",
++      "tag": "mp-jp",
++      "outbounds": ["line-path", "public-hy2"],
++      "preferred": "line-path",
++      "udp_outbound": "line-path",
++      "leg1_fallback": "public-snell",
++      "leg1_adaptive": {
++        "enabled": true,
++        "evaluation_interval": "1s",
++        "warmup": "5s",
++        "suspect_window": "8s",
++        "hard_failure_threshold": 2,
++        "hard_failure_window": "15s",
++        "cooldown": "90s",
++        "max_cooldown": "5m",
++        "recovery_stable_window": "20s",
++        "min_tx_outstanding_frames": 64,
++        "tx_ack_stall": "2s",
++        "min_rx_reorder_frames": 64,
++        "rx_gap_stall": "1500ms",
++        "goodput_degrade_ratio": 0.4,
++        "min_canary_useful_bytes": 1048576,
++        "min_canary_active_windows": 3,
++        "initial_failure_threshold": 3,
++        "initial_failure_window": "30s"
++      },
++      "endpoints": [
++        { "server": "10.66.66.1", "server_port": 24444 },
++        { "server": "10.66.66.1", "server_port": 24444 }
++      ],
++      "password": "YOUR_SMP3_PASSWORD",
++      "activation_threshold_mbps": 100,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [128, 500],
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s",
++      "redial_interval": "1s"
++    }
++  ],
++  "route": { "final": "mp-jp" }
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/config/client-legacy.example.json alpha2.3/config/client-legacy.example.json
+--- alpha2.2/config/client-legacy.example.json	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/config/client-legacy.example.json	2026-08-27 13:15:22.000000000 +0000
+@@ -0,0 +1,53 @@
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
++    {
++      "type": "mixed",
++      "tag": "mihomo-local",
++      "listen": "127.0.0.1",
++      "listen_port": 2080
++    }
++  ],
++  "outbounds": [
++    {
++      "type": "snell",
++      "tag": "line-path",
++      "server": "YOUR_LINE_ENTRY",
++      "server_port": 12345,
++      "version": 4,
++      "psk": "YOUR_LINE_SNELL_PSK"
++    },
++    {
++      "type": "snell",
++      "tag": "public-path",
++      "server": "YOUR_LANDING_PUBLIC_IP",
++      "server_port": 23456,
++      "version": 4,
++      "psk": "YOUR_PUBLIC_SNELL_PSK"
++    },
++    {
++      "type": "multipath",
++      "tag": "mp-jp",
++      "outbounds": ["line-path", "public-path"],
++      "preferred": "line-path",
++      "udp_outbound": "line-path",
++      "endpoints": [
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
++      ],
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++      "activation_threshold_mbps": 80,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [100, 500],
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s",
++      "redial_interval": "1s"
++    }
++  ],
++  "route": { "final": "mp-jp" }
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/config/client.example.json alpha2.3/config/client.example.json
+--- alpha2.2/config/client.example.json	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/config/client.example.json	2026-08-27 10:25:12.000000000 +0000
+@@ -1,56 +1,56 @@
+-{
+-  "log": { "level": "info", "timestamp": true },
+-  "inbounds": [
+-    {
+-      "type": "mixed",
+-      "tag": "mihomo-local",
+-      "listen": "127.0.0.1",
+-      "listen_port": 2080
+-    }
+-  ],
+-  "outbounds": [
+-    {
+-      "type": "snell",
+-      "tag": "line-path",
+-      "server": "YOUR_LINE_ENTRY",
+-      "server_port": 12345,
+-      "version": 4,
+-      "psk": "YOUR_LINE_SNELL_PSK"
+-    },
+-    {
+-      "type": "snell",
+-      "tag": "public-path",
+-      "server": "YOUR_LANDING_PUBLIC_IP",
+-      "server_port": 23456,
+-      "version": 4,
+-      "psk": "YOUR_PUBLIC_SNELL_PSK"
+-    },
+-    {
+-      "type": "multipath",
+-      "tag": "mp-jp",
+-      "outbounds": ["line-path", "public-path"],
+-      "preferred": "line-path",
+-      "udp_outbound": "line-path",
+-
+-      "endpoints": [
+-        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
+-        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
+-      ],
+-
+-      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+-      "activation_threshold_mbps": 80,
+-      "activation_window": "1s",
+-      "chunk_size": 65536,
+-      "queue_frames": 256,
+-      "bandwidth_mbps": [100, 500],
+-
+-      "max_reorder_frames": 4096,
+-      "max_inflight_frames": 1024,
+-      "ack_interval": "20ms",
+-      "retransmit_timeout": "1500ms",
+-      "recovery_timeout": "15s",
+-      "redial_interval": "1s"
+-    }
+-  ],
+-  "route": { "final": "mp-jp" }
+-}
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
++    {
++      "type": "mixed",
++      "tag": "mihomo-local",
++      "listen": "127.0.0.1",
++      "listen_port": 2080
++    }
++  ],
++  "outbounds": [
++    {
++      "type": "snell",
++      "tag": "line-path",
++      "server": "YOUR_LINE_ENTRY",
++      "server_port": 12345,
++      "version": 4,
++      "psk": "YOUR_LINE_SNELL_PSK"
++    },
++    {
++      "type": "snell",
++      "tag": "public-path",
++      "server": "YOUR_LANDING_PUBLIC_IP",
++      "server_port": 23456,
++      "version": 4,
++      "psk": "YOUR_PUBLIC_SNELL_PSK"
++    },
++    {
++      "type": "multipath",
++      "tag": "mp-jp",
++      "outbounds": ["line-path", "public-path"],
++      "preferred": "line-path",
++      "udp_outbound": "line-path",
++
++      "endpoints": [
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
++      ],
++
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++      "activation_threshold_mbps": 80,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [100, 500],
++
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s",
++      "redial_interval": "1s"
++    }
++  ],
++  "route": { "final": "mp-jp" }
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/config/mihomo-snippet.yaml alpha2.3/config/mihomo-snippet.yaml
+--- alpha2.2/config/mihomo-snippet.yaml	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/config/mihomo-snippet.yaml	2026-08-27 10:25:12.000000000 +0000
+@@ -1,11 +1,11 @@
+-proxies:
+-  - name: MP-JP
+-    type: socks5
+-    server: 127.0.0.1
+-    port: 2080
+-    udp: false
+-
+-# Add MP-JP to whichever proxy-group you already use.
+-# TCP is multipath through the local patched sing-box. UDP aggregation is not
+-# implemented; if you need UDP, route it separately in Mihomo or configure the
+-# sing-box udp_outbound for clients that connect directly to its mixed port.
++proxies:
++  - name: MP-JP
++    type: socks5
++    server: 127.0.0.1
++    port: 2080
++    udp: false
++
++# Add MP-JP to whichever proxy-group you already use.
++# TCP is multipath through the local patched sing-box. UDP aggregation is not
++# implemented; if you need UDP, route it separately in Mihomo or configure the
++# sing-box udp_outbound for clients that connect directly to its mixed port.
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/config/server-hy2-snell.example.json alpha2.3/config/server-hy2-snell.example.json
+--- alpha2.2/config/server-hy2-snell.example.json	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/config/server-hy2-snell.example.json	2026-08-27 13:15:22.000000000 +0000
+@@ -0,0 +1,51 @@
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
++    {
++      "type": "snell",
++      "tag": "public-carrier",
++      "listen": "0.0.0.0",
++      "listen_port": 23456,
++      "version": 5,
++      "psk": "CHANGE_PUBLIC_SNELL_PSK"
++    },
++    {
++      "type": "hysteria2",
++      "tag": "public-hy2-carrier",
++      "listen": "0.0.0.0",
++      "listen_port": 23457,
++      "users": [
++        {
++          "name": "smp3",
++          "password": "CHANGE_PUBLIC_HY2_PASSWORD"
++        }
++      ],
++      "tls": {
++        "enabled": true,
++        "certificate_path": "/etc/smp3/server.crt",
++        "key_path": "/etc/smp3/server.key"
++      }
++    },
++    {
++      "type": "multipath",
++      "tag": "mp-in",
++      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
++      "listen_port": 24444,
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++      "activation_threshold_mbps": 80,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [100, 500],
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s"
++    }
++  ],
++  "outbounds": [
++    { "type": "direct", "tag": "direct" }
++  ],
++  "route": { "final": "direct" }
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/config/server.example.json alpha2.3/config/server.example.json
+--- alpha2.2/config/server.example.json	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/config/server.example.json	2026-08-27 10:52:54.000000000 +0000
+@@ -1,36 +1,53 @@
+-{
+-  "log": { "level": "info", "timestamp": true },
+-  "inbounds": [
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
+     {
+       "type": "snell",
+       "tag": "public-carrier",
+-      "listen": "0.0.0.0",
+-      "listen_port": 23456,
+-      "version": 5,
++      "listen": "0.0.0.0",
++      "listen_port": 23456,
++      "version": 5,
+       "psk": "CHANGE_PUBLIC_SNELL_PSK"
+     },
+     {
+-      "type": "multipath",
+-      "tag": "mp-in",
+-      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
+-      "listen_port": 24444,
+-      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+-
+-      "activation_threshold_mbps": 80,
+-      "activation_window": "1s",
+-      "chunk_size": 65536,
+-      "queue_frames": 256,
+-      "bandwidth_mbps": [100, 500],
+-
+-      "max_reorder_frames": 4096,
+-      "max_inflight_frames": 1024,
+-      "ack_interval": "20ms",
+-      "retransmit_timeout": "1500ms",
+-      "recovery_timeout": "15s"
+-    }
+-  ],
+-  "outbounds": [
+-    { "type": "direct", "tag": "direct" }
+-  ],
+-  "route": { "final": "direct" }
+-}
++      "type": "hysteria2",
++      "tag": "public-hy2-carrier",
++      "listen": "0.0.0.0",
++      "listen_port": 23457,
++      "users": [
++        {
++          "name": "smp3",
++          "password": "CHANGE_PUBLIC_HY2_PASSWORD"
++        }
++      ],
++      "tls": {
++        "enabled": true,
++        "certificate_path": "/etc/smp3/server.crt",
++        "key_path": "/etc/smp3/server.key"
++      }
++    },
++    {
++      "type": "multipath",
++      "tag": "mp-in",
++      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
++      "listen_port": 24444,
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++
++      "activation_threshold_mbps": 80,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [100, 500],
++
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s"
++    }
++  ],
++  "outbounds": [
++    { "type": "direct", "tag": "direct" }
++  ],
++  "route": { "final": "direct" }
++}
+Binary files alpha2.2/dist.zip and alpha2.3/dist.zip differ
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/install-client.ps1 alpha2.3/install-client.ps1
+--- alpha2.2/install-client.ps1	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/install-client.ps1	2026-08-27 10:25:14.000000000 +0000
+@@ -1,36 +1,36 @@
+-param([string]$Config = "$PSScriptRoot\config\client.json")
+-$ErrorActionPreference = "Stop"
+-$bin = "$PSScriptRoot\dist\smp3-proxy-windows-amd64.exe"
+-if (!(Test-Path $bin)) { throw "Build first with build.sh in WSL/Linux." }
+-if (!(Test-Path $Config)) { throw "Create config\client.json from client.example.json first." }
+-
+-$dst = "$env:ProgramData\smp3-proxy"
+-$taskName = "smp3-multipath"
+-New-Item -ItemType Directory -Force $dst | Out-Null
+-
+-# Validate the new config before replacing a running installation.
+-& $bin check -c $Config
+-if ($LASTEXITCODE -ne 0) { throw "New multipath config check failed." }
+-
+-try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
+-try { Stop-ScheduledTask -TaskName "sing-box-multipath" -ErrorAction SilentlyContinue } catch {}
+-try { Unregister-ScheduledTask -TaskName "sing-box-multipath" -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+-Get-Process "smp3-proxy","sing-box-mp" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+-Start-Sleep -Milliseconds 300
+-
+-Copy-Item $bin "$dst\smp3-proxy.exe" -Force
+-Copy-Item $Config "$dst\config.json" -Force
+-& "$dst\smp3-proxy.exe" check -c "$dst\config.json"
+-if ($LASTEXITCODE -ne 0) { throw "Installed config check failed." }
+-
+-$action = New-ScheduledTaskAction -Execute "$dst\smp3-proxy.exe" -Argument "run -c `"$dst\config.json`""
+-$trigger = New-ScheduledTaskTrigger -AtLogOn
+-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+-Start-ScheduledTask -TaskName $taskName
+-Start-Sleep -Seconds 1
+-
+-$p = Get-Process "smp3-proxy" -ErrorAction SilentlyContinue
+-if (!$p) { throw "smp3-proxy did not stay running; start it manually to inspect logs." }
+-Write-Host "Installed/updated. Mihomo can use SOCKS5 127.0.0.1:2080"
+-Write-Host "Config: $dst\config.json"
++param([string]$Config = "$PSScriptRoot\config\client.json")
++$ErrorActionPreference = "Stop"
++$bin = "$PSScriptRoot\dist\smp3-proxy-windows-amd64.exe"
++if (!(Test-Path $bin)) { throw "Build first with build.sh in WSL/Linux." }
++if (!(Test-Path $Config)) { throw "Create config\client.json from client.example.json first." }
++
++$dst = "$env:ProgramData\smp3-proxy"
++$taskName = "smp3-multipath"
++New-Item -ItemType Directory -Force $dst | Out-Null
++
++# Validate the new config before replacing a running installation.
++& $bin check -c $Config
++if ($LASTEXITCODE -ne 0) { throw "New multipath config check failed." }
++
++try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
++try { Stop-ScheduledTask -TaskName "sing-box-multipath" -ErrorAction SilentlyContinue } catch {}
++try { Unregister-ScheduledTask -TaskName "sing-box-multipath" -Confirm:$false -ErrorAction SilentlyContinue } catch {}
++Get-Process "smp3-proxy","sing-box-mp" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
++Start-Sleep -Milliseconds 300
++
++Copy-Item $bin "$dst\smp3-proxy.exe" -Force
++Copy-Item $Config "$dst\config.json" -Force
++& "$dst\smp3-proxy.exe" check -c "$dst\config.json"
++if ($LASTEXITCODE -ne 0) { throw "Installed config check failed." }
++
++$action = New-ScheduledTaskAction -Execute "$dst\smp3-proxy.exe" -Argument "run -c `"$dst\config.json`""
++$trigger = New-ScheduledTaskTrigger -AtLogOn
++$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
++Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
++Start-ScheduledTask -TaskName $taskName
++Start-Sleep -Seconds 1
++
++$p = Get-Process "smp3-proxy" -ErrorAction SilentlyContinue
++if (!$p) { throw "smp3-proxy did not stay running; start it manually to inspect logs." }
++Write-Host "Installed/updated. Mihomo can use SOCKS5 127.0.0.1:2080"
++Write-Host "Config: $dst\config.json"
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/install-server.sh alpha2.3/install-server.sh
+--- alpha2.2/install-server.sh	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/install-server.sh	2026-08-27 14:33:16.000000000 +0000
+@@ -25,7 +25,7 @@
+ 
+ cat >/etc/systemd/system/smp3-proxy.service <<'UNIT'
+ [Unit]
+-Description=SMP3 Multipath proxy alpha2.2
++Description=SMP3 Multipath proxy alpha2.3
+ After=network-online.target
+ Wants=network-online.target
+ 
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/package-release.sh alpha2.3/package-release.sh
+--- alpha2.2/package-release.sh	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/package-release.sh	2026-08-27 07:23:38.458576331 +0000
+@@ -0,0 +1,93 @@
++#!/usr/bin/env bash
++set -euo pipefail
++ROOT="$(cd "$(dirname "$0")" && pwd)"
++NAME="smp3-multipath-kit-alpha2.3"
++STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
++STAGE="$STAGE_ROOT/$NAME"
++OUT_ZIP="${1:-$ROOT/$NAME.zip}"
++
++LINUX_BIN="$ROOT/dist/smp3-proxy-linux-amd64"
++WINDOWS_BIN="$ROOT/dist/smp3-proxy-windows-amd64.exe"
++[ -x "$LINUX_BIN" ] || { echo "missing/non-executable final Linux binary; run ./build.sh first" >&2; exit 1; }
++[ -f "$WINDOWS_BIN" ] || { echo "missing final Windows binary; run ./build.sh first" >&2; exit 1; }
++
++rm -rf "$STAGE"
++mkdir -p "$STAGE" "$STAGE/dist" "$STAGE/config" "$STAGE/patches" "$STAGE/scripts" "$STAGE/src"
++
++for f in README.md README-zh_CN.md CHANGELOG.md BUILD_STATUS.md NOTICE.md VERSION \
++         build.sh validate-kit.sh install-server.sh install-client.ps1 package-release.sh \
++         UPGRADE-alpha2-to-alpha2.1.md UPGRADE-alpha2.1-to-alpha2.2.md; do
++  [ -f "$ROOT/$f" ] && cp -a "$ROOT/$f" "$STAGE/$f"
++done
++cp -a "$ROOT/config/." "$STAGE/config/"
++cp -a "$ROOT/patches/alpha2.2-to-alpha2.3.diff" "$STAGE/patches/"
++cp -a "$ROOT/scripts/." "$STAGE/scripts/"
++cp -a "$ROOT/src/." "$STAGE/src/"
++cp -a "$LINUX_BIN" "$WINDOWS_BIN" "$STAGE/dist/"
++
++# Never ship local deployment configs, cache or generated bytecode.
++find "$STAGE" -type d \( -name .git -o -name .work -o -name __pycache__ \) -prune -exec rm -rf {} +
++find "$STAGE" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name 'dist.zip' -o -name 'config.json' -o -name 'client.json' -o -name 'server.json' \) -delete
++
++chmod 0755 "$STAGE/build.sh" "$STAGE/validate-kit.sh" "$STAGE/install-server.sh" "$STAGE/package-release.sh" "$STAGE/dist/smp3-proxy-linux-amd64"
++find "$STAGE/scripts" -maxdepth 1 -type f -name '*.sh' -exec chmod 0755 {} +
++find "$STAGE" -type f -name '*.json' -exec chmod 0644 {} +
++
++# Validate that example secret fields are placeholders rather than deployment credentials.
++python3 - "$STAGE/config" <<'PY'
++import json, pathlib, sys
++root = pathlib.Path(sys.argv[1])
++secret_keys = {'password', 'psk', 'obfs_password', 'key'}
++allowed_prefixes = ('YOUR_', 'CHANGE_')
++problems=[]
++def walk(v, path):
++    if isinstance(v, dict):
++        for k, x in v.items():
++            if k.lower() in secret_keys and isinstance(x, str) and x and not x.startswith(allowed_prefixes):
++                # Certificate/key filesystem paths are not secret values.
++                if k.lower() == 'key' and ('/' in x or '\\' in x):
++                    continue
++                problems.append(f'{path}: {k} is not a placeholder')
++            walk(x, path)
++    elif isinstance(v, list):
++        for x in v: walk(x, path)
++for p in root.glob('*.json'):
++    with p.open(encoding='utf-8') as f:
++        walk(json.load(f), p.name)
++if problems:
++    raise SystemExit('\n'.join(problems))
++PY
++
++# Binary checksums use portable relative names.
++(
++  cd "$STAGE/dist"
++  sha256sum smp3-proxy-linux-amd64 smp3-proxy-windows-amd64.exe > SHA256SUMS
++  sha256sum -c SHA256SUMS
++)
++
++# Source/release manifest excludes itself and binary checksums to avoid cycles.
++(
++  cd "$STAGE"
++  find . -type f \
++    ! -path './MANIFEST.sha256' \
++    ! -path './dist/SHA256SUMS' \
++    ! -path './dist/smp3-proxy-linux-amd64' \
++    ! -path './dist/smp3-proxy-windows-amd64.exe' \
++    -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256
++  sha256sum -c MANIFEST.sha256
++)
++
++# Explicit cleanliness assertions.
++if find "$STAGE" -name .git -o -name .work -o -name __pycache__ | grep -q .; then
++  echo 'release staging contains forbidden metadata/cache' >&2
++  exit 1
++fi
++
++rm -f "$OUT_ZIP"
++(
++  cd "$STAGE_ROOT"
++  zip -q -r "$OUT_ZIP" "$NAME"
++)
++sha256sum "$OUT_ZIP" > "$OUT_ZIP.sha256"
++echo "[+] release: $OUT_ZIP"
++echo "[+] sha256: $OUT_ZIP.sha256"
+Binary files alpha2.2/scripts/__pycache__/apply_source.cpython-313.pyc and alpha2.3/scripts/__pycache__/apply_source.cpython-313.pyc differ
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/scripts/apply_source.py alpha2.3/scripts/apply_source.py
+--- alpha2.2/scripts/apply_source.py	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/scripts/apply_source.py	2026-08-27 11:11:48.000000000 +0000
+@@ -1,44 +1,44 @@
+-#!/usr/bin/env python3
+-from pathlib import Path
+-import shutil, sys
+-
+-root = Path(sys.argv[1]).resolve()
+-payload = Path(__file__).resolve().parents[1] / 'src'
+-
+-def edit(path, fn):
+-    p=root/path; s=p.read_text(); n=fn(s)
+-    if n==s: print(f'[=] {path}: already patched or no change')
+-    else: p.write_text(n); print(f'[+] patched {path}')
+-
+-def constant(s):
+-    if 'TypeMultipath' not in s:
+-        if '\tTypeBridge             = "bridge"\n' in s:
+-            s=s.replace('\tTypeBridge             = "bridge"\n','\tTypeBridge             = "bridge"\n\tTypeMultipath          = "multipath"\n',1)
+-        else:
+-            s=s.replace('\tTypeDirect             = "direct"\n','\tTypeDirect             = "direct"\n\tTypeMultipath          = "multipath"\n',1)
+-    if 'case TypeMultipath:' not in s:
+-        marker='\tcase TypeBridge:\n\t\treturn "Bridge"\n'
+-        if marker in s: s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
+-        else:
+-            marker='\tcase TypeDirect:\n\t\treturn "Direct"\n'
+-            s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
+-    return s
+-
+-def registry(s):
+-    if 'protocol/multipath' not in s:
+-        s=s.replace('\t"github.com/sagernet/sing-box/protocol/mixed"\n','\t"github.com/sagernet/sing-box/protocol/mixed"\n\t"github.com/sagernet/sing-box/protocol/multipath"\n',1)
+-    if 'multipath.RegisterInbound(registry)' not in s:
+-        s=s.replace('\tdirect.RegisterInbound(registry)\n','\tdirect.RegisterInbound(registry)\n\tmultipath.RegisterInbound(registry)\n',1)
+-    if 'multipath.RegisterOutbound(registry)' not in s:
+-        marker='\tbridge.RegisterOutbound(registry)\n'
+-        if marker in s: s=s.replace(marker, marker+'\tmultipath.RegisterOutbound(registry)\n',1)
+-        else: s=s.replace('\tdirect.RegisterOutbound(registry)\n','\tdirect.RegisterOutbound(registry)\n\tmultipath.RegisterOutbound(registry)\n',1)
+-    return s
+-
+-edit(Path('constant/proxy.go'), constant)
+-edit(Path('include/registry.go'), registry)
+-(root/'option').mkdir(exist_ok=True)
+-(root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+-shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+-for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.2 source installed')
++#!/usr/bin/env python3
++from pathlib import Path
++import shutil, sys
++
++root = Path(sys.argv[1]).resolve()
++payload = Path(__file__).resolve().parents[1] / 'src'
++
++def edit(path, fn):
++    p=root/path; s=p.read_text(); n=fn(s)
++    if n==s: print(f'[=] {path}: already patched or no change')
++    else: p.write_text(n); print(f'[+] patched {path}')
++
++def constant(s):
++    if 'TypeMultipath' not in s:
++        if '\tTypeBridge             = "bridge"\n' in s:
++            s=s.replace('\tTypeBridge             = "bridge"\n','\tTypeBridge             = "bridge"\n\tTypeMultipath          = "multipath"\n',1)
++        else:
++            s=s.replace('\tTypeDirect             = "direct"\n','\tTypeDirect             = "direct"\n\tTypeMultipath          = "multipath"\n',1)
++    if 'case TypeMultipath:' not in s:
++        marker='\tcase TypeBridge:\n\t\treturn "Bridge"\n'
++        if marker in s: s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
++        else:
++            marker='\tcase TypeDirect:\n\t\treturn "Direct"\n'
++            s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
++    return s
++
++def registry(s):
++    if 'protocol/multipath' not in s:
++        s=s.replace('\t"github.com/sagernet/sing-box/protocol/mixed"\n','\t"github.com/sagernet/sing-box/protocol/mixed"\n\t"github.com/sagernet/sing-box/protocol/multipath"\n',1)
++    if 'multipath.RegisterInbound(registry)' not in s:
++        s=s.replace('\tdirect.RegisterInbound(registry)\n','\tdirect.RegisterInbound(registry)\n\tmultipath.RegisterInbound(registry)\n',1)
++    if 'multipath.RegisterOutbound(registry)' not in s:
++        marker='\tbridge.RegisterOutbound(registry)\n'
++        if marker in s: s=s.replace(marker, marker+'\tmultipath.RegisterOutbound(registry)\n',1)
++        else: s=s.replace('\tdirect.RegisterOutbound(registry)\n','\tdirect.RegisterOutbound(registry)\n\tmultipath.RegisterOutbound(registry)\n',1)
++    return s
++
++edit(Path('constant/proxy.go'), constant)
++edit(Path('include/registry.go'), registry)
++(root/'option').mkdir(exist_ok=True)
++(root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
++shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
++for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
++print('[+] SMP3 multipath alpha2.3 source installed')
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/scripts/gen-secrets.sh alpha2.3/scripts/gen-secrets.sh
+--- alpha2.2/scripts/gen-secrets.sh	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/scripts/gen-secrets.sh	2026-08-27 10:25:14.000000000 +0000
+@@ -1,5 +1,5 @@
+-#!/usr/bin/env bash
+-set -euo pipefail
+-command -v openssl >/dev/null || { echo 'openssl is required'; exit 1; }
+-echo "SMP3_PASSWORD=$(openssl rand -hex 32)"
+-echo "PUBLIC_SNELL_PSK=$(openssl rand -base64 24 | tr -d '\n')"
++#!/usr/bin/env bash
++set -euo pipefail
++command -v openssl >/dev/null || { echo 'openssl is required'; exit 1; }
++echo "SMP3_PASSWORD=$(openssl rand -hex 32)"
++echo "PUBLIC_SNELL_PSK=$(openssl rand -base64 24 | tr -d '\n')"
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/option/multipath.go alpha2.3/src/option/multipath.go
+--- alpha2.2/src/option/multipath.go	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/src/option/multipath.go	2026-08-27 14:28:36.000000000 +0000
+@@ -7,6 +7,31 @@
+ 	ServerPort uint16 `json:"server_port"`
+ }
+ 
++// MultipathAdaptiveOptions controls the optional logical-stream health
++// controller for the public leg. It deliberately lives inside the multipath
++// outbound rather than being a generic sing-box outbound so it can observe
++// SMP3 sequence, ACK, reorder, and outstanding state.
++type MultipathAdaptiveOptions struct {
++	Enabled                 bool               `json:"enabled,omitempty"`
++	EvaluationInterval      badoption.Duration `json:"evaluation_interval,omitempty"`
++	Warmup                  badoption.Duration `json:"warmup,omitempty"`
++	SuspectWindow           badoption.Duration `json:"suspect_window,omitempty"`
++	HardFailureThreshold    uint32             `json:"hard_failure_threshold,omitempty"`
++	HardFailureWindow       badoption.Duration `json:"hard_failure_window,omitempty"`
++	Cooldown                badoption.Duration `json:"cooldown,omitempty"`
++	MaxCooldown             badoption.Duration `json:"max_cooldown,omitempty"`
++	RecoveryStableWindow    badoption.Duration `json:"recovery_stable_window,omitempty"`
++	MinTxOutstandingFrames  uint32             `json:"min_tx_outstanding_frames,omitempty"`
++	TxAckStall              badoption.Duration `json:"tx_ack_stall,omitempty"`
++	MinRxReorderFrames      uint32             `json:"min_rx_reorder_frames,omitempty"`
++	RxGapStall              badoption.Duration `json:"rx_gap_stall,omitempty"`
++	GoodputDegradeRatio     float64            `json:"goodput_degrade_ratio,omitempty"`
++	MinCanaryUsefulBytes    uint64             `json:"min_canary_useful_bytes,omitempty"`
++	MinCanaryActiveWindows  uint32             `json:"min_canary_active_windows,omitempty"`
++	InitialFailureThreshold uint32             `json:"initial_failure_threshold,omitempty"`
++	InitialFailureWindow    badoption.Duration `json:"initial_failure_window,omitempty"`
++}
++
+ // MultipathOutboundOptions combines exactly two existing reliable outbounds
+ // into one logical, ordered TCP byte stream. UDP is intentionally not
+ // aggregated and is delegated to UDPOutbound (or Preferred / first child).
+@@ -20,6 +45,8 @@
+ 	Server                  string                     `json:"server,omitempty"`
+ 	ServerPort              uint16                     `json:"server_port,omitempty"`
+ 	Password                string                     `json:"password"`
++	Leg1Fallback            string                     `json:"leg1_fallback,omitempty" reference:"outbound"`
++	Leg1Adaptive            *MultipathAdaptiveOptions  `json:"leg1_adaptive,omitempty"`
+ 	ActivationThresholdMbps uint32                     `json:"activation_threshold_mbps,omitempty"`
+ 	ActivationWindow        badoption.Duration         `json:"activation_window,omitempty"`
+ 	ChunkSize               uint32                     `json:"chunk_size,omitempty"`
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/adaptive.go alpha2.3/src/protocol/multipath/adaptive.go
+--- alpha2.2/src/protocol/multipath/adaptive.go	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/src/protocol/multipath/adaptive.go	2026-08-27 07:14:01.934678784 +0000
+@@ -0,0 +1,790 @@
++package multipath
++
++import (
++	"sync"
++	"time"
++)
++
++type leg1Carrier uint8
++
++const (
++	carrierHy2 leg1Carrier = iota
++	carrierSnell
++)
++
++func (c leg1Carrier) String() string {
++	if c == carrierSnell {
++		return "snell"
++	}
++	return "hysteria2"
++}
++
++type adaptiveState uint8
++
++const (
++	adaptiveHealthy adaptiveState = iota
++	adaptiveSuspect
++	adaptiveFallback
++)
++
++func (s adaptiveState) String() string {
++	switch s {
++	case adaptiveSuspect:
++		return "suspect"
++	case adaptiveFallback:
++		return "fallback"
++	default:
++		return "healthy"
++	}
++}
++
++type adaptiveSettings struct {
++	EvaluationInterval      time.Duration
++	Warmup                  time.Duration
++	SuspectWindow           time.Duration
++	HardFailureThreshold    uint32
++	HardFailureWindow       time.Duration
++	Cooldown                time.Duration
++	MaxCooldown             time.Duration
++	RecoveryStableWindow    time.Duration
++	MinTxOutstanding        int
++	TxAckStall              time.Duration
++	MinRxReorder            int
++	RxGapStall              time.Duration
++	GoodputDegradeRatio     float64
++	MinCanaryUsefulBytes    uint64
++	MinCanaryActiveWindows  int
++	InitialFailureThreshold uint32
++	InitialFailureWindow    time.Duration
++}
++
++func defaultAdaptiveSettings() adaptiveSettings {
++	return adaptiveSettings{
++		EvaluationInterval:      time.Second,
++		Warmup:                  5 * time.Second,
++		SuspectWindow:           8 * time.Second,
++		HardFailureThreshold:    2,
++		HardFailureWindow:       15 * time.Second,
++		Cooldown:                90 * time.Second,
++		MaxCooldown:             5 * time.Minute,
++		RecoveryStableWindow:    20 * time.Second,
++		MinTxOutstanding:        64,
++		TxAckStall:              2 * time.Second,
++		MinRxReorder:            64,
++		RxGapStall:              1500 * time.Millisecond,
++		GoodputDegradeRatio:     0.40,
++		MinCanaryUsefulBytes:    1 << 20,
++		MinCanaryActiveWindows:  3,
++		InitialFailureThreshold: 3,
++		InitialFailureWindow:    30 * time.Second,
++	}
++}
++
++type adaptiveDecision struct {
++	State                adaptiveState
++	StateChanged         bool
++	Reason               string
++	Fallback             bool
++	Recovered            bool
++	Demand               bool
++	RxPressure           bool
++	TxPressure           bool
++	RxLogicalGoodputBPS  float64
++	TxLogicalGoodputBPS  float64
++	RxBaselineGoodputBPS float64
++	TxBaselineGoodputBPS float64
++	Leg1RxGoodputBPS     float64
++	Leg1TxGoodputBPS     float64
++	Leg1RxBaselineBPS    float64
++	Leg1TxBaselineBPS    float64
++	Leg1RxUsefulBytes    uint64
++	Leg1TxUsefulBytes    uint64
++	Leg1Contribution     float64
++	SuspectFor           time.Duration
++}
++
++type adaptiveController struct {
++	settings adaptiveSettings
++	state    adaptiveState
++	readyAt  time.Time
++
++	initialized            bool
++	lastSampleAt           time.Time
++	lastRxDelivered        uint64
++	lastTxAckedUsefulByLeg [2]uint64
++	lastRxUniqueByLeg      [2]uint64
++	rxBaselineGoodputBPS   float64
++	txBaselineGoodputBPS   float64
++	leg1RxBaselineBPS      float64
++	leg1TxBaselineBPS      float64
++	suspectSince           time.Time
++}
++
++type adaptiveSelection struct {
++	carrier   leg1Carrier
++	probation bool
++}
++
++type adaptiveConn struct {
++	mu       sync.Mutex
++	enabled  bool
++	settings adaptiveSettings
++	global   *hy2GlobalHealth
++	core     *mpCore
++
++	selected  bool
++	carrier   leg1Carrier
++	probation bool
++	state     adaptiveState
++	readyAt   time.Time
++	ctrl      *adaptiveController
++	running   bool
++
++	hy2FailureTimes     []time.Time
++	hy2Established      bool
++	healthyActiveFrom   time.Time
++	recoveryReported    bool
++	activeSuccessSeen   bool
++	canaryUsefulBytes   uint64
++	canaryActiveWindows int
++	lastCanaryUsefulAt  time.Time
++	activeUsefulBytes   uint64
++	activeUsefulWindows int
++	lastActiveUsefulAt  time.Time
++
++	onSelected         func(leg1Carrier, bool)
++	onHealth           func(adaptiveDecision, coreStats)
++	onFallback         func(reason string, cooldown bool, probation bool)
++	onRecovery         func()
++	onActiveSuccess    func()
++	onProbationRelease func()
++}
++
++func newAdaptiveConn(enabled bool, settings adaptiveSettings, global *hy2GlobalHealth, core *mpCore) *adaptiveConn {
++	return &adaptiveConn{
++		enabled:  enabled,
++		settings: settings,
++		global:   global,
++		core:     core,
++		state:    adaptiveHealthy,
++	}
++}
++
++func (s *adaptiveConn) carrierForLeg1(now time.Time) leg1Carrier {
++	s.mu.Lock()
++	if s.selected {
++		carrier := s.carrier
++		s.mu.Unlock()
++		return carrier
++	}
++	selection := adaptiveSelection{carrier: carrierHy2}
++	if s.enabled {
++		selection = s.global.selectCarrier(now)
++	}
++	s.carrier = selection.carrier
++	s.probation = selection.probation
++	s.selected = true
++	onSelected := s.onSelected
++	s.mu.Unlock()
++	if onSelected != nil && s.enabled {
++		onSelected(selection.carrier, selection.probation)
++	}
++	return selection.carrier
++}
++
++func (s *adaptiveConn) currentCarrier() leg1Carrier {
++	s.mu.Lock()
++	carrier := s.carrier
++	s.mu.Unlock()
++	return carrier
++}
++
++func (s *adaptiveConn) hy2WasEstablished() bool {
++	s.mu.Lock()
++	established := s.hy2Established
++	s.mu.Unlock()
++	return established
++}
++
++func ackProgressAge(stats coreStats) time.Duration {
++	if stats.LastAckProgress.IsZero() {
++		return stats.OldestOutstandingAge
++	}
++	age := time.Since(stats.LastAckProgress)
++	if age < 0 {
++		return 0
++	}
++	return age
++}
++
++func (s *adaptiveConn) markLegReady() {
++	now := time.Now()
++	s.mu.Lock()
++	s.hy2Established = s.carrier == carrierHy2
++	if !s.enabled || s.carrier != carrierHy2 || s.ctrl != nil {
++		s.mu.Unlock()
++		return
++	}
++	s.readyAt = now
++	s.healthyActiveFrom = time.Time{}
++	s.recoveryReported = false
++	s.activeSuccessSeen = false
++	s.canaryUsefulBytes = 0
++	s.canaryActiveWindows = 0
++	s.lastCanaryUsefulAt = time.Time{}
++	s.activeUsefulBytes = 0
++	s.activeUsefulWindows = 0
++	s.lastActiveUsefulAt = time.Time{}
++	s.ctrl = newAdaptiveController(s.settings, now)
++	if s.running {
++		s.mu.Unlock()
++		return
++	}
++	s.running = true
++	core := s.core
++	s.mu.Unlock()
++	go s.healthLoop(core)
++}
++
++func (s *adaptiveConn) markHy2DialSucceeded() {
++	s.mu.Lock()
++	if s.enabled && s.carrier == carrierHy2 {
++		s.hy2Established = true
++	}
++	s.mu.Unlock()
++}
++
++func (s *adaptiveConn) recordCarrierFailure(established bool) bool {
++	s.mu.Lock()
++	if !s.enabled || s.carrier != carrierHy2 {
++		s.mu.Unlock()
++		return false
++	}
++	probation := s.probation
++	now := time.Now()
++	if !established || probation {
++		s.mu.Unlock()
++		if probation {
++			return s.switchToSnell("probation_carrier_failure", true)
++		}
++		if s.global != nil {
++			// The global manager owns the threshold transition. The callback only
++			// switches this logical connection to Snell and must not double the
++			// newly-created cooldown penalty.
++			s.global.noteInitialFailure(now, s.settings)
++		}
++		return s.switchToSnell("initial_carrier_failure", false)
++	}
++	cutoff := now.Add(-s.settings.HardFailureWindow)
++	kept := s.hy2FailureTimes[:0]
++	for _, failureAt := range s.hy2FailureTimes {
++		if !failureAt.Before(cutoff) {
++			kept = append(kept, failureAt)
++		}
++	}
++	s.hy2FailureTimes = append(kept, now)
++	count := len(s.hy2FailureTimes)
++	threshold := int(s.settings.HardFailureThreshold)
++	s.mu.Unlock()
++	if count >= threshold {
++		return s.switchToSnell("repeated_carrier_failure", true)
++	}
++	return false
++}
++
++func (s *adaptiveConn) switchToSnell(reason string, cooldown bool) bool {
++	s.mu.Lock()
++	if !s.enabled || s.carrier != carrierHy2 {
++		s.mu.Unlock()
++		return false
++	}
++	probation := s.probation
++	s.carrier = carrierSnell
++	s.probation = false
++	s.state = adaptiveFallback
++	s.ctrl = nil
++	s.healthyActiveFrom = time.Time{}
++	onFallback := s.onFallback
++	s.mu.Unlock()
++	if onFallback != nil {
++		onFallback(reason, cooldown, probation)
++	}
++	return true
++}
++
++// continuityGrace allows a couple of empty sampling windows without declaring
++// a healthy carrier inactive. Longer idle gaps must not count toward a
++// continuous recovery/active-success window.
++func (s *adaptiveConn) continuityGrace() time.Duration {
++	grace := 3 * s.settings.EvaluationInterval
++	if grace < 2*time.Second {
++		grace = 2 * time.Second
++	}
++	return grace
++}
++
++// observeCanary records one health window for a probation connection. It is
++// intentionally separate from dial/handshake success: recovery requires real
++// leg1 useful bytes, not merely logical demand carried by leg0. Idle gaps longer
++// than continuityGrace reset the stable window so wall-clock idle time cannot
++// make a weak/unused Hy2 canary look recovered.
++func (s *adaptiveConn) observeCanary(now time.Time, decision adaptiveDecision) bool {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if !s.probation || s.recoveryReported {
++		return false
++	}
++	useful := decision.Leg1RxUsefulBytes + decision.Leg1TxUsefulBytes
++	healthy := decision.State == adaptiveHealthy && !decision.RxPressure && !decision.TxPressure
++	if healthy && useful > 0 {
++		if !s.lastCanaryUsefulAt.IsZero() && now.Sub(s.lastCanaryUsefulAt) > s.continuityGrace() {
++			s.healthyActiveFrom = time.Time{}
++			s.canaryUsefulBytes = 0
++			s.canaryActiveWindows = 0
++		}
++		if s.healthyActiveFrom.IsZero() {
++			s.healthyActiveFrom = now
++		}
++		s.lastCanaryUsefulAt = now
++		s.canaryUsefulBytes += useful
++		s.canaryActiveWindows++
++	} else if !healthy {
++		s.healthyActiveFrom = time.Time{}
++		s.lastCanaryUsefulAt = time.Time{}
++		s.canaryUsefulBytes = 0
++		s.canaryActiveWindows = 0
++	} else if !s.lastCanaryUsefulAt.IsZero() && now.Sub(s.lastCanaryUsefulAt) > s.continuityGrace() {
++		s.healthyActiveFrom = time.Time{}
++		s.lastCanaryUsefulAt = time.Time{}
++		s.canaryUsefulBytes = 0
++		s.canaryActiveWindows = 0
++	}
++	if !s.healthyActiveFrom.IsZero() &&
++		now.Sub(s.healthyActiveFrom) >= s.settings.RecoveryStableWindow &&
++		s.canaryUsefulBytes >= s.settings.MinCanaryUsefulBytes &&
++		s.canaryActiveWindows >= s.settings.MinCanaryActiveWindows {
++		s.recoveryReported = true
++		s.probation = false
++		return true
++	}
++	return false
++}
++
++func (s *adaptiveConn) observeActiveSuccess(now time.Time, readyAt time.Time, decision adaptiveDecision) bool {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.probation || s.activeSuccessSeen || s.carrier != carrierHy2 {
++		return false
++	}
++	useful := decision.Leg1RxUsefulBytes + decision.Leg1TxUsefulBytes
++	healthy := decision.State == adaptiveHealthy && !decision.RxPressure && !decision.TxPressure && now.Sub(readyAt) >= s.settings.Warmup
++	if healthy && useful > 0 {
++		if !s.lastActiveUsefulAt.IsZero() && now.Sub(s.lastActiveUsefulAt) > s.continuityGrace() {
++			s.healthyActiveFrom = time.Time{}
++			s.activeUsefulBytes = 0
++			s.activeUsefulWindows = 0
++		}
++		if s.healthyActiveFrom.IsZero() {
++			s.healthyActiveFrom = now
++		}
++		s.lastActiveUsefulAt = now
++		s.activeUsefulBytes += useful
++		s.activeUsefulWindows++
++	} else if !healthy {
++		s.healthyActiveFrom = time.Time{}
++		s.lastActiveUsefulAt = time.Time{}
++		s.activeUsefulBytes = 0
++		s.activeUsefulWindows = 0
++	} else if !s.lastActiveUsefulAt.IsZero() && now.Sub(s.lastActiveUsefulAt) > s.continuityGrace() {
++		s.healthyActiveFrom = time.Time{}
++		s.lastActiveUsefulAt = time.Time{}
++		s.activeUsefulBytes = 0
++		s.activeUsefulWindows = 0
++	}
++	if !s.healthyActiveFrom.IsZero() &&
++		now.Sub(s.healthyActiveFrom) >= s.settings.RecoveryStableWindow &&
++		s.activeUsefulBytes >= s.settings.MinCanaryUsefulBytes &&
++		s.activeUsefulWindows >= s.settings.MinCanaryActiveWindows {
++		s.activeSuccessSeen = true
++		return true
++	}
++	return false
++}
++
++func (s *adaptiveConn) finishProbation(core *mpCore) {
++	s.mu.Lock()
++	probation := s.probation && !s.recoveryReported && s.carrier == carrierHy2
++	onRelease := s.onProbationRelease
++	s.mu.Unlock()
++	if !probation || s.global == nil {
++		return
++	}
++	if core.closing.Load() || core.finalizing.Load() {
++		s.global.releaseProbation()
++		return
++	}
++	// An abnormal logical-core death before useful canary traffic is a carrier
++	// failure. Ordinary logical close is marked closing and only releases owner.
++	s.global.noteFallback(time.Now(), s.settings)
++	if onRelease != nil {
++		onRelease()
++	}
++}
++
++func (s *adaptiveConn) healthLoop(core *mpCore) {
++	interval := s.settings.EvaluationInterval
++	if interval <= 0 {
++		interval = time.Second
++	}
++	ticker := time.NewTicker(interval)
++	defer ticker.Stop()
++	defer s.finishProbation(core)
++	for {
++		select {
++		case <-core.Done():
++			return
++		case now := <-ticker.C:
++			if core.closing.Load() || core.finalizing.Load() {
++				return
++			}
++			stats := core.snapshotStats()
++			s.mu.Lock()
++			if s.carrier != carrierHy2 || s.ctrl == nil {
++				s.mu.Unlock()
++				return
++			}
++			decision := s.ctrl.observe(now, stats)
++			readyAt := s.readyAt
++			onHealth := s.onHealth
++			probation := s.probation
++			onRecovery := s.onRecovery
++			onActiveSuccess := s.onActiveSuccess
++			s.mu.Unlock()
++
++			canaryRecovered := false
++			if probation {
++				canaryRecovered = s.observeCanary(now, decision)
++			} else if !s.observeActiveSuccess(now, readyAt, decision) {
++				onActiveSuccess = nil
++			}
++			if canaryRecovered && onRecovery != nil {
++				onRecovery()
++			}
++			if onActiveSuccess != nil {
++				onActiveSuccess()
++			}
++			if onHealth != nil {
++				onHealth(decision, stats)
++			}
++			if decision.Fallback && !core.closing.Load() && !core.finalizing.Load() {
++				if s.switchToSnell(decision.Reason, true) {
++					return
++				}
++			}
++		}
++	}
++}
++
++type hy2HealthState uint8
++
++const (
++	hy2Available hy2HealthState = iota
++	hy2Cooldown
++	hy2Probation
++)
++
++type hy2GlobalHealth struct {
++	mu                sync.Mutex
++	state             hy2HealthState
++	cooldownUntil     time.Time
++	cooldownPenalty   time.Duration
++	probationInFlight bool
++	initialFailures   []time.Time
++}
++
++func (h *hy2GlobalHealth) selectCarrier(now time.Time) adaptiveSelection {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	if h.state == hy2Cooldown && now.Before(h.cooldownUntil) {
++		return adaptiveSelection{carrier: carrierSnell}
++	}
++	if h.state == hy2Cooldown {
++		h.state = hy2Probation
++	}
++	if h.state == hy2Probation {
++		if h.probationInFlight {
++			return adaptiveSelection{carrier: carrierSnell}
++		}
++		h.probationInFlight = true
++		return adaptiveSelection{carrier: carrierHy2, probation: true}
++	}
++	return adaptiveSelection{carrier: carrierHy2}
++}
++
++func (h *hy2GlobalHealth) noteInitialFailure(now time.Time, settings adaptiveSettings) bool {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	// Once one failure burst has already opened a cooldown, late failures from
++	// concurrently in-flight dials belong to the same event. They must not
++	// repeatedly double the backoff. A later probation failure is what advances
++	// the exponential penalty.
++	if h.state == hy2Cooldown {
++		return true
++	}
++	cutoff := now.Add(-settings.InitialFailureWindow)
++	kept := h.initialFailures[:0]
++	for _, failureAt := range h.initialFailures {
++		if !failureAt.Before(cutoff) {
++			kept = append(kept, failureAt)
++		}
++	}
++	h.initialFailures = append(kept, now)
++	if uint32(len(h.initialFailures)) < settings.InitialFailureThreshold {
++		return false
++	}
++	// Consume this burst before entering cooldown so residual in-flight failures
++	// cannot be counted again after the threshold transition.
++	h.initialFailures = nil
++	h.noteFallbackLocked(now, settings)
++	return true
++}
++
++func (h *hy2GlobalHealth) noteActiveSuccess() {
++	h.mu.Lock()
++	h.initialFailures = nil
++	h.mu.Unlock()
++}
++
++func (h *hy2GlobalHealth) noteFallback(now time.Time, settings adaptiveSettings) time.Duration {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	return h.noteFallbackLocked(now, settings)
++}
++
++func (h *hy2GlobalHealth) noteFallbackLocked(now time.Time, settings adaptiveSettings) time.Duration {
++	penalty := settings.Cooldown
++	if h.cooldownPenalty > 0 {
++		penalty = h.cooldownPenalty * 2
++	}
++	if penalty > settings.MaxCooldown {
++		penalty = settings.MaxCooldown
++	}
++	h.cooldownPenalty = penalty
++	h.cooldownUntil = now.Add(penalty)
++	h.state = hy2Cooldown
++	h.probationInFlight = false
++	return penalty
++}
++
++func (h *hy2GlobalHealth) noteRecovery() {
++	h.mu.Lock()
++	h.state = hy2Available
++	h.cooldownUntil = time.Time{}
++	h.cooldownPenalty = 0
++	h.probationInFlight = false
++	h.initialFailures = nil
++	h.mu.Unlock()
++}
++
++func (h *hy2GlobalHealth) releaseProbation() {
++	h.mu.Lock()
++	if h.state == hy2Probation {
++		h.probationInFlight = false
++	}
++	h.mu.Unlock()
++}
++
++func (h *hy2GlobalHealth) cooldownActive(now time.Time) bool {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	return h.state == hy2Cooldown && now.Before(h.cooldownUntil)
++}
++
++func newAdaptiveController(settings adaptiveSettings, readyAt time.Time) *adaptiveController {
++	return &adaptiveController{settings: settings, state: adaptiveHealthy, readyAt: readyAt}
++}
++
++func (c *adaptiveController) stateValue() adaptiveState { return c.state }
++func (c *adaptiveController) baseline() float64         { return c.rxBaselineGoodputBPS }
++
++func counterDelta(current, previous uint64) uint64 {
++	if current < previous {
++		return current
++	}
++	return current - previous
++}
++
++func updateGoodputBaseline(baseline, current float64) float64 {
++	if current <= 0 {
++		return baseline
++	}
++	if baseline == 0 {
++		return current
++	}
++	// Capacity rises quickly, but decays slowly. Baselines are only updated in
++	// HEALTHY with directional demand; SUSPECT and idle windows freeze them.
++	alpha := 0.03
++	if current > baseline {
++		alpha = 0.20
++	}
++	return baseline*(1-alpha) + current*alpha
++}
++
++func (c *adaptiveController) observe(now time.Time, stats coreStats) adaptiveDecision {
++	decision := adaptiveDecision{
++		State:                c.state,
++		RxBaselineGoodputBPS: c.rxBaselineGoodputBPS,
++		TxBaselineGoodputBPS: c.txBaselineGoodputBPS,
++		Leg1RxBaselineBPS:    c.leg1RxBaselineBPS,
++		Leg1TxBaselineBPS:    c.leg1TxBaselineBPS,
++	}
++	if !c.initialized {
++		c.initialized = true
++		c.lastSampleAt = now
++		c.lastRxDelivered = stats.RxDeliveredBytes
++		c.lastTxAckedUsefulByLeg = stats.TxAckedUsefulByLeg
++		c.lastRxUniqueByLeg = stats.RxUniqueBytesByLeg
++		return decision
++	}
++	elapsed := now.Sub(c.lastSampleAt)
++	if elapsed <= 0 {
++		return decision
++	}
++	c.lastSampleAt = now
++	rxDelta := counterDelta(stats.RxDeliveredBytes, c.lastRxDelivered)
++	txDeltaByLeg := [2]uint64{
++		counterDelta(stats.TxAckedUsefulByLeg[0], c.lastTxAckedUsefulByLeg[0]),
++		counterDelta(stats.TxAckedUsefulByLeg[1], c.lastTxAckedUsefulByLeg[1]),
++	}
++	rxDeltaByLeg := [2]uint64{
++		counterDelta(stats.RxUniqueBytesByLeg[0], c.lastRxUniqueByLeg[0]),
++		counterDelta(stats.RxUniqueBytesByLeg[1], c.lastRxUniqueByLeg[1]),
++	}
++	c.lastRxDelivered = stats.RxDeliveredBytes
++	c.lastTxAckedUsefulByLeg = stats.TxAckedUsefulByLeg
++	c.lastRxUniqueByLeg = stats.RxUniqueBytesByLeg
++	txDelta := txDeltaByLeg[0] + txDeltaByLeg[1]
++	rxGoodput := float64(rxDelta) / elapsed.Seconds()
++	txGoodput := float64(txDelta) / elapsed.Seconds()
++	leg1RxGoodput := float64(rxDeltaByLeg[1]) / elapsed.Seconds()
++	leg1TxGoodput := float64(txDeltaByLeg[1]) / elapsed.Seconds()
++	decision.RxLogicalGoodputBPS = rxGoodput
++	decision.TxLogicalGoodputBPS = txGoodput
++	decision.Leg1RxGoodputBPS = leg1RxGoodput
++	decision.Leg1TxGoodputBPS = leg1TxGoodput
++	decision.Leg1RxUsefulBytes = rxDeltaByLeg[1]
++	decision.Leg1TxUsefulBytes = txDeltaByLeg[1]
++	if rxDelta+txDelta > 0 {
++		decision.Leg1Contribution = float64(rxDeltaByLeg[1]+txDeltaByLeg[1]) / float64(rxDelta+txDelta)
++	}
++	rxDemand := rxDelta > 0 || stats.RxPendingFrames > 0
++	txDemand := txDelta > 0 || stats.OutstandingFrames > 0
++	decision.Demand = rxDemand || txDemand
++
++	if c.state == adaptiveFallback || now.Sub(c.readyAt) < c.settings.Warmup {
++		return decision
++	}
++
++	ackProgressAge := time.Duration(0)
++	if !stats.LastAckProgress.IsZero() {
++		ackProgressAge = now.Sub(stats.LastAckProgress)
++		if ackProgressAge < 0 {
++			ackProgressAge = 0
++		}
++	}
++	rxPressure := stats.RxPendingFrames >= c.settings.MinRxReorder && stats.RxGapAge >= c.settings.RxGapStall
++	txPressure := stats.OutstandingFrames >= c.settings.MinTxOutstanding &&
++		stats.OutstandingFramesByLeg[1] >= c.settings.MinTxOutstanding &&
++		ackProgressAge >= c.settings.TxAckStall &&
++		stats.OldestOutstandingAge >= c.settings.TxAckStall
++	decision.RxPressure = rxPressure
++	decision.TxPressure = txPressure
++
++	rxLogicalDegraded := c.rxBaselineGoodputBPS > 0 && rxGoodput < c.rxBaselineGoodputBPS*c.settings.GoodputDegradeRatio
++	txLogicalDegraded := c.txBaselineGoodputBPS > 0 && txGoodput < c.txBaselineGoodputBPS*c.settings.GoodputDegradeRatio
++	leg1RxDegraded := c.leg1RxBaselineBPS > 0 && leg1RxGoodput < c.leg1RxBaselineBPS*c.settings.GoodputDegradeRatio
++	leg1TxDegraded := c.leg1TxBaselineBPS > 0 && leg1TxGoodput < c.leg1TxBaselineBPS*c.settings.GoodputDegradeRatio
++
++	// A carrier can be unusable from its first active sample, before a healthy
++	// leg1 baseline exists. Do not let that state remain HEALTHY forever. The
++	// no-baseline path is intentionally conservative: it only recognizes a
++	// near-black-hole where logical useful progress is zero, leg1 contributes
++	// nothing, pressure is at least twice the ordinary threshold, and the same
++	// gap/ACK stall has already persisted for a long time. It still enters
++	// SUSPECT first and must survive SuspectWindow before fallback.
++	severeStall := 5 * time.Second
++	if candidate := 2 * c.settings.RxGapStall; candidate > severeStall {
++		severeStall = candidate
++	}
++	if candidate := 2 * c.settings.TxAckStall; candidate > severeStall {
++		severeStall = candidate
++	}
++	rxNoBaselineSevere := c.leg1RxBaselineBPS == 0 &&
++		rxGoodput == 0 && leg1RxGoodput == 0 &&
++		stats.RxPendingFrames >= 2*c.settings.MinRxReorder &&
++		stats.RxGapAge >= severeStall
++	txNoBaselineSevere := c.leg1TxBaselineBPS == 0 &&
++		txGoodput == 0 && leg1TxGoodput == 0 &&
++		stats.OutstandingFrames >= 2*c.settings.MinTxOutstanding &&
++		stats.OutstandingFramesByLeg[1] >= c.settings.MinTxOutstanding &&
++		ackProgressAge >= severeStall && stats.OldestOutstandingAge >= severeStall
++
++	rxImpact := rxDemand && rxPressure && ((leg1RxDegraded && rxLogicalDegraded) || rxNoBaselineSevere)
++	txImpact := txDemand && txPressure && ((leg1TxDegraded && txLogicalDegraded) || txNoBaselineSevere)
++	impact := rxImpact || txImpact
++	decision.Reason = pressureReason(rxImpact, txImpact)
++
++	if c.state == adaptiveHealthy {
++		if impact {
++			c.state = adaptiveSuspect
++			c.suspectSince = now
++			decision.State = c.state
++			decision.StateChanged = true
++			return decision
++		}
++		if rxDemand {
++			c.rxBaselineGoodputBPS = updateGoodputBaseline(c.rxBaselineGoodputBPS, rxGoodput)
++			if rxDeltaByLeg[1] > 0 {
++				c.leg1RxBaselineBPS = updateGoodputBaseline(c.leg1RxBaselineBPS, leg1RxGoodput)
++			}
++		}
++		if txDemand {
++			c.txBaselineGoodputBPS = updateGoodputBaseline(c.txBaselineGoodputBPS, txGoodput)
++			if txDeltaByLeg[1] > 0 {
++				c.leg1TxBaselineBPS = updateGoodputBaseline(c.leg1TxBaselineBPS, leg1TxGoodput)
++			}
++		}
++		decision.RxBaselineGoodputBPS = c.rxBaselineGoodputBPS
++		decision.TxBaselineGoodputBPS = c.txBaselineGoodputBPS
++		decision.Leg1RxBaselineBPS = c.leg1RxBaselineBPS
++		decision.Leg1TxBaselineBPS = c.leg1TxBaselineBPS
++		return decision
++	}
++
++	decision.SuspectFor = now.Sub(c.suspectSince)
++	if !impact {
++		c.state = adaptiveHealthy
++		c.suspectSince = time.Time{}
++		decision.State = c.state
++		decision.StateChanged = true
++		decision.Recovered = true
++		return decision
++	}
++	if decision.Demand && decision.SuspectFor >= c.settings.SuspectWindow {
++		c.state = adaptiveFallback
++		decision.State = c.state
++		decision.StateChanged = true
++		decision.Fallback = true
++	}
++	return decision
++}
++
++func pressureReason(rxPressure, txPressure bool) string {
++	if rxPressure {
++		return "rx_reorder"
++	}
++	if txPressure {
++		return "tx_ack_stall"
++	}
++	return ""
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/adaptive_test.go alpha2.3/src/protocol/multipath/adaptive_test.go
+--- alpha2.2/src/protocol/multipath/adaptive_test.go	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/src/protocol/multipath/adaptive_test.go	2026-08-27 07:14:39.934750454 +0000
+@@ -0,0 +1,595 @@
++package multipath
++
++import (
++	"bytes"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++const testGoodputUnit = uint64(10 * 1024 * 1024)
++
++func adaptiveTestStats(now time.Time, rx, tx, leg1Rx, leg1Tx uint64) coreStats {
++	return coreStats{
++		RxDeliveredBytes:   rx,
++		TxAckedUsefulByLeg: [2]uint64{tx - leg1Tx, leg1Tx},
++		RxUniqueBytesByLeg: [2]uint64{rx - leg1Rx, leg1Rx},
++		LastAckProgress:    now,
++	}
++}
++
++func adaptiveTestController() (*adaptiveController, time.Time) {
++	settings := defaultAdaptiveSettings()
++	settings.Warmup = 0
++	settings.SuspectWindow = 8 * time.Second
++	settings.MinRxReorder = 64
++	settings.RxGapStall = 1500 * time.Millisecond
++	settings.MinTxOutstanding = 64
++	settings.TxAckStall = 2 * time.Second
++	readyAt := time.Unix(1000, 0)
++	return newAdaptiveController(settings, readyAt), readyAt
++}
++
++func establishDirectionalBaseline(controller *adaptiveController, start time.Time) {
++	controller.observe(start, adaptiveTestStats(start, 0, 0, 0, 0))
++	controller.observe(start.Add(time.Second), adaptiveTestStats(start.Add(time.Second), testGoodputUnit, testGoodputUnit, testGoodputUnit, testGoodputUnit))
++	controller.observe(start.Add(2*time.Second), adaptiveTestStats(start.Add(2*time.Second), 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit))
++}
++
++func TestAdaptiveHealthyGoodputIgnoresShortReorder(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	stats := adaptiveTestStats(start.Add(3*time.Second), 3*testGoodputUnit, 3*testGoodputUnit, 3*testGoodputUnit, 3*testGoodputUnit)
++	stats.RxPendingFrames = 96
++	stats.RxGapAge = 2 * time.Second
++	decision := controller.observe(start.Add(3*time.Second), stats)
++	if decision.State != adaptiveHealthy || decision.Fallback {
++		t.Fatalf("short reorder changed carrier state: %+v", decision)
++	}
++}
++
++func TestAdaptiveRXBadTXGoodFallsBack(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 11 * time.Second} {
++		stats := adaptiveTestStats(start.Add(elapsed), 2*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit)
++		stats.RxPendingFrames = 256
++		stats.RxGapAge = 3 * time.Second
++		decision := controller.observe(start.Add(elapsed), stats)
++		if elapsed == 3*time.Second && decision.State != adaptiveSuspect {
++			t.Fatalf("RX degradation did not enter SUSPECT: %+v", decision)
++		}
++		if elapsed == 11*time.Second && (!decision.Fallback || decision.Reason != "rx_reorder") {
++			t.Fatalf("RX degradation did not fallback while TX stayed healthy: %+v", decision)
++		}
++	}
++}
++
++func TestAdaptiveTXBadRXGoodFallsBack(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 11 * time.Second} {
++		stats := adaptiveTestStats(start.Add(elapsed), uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit)
++		stats.OutstandingFrames = 96
++		stats.OutstandingFramesByLeg[1] = 96
++		stats.OutstandingBytes = 96 * 64 * 1024
++		stats.OldestOutstandingAge = 3 * time.Second
++		stats.LastAckProgress = start
++		decision := controller.observe(start.Add(elapsed), stats)
++		if elapsed == 3*time.Second && decision.State != adaptiveSuspect {
++			t.Fatalf("TX degradation did not enter SUSPECT: %+v", decision)
++		}
++		if elapsed == 11*time.Second && (!decision.Fallback || decision.Reason != "tx_ack_stall") {
++			t.Fatalf("TX degradation did not fallback while RX stayed healthy: %+v", decision)
++		}
++	}
++}
++
++func TestAdaptiveTransientRXIssueRecoversWithIdleTX(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	stalled := adaptiveTestStats(start.Add(3*time.Second), 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit)
++	stalled.RxPendingFrames = 128
++	stalled.RxGapAge = 2 * time.Second
++	if decision := controller.observe(start.Add(3*time.Second), stalled); decision.State != adaptiveSuspect {
++		t.Fatalf("expected RX SUSPECT, got %+v", decision)
++	}
++	recovered := adaptiveTestStats(start.Add(4*time.Second), 3*testGoodputUnit, 2*testGoodputUnit, 3*testGoodputUnit, 2*testGoodputUnit)
++	decision := controller.observe(start.Add(4*time.Second), recovered)
++	if !decision.Recovered || decision.State != adaptiveHealthy || decision.Fallback {
++		t.Fatalf("RX transient did not recover: %+v", decision)
++	}
++}
++
++func TestAdaptiveTransientTXIssueRecoversWithIdleRX(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	stalled := adaptiveTestStats(start.Add(3*time.Second), 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit)
++	stalled.OutstandingFrames = 96
++	stalled.OutstandingFramesByLeg[1] = 96
++	stalled.OldestOutstandingAge = 3 * time.Second
++	stalled.LastAckProgress = start
++	if decision := controller.observe(start.Add(3*time.Second), stalled); decision.State != adaptiveSuspect {
++		t.Fatalf("expected TX SUSPECT, got %+v", decision)
++	}
++	recovered := adaptiveTestStats(start.Add(4*time.Second), 2*testGoodputUnit, 3*testGoodputUnit, 2*testGoodputUnit, 3*testGoodputUnit)
++	decision := controller.observe(start.Add(4*time.Second), recovered)
++	if !decision.Recovered || decision.State != adaptiveHealthy || decision.Fallback {
++		t.Fatalf("TX transient did not recover: %+v", decision)
++	}
++}
++
++func TestAdaptiveLeg0PressureDoesNotBlameHealthyHy2(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 11 * time.Second, 40 * time.Second} {
++		stats := adaptiveTestStats(start.Add(elapsed), uint64(elapsed/time.Second)*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit)
++		stats.RxPendingFrames = 256
++		stats.RxGapAge = 3 * time.Second
++		decision := controller.observe(start.Add(elapsed), stats)
++		if decision.Fallback || decision.State != adaptiveHealthy {
++			t.Fatalf("leg0-only pressure blamed healthy Hy2 at %s: %+v", elapsed, decision)
++		}
++	}
++}
++
++func TestAdaptiveIdleDoesNotTrainBaselineOrFallback(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	rxBaseline := controller.rxBaselineGoodputBPS
++	txBaseline := controller.txBaselineGoodputBPS
++	decision := controller.observe(start.Add(30*time.Second), adaptiveTestStats(start.Add(30*time.Second), 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit, 2*testGoodputUnit))
++	if decision.Demand || decision.Fallback || decision.State != adaptiveHealthy {
++		t.Fatalf("idle connection changed state: %+v", decision)
++	}
++	if controller.rxBaselineGoodputBPS != rxBaseline || controller.txBaselineGoodputBPS != txBaseline {
++		t.Fatalf("idle window retrained directional baselines: rx=%f/%f tx=%f/%f", controller.rxBaselineGoodputBPS, rxBaseline, controller.txBaselineGoodputBPS, txBaseline)
++	}
++}
++
++func TestAdaptiveBaselineDecaysSlowlyAndFreezesInSuspect(t *testing.T) {
++	controller, start := adaptiveTestController()
++	controller.observe(start, adaptiveTestStats(start, 0, 0, 0, 0))
++	var total uint64
++	for i, rate := range []uint64{300, 220, 180, 130, 100} {
++		total += rate
++		stats := adaptiveTestStats(start.Add(time.Duration(i+1)*time.Second), total, 0, total, 0)
++		controller.observe(start.Add(time.Duration(i+1)*time.Second), stats)
++	}
++	baseline := controller.rxBaselineGoodputBPS
++	if baseline <= 150 {
++		t.Fatalf("RX baseline decayed too quickly: %f", baseline)
++	}
++	pressure := adaptiveTestStats(start.Add(6*time.Second), total, 0, total, 0)
++	pressure.RxPendingFrames = 256
++	pressure.RxGapAge = 3 * time.Second
++	controller.observe(start.Add(6*time.Second), pressure)
++	frozen := controller.rxBaselineGoodputBPS
++	pressure.RxGapAge = 4 * time.Second
++	controller.observe(start.Add(7*time.Second), pressure)
++	if controller.rxBaselineGoodputBPS != frozen {
++		t.Fatalf("RX baseline changed in SUSPECT: before=%f after=%f", frozen, controller.rxBaselineGoodputBPS)
++	}
++}
++
++func TestAdaptiveLongNormalTrafficAndShortGapsDoNotFallback(t *testing.T) {
++	controller, start := adaptiveTestController()
++	controller.observe(start, adaptiveTestStats(start, 0, 0, 0, 0))
++	var total uint64
++	for second := 1; second <= 60; second++ {
++		total += testGoodputUnit
++		stats := adaptiveTestStats(start.Add(time.Duration(second)*time.Second), total, total, total, total)
++		stats.RxPendingFrames = 8
++		stats.RxGapAge = 200 * time.Millisecond
++		decision := controller.observe(start.Add(time.Duration(second)*time.Second), stats)
++		if decision.Fallback || decision.State != adaptiveHealthy {
++			t.Fatalf("normal traffic fell back at second %d: %+v", second, decision)
++		}
++	}
++}
++
++func TestRxGapTrackerContinuousPendingStartsNewTimerForEachExpectedGap(t *testing.T) {
++	start := time.Unix(3000, 0)
++	tracker := rxGapTracker{}
++	pending := map[uint64]dataFrame{103: {seq: 103, receivedAt: start}}
++	tracker.refresh(100, pending, start)
++	if tracker.gapExpectedSeq != 100 || !tracker.since.Equal(start) {
++		t.Fatalf("initial gap=%+v", tracker)
++	}
++
++	// The pending map never becomes empty. Each repaired expected sequence still
++	// starts a fresh timer for the next unresolved gap.
++	for i, gapAge := range []time.Duration{200 * time.Millisecond, 150 * time.Millisecond, 300 * time.Millisecond} {
++		now := start.Add(30*time.Second + time.Duration(i)*time.Second)
++		expected := uint64(100 + i + 1)
++		pending = map[uint64]dataFrame{expected + 2: {seq: expected + 2, receivedAt: now}}
++		tracker.refresh(expected, pending, now)
++		if tracker.gapExpectedSeq != expected || !tracker.since.Equal(now) {
++			t.Fatalf("gap %d retained stale timer: %+v", i, tracker)
++		}
++		if now.Add(gapAge).Sub(tracker.since) != gapAge {
++			t.Fatalf("gap %d age calculation is not current-gap based", i)
++		}
++	}
++	pending = map[uint64]dataFrame{}
++	tracker.refresh(104, pending, start.Add(33*time.Second))
++	if !tracker.since.IsZero() {
++		t.Fatalf("continuous pending tracker did not clear: %+v", tracker)
++	}
++}
++
++func TestGlobalInitialHy2FailureLearningUsesWindow(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	settings.InitialFailureThreshold = 3
++	settings.InitialFailureWindow = 30 * time.Second
++	start := time.Unix(4000, 0)
++	health := hy2GlobalHealth{}
++	if health.noteInitialFailure(start, settings) || health.cooldownActive(start) {
++		t.Fatal("one initial failure entered global cooldown")
++	}
++	if health.noteInitialFailure(start.Add(10*time.Second), settings) || health.cooldownActive(start.Add(10*time.Second)) {
++		t.Fatal("below-threshold initial failures entered global cooldown")
++	}
++	if !health.noteInitialFailure(start.Add(20*time.Second), settings) {
++		t.Fatal("threshold initial failures did not request cooldown")
++	}
++	if !health.cooldownActive(start.Add(20 * time.Second)) {
++		t.Fatal("threshold initial failures did not enter cooldown")
++	}
++
++	expiring := hy2GlobalHealth{}
++	if expiring.noteInitialFailure(start, settings) {
++		t.Fatal("first expiring failure unexpectedly crossed threshold")
++	}
++	if expiring.noteInitialFailure(start.Add(31*time.Second), settings) {
++		t.Fatal("expired initial failure was counted")
++	}
++	if expiring.noteInitialFailure(start.Add(32*time.Second), settings) {
++		t.Fatal("two failures inside window unexpectedly crossed threshold")
++	}
++	expiring.noteActiveSuccess()
++	if expiring.noteInitialFailure(start.Add(33*time.Second), settings) {
++		t.Fatal("successful active period did not clear initial failure history")
++	}
++}
++
++func probationConnection(t *testing.T, start time.Time) (*adaptiveConn, *hy2GlobalHealth, adaptiveSettings) {
++	t.Helper()
++	settings := defaultAdaptiveSettings()
++	health := &hy2GlobalHealth{}
++	health.noteFallback(start, settings)
++	selection := health.selectCarrier(start.Add(settings.Cooldown))
++	if selection.carrier != carrierHy2 || !selection.probation {
++		t.Fatalf("expected Hy2 probation selection, got %+v", selection)
++	}
++	conn := newAdaptiveConn(true, settings, health, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++	conn.probation = true
++	conn.hy2Established = true
++	return conn, health, settings
++}
++
++func TestProbationRequiresHy2UsefulBytesAndActiveWindows(t *testing.T) {
++	start := time.Unix(5000, 0)
++	conn, health, settings := probationConnection(t, start)
++	for second := 0; second <= 20; second++ {
++		if conn.observeCanary(start.Add(time.Duration(second)*time.Second), adaptiveDecision{State: adaptiveHealthy, Demand: true}) {
++			t.Fatal("zero Hy2 useful bytes became successful probation")
++		}
++	}
++	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierSnell {
++		t.Fatalf("zero-useful canary released global owner unexpectedly: %+v", next)
++	}
++
++	conn, health, settings = probationConnection(t, start.Add(100*time.Second))
++	for second := 0; second <= 20; second++ {
++		useful := uint64(0)
++		if second < 3 {
++			useful = 256 * 1024
++		}
++		if conn.observeCanary(start.Add(100*time.Second+time.Duration(second)*time.Second), adaptiveDecision{
++			State:             adaptiveHealthy,
++			Demand:            useful > 0,
++			Leg1RxUsefulBytes: useful,
++		}) {
++			t.Fatal("below-minimum useful canary became successful probation")
++		}
++	}
++	if next := health.selectCarrier(start.Add(121 * time.Second)); next.carrier != carrierSnell {
++		t.Fatalf("below-minimum canary released global owner unexpectedly: %+v", next)
++	}
++}
++
++func TestProbationRecoveryRequiresRealHy2Traffic(t *testing.T) {
++	start := time.Unix(6000, 0)
++	conn, health, settings := probationConnection(t, start)
++	recovered := false
++	for second := 0; second <= 20; second++ {
++		recovered = conn.observeCanary(start.Add(time.Duration(second)*time.Second), adaptiveDecision{
++			State:             adaptiveHealthy,
++			Demand:            true,
++			Leg1RxUsefulBytes: 512 * 1024,
++		})
++		if recovered {
++			break
++		}
++	}
++	if !recovered || conn.probation {
++		t.Fatalf("real Hy2 useful traffic did not complete probation: recovered=%v probation=%v", recovered, conn.probation)
++	}
++	health.noteRecovery()
++	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierHy2 || next.probation {
++		t.Fatalf("successful canary did not restore available Hy2: %+v", next)
++	}
++}
++
++func TestAdaptiveSingleProbationCanaryWith100ConcurrentSessions(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	start := time.Unix(7000, 0)
++	health := hy2GlobalHealth{}
++	health.noteFallback(start, settings)
++	var wg sync.WaitGroup
++	results := make(chan adaptiveSelection, 100)
++	for i := 0; i < 100; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			results <- health.selectCarrier(start.Add(settings.Cooldown))
++		}()
++	}
++	wg.Wait()
++	close(results)
++	canaries := 0
++	for result := range results {
++		if result.carrier == carrierHy2 && result.probation {
++			canaries++
++		} else if result.carrier != carrierSnell {
++			t.Fatalf("non-owner selected unexpected carrier: %+v", result)
++		}
++	}
++	if canaries != 1 {
++		t.Fatalf("got %d concurrent Hy2 canaries, want exactly one", canaries)
++	}
++}
++
++func TestAdaptiveProbationFailureBacksOffAndNormalCloseReleasesOwner(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	start := time.Unix(8000, 0)
++	health := hy2GlobalHealth{}
++	health.noteFallback(start, settings)
++	canary := health.selectCarrier(start.Add(settings.Cooldown))
++	if canary.carrier != carrierHy2 || !canary.probation {
++		t.Fatalf("expected probation canary, got %+v", canary)
++	}
++	health.releaseProbation()
++	if next := health.selectCarrier(start.Add(settings.Cooldown)); next.carrier != carrierHy2 || !next.probation {
++		t.Fatalf("normal close did not release canary owner: %+v", next)
++	}
++	health.noteFallback(start.Add(settings.Cooldown), settings)
++	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierSnell {
++		t.Fatalf("probation failure did not re-enter cooldown: %+v", next)
++	}
++	if got := health.cooldownPenalty; got != 180*time.Second {
++		t.Fatalf("probation failure did not back off cooldown: %s", got)
++	}
++}
++
++func TestAdaptiveCarrierSwitchKeepsLogicalCoreAndPayload(t *testing.T) {
++	leftCore, leftApp := newCore(testCoreConfig())
++	rightCore, rightApp := newCore(testCoreConfig())
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a0, b0 := net.Pipe()
++	a1, b1 := net.Pipe()
++	if err := leftCore.addLeg(0, a0, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b0, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := leftCore.addLeg(1, a1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b1, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	settings := defaultAdaptiveSettings()
++	health := &hy2GlobalHealth{}
++	adaptive := newAdaptiveConn(true, settings, health, leftCore)
++	adaptive.selected = true
++	adaptive.carrier = carrierHy2
++	adaptive.hy2Established = true
++	var fallbacks atomic.Int32
++	adaptive.onFallback = func(string, bool, bool) {
++		fallbacks.Add(1)
++		if !leftCore.replaceLeg(1, errors.New("fake Hy2 degradation")) {
++			t.Error("left leg1 was not replaced")
++		}
++		_ = rightCore.replaceLeg(1, errors.New("fake Hy2 degradation"))
++	}
++	if !adaptive.switchToSnell("fake_hy2_degradation", true) {
++		t.Fatal("adaptive carrier did not switch")
++	}
++	if adaptive.currentCarrier() != carrierSnell || fallbacks.Load() != 1 {
++		t.Fatalf("unexpected fallback state: carrier=%s callbacks=%d", adaptive.currentCarrier(), fallbacks.Load())
++	}
++	if leftCore.hasLeg(1) || !leftCore.hasLeg(0) || rightCore.hasLeg(1) {
++		t.Fatal("carrier replacement did not preserve leg0 and remove old leg1")
++	}
++
++	newA1, newB1 := net.Pipe()
++	if err := leftCore.addLeg(1, newA1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, newB1, nil); err != nil {
++		t.Fatal(err)
++	}
++	payload := bytes.Repeat([]byte("same-session-payload-"), 4000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() {
++		_, err := io.ReadFull(rightApp, got)
++		readDone <- err
++	}()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("payload did not survive carrier switch")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload changed across carrier replacement")
++	}
++}
++
++func TestAdaptiveCooldownUsesBackoffAndRecovery(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	health := hy2GlobalHealth{}
++	start := time.Unix(9000, 0)
++	if got := health.noteFallback(start, settings); got != 90*time.Second {
++		t.Fatalf("first cooldown=%s, want 90s", got)
++	}
++	if got := health.selectCarrier(start.Add(time.Second)).carrier; got != carrierSnell {
++		t.Fatalf("cooldown selected %s, want snell", got)
++	}
++	if got := health.noteFallback(start.Add(90*time.Second), settings); got != 180*time.Second {
++		t.Fatalf("second cooldown=%s, want 180s", got)
++	}
++	health.noteRecovery()
++	if got := health.selectCarrier(start.Add(1000 * time.Second)).carrier; got != carrierHy2 {
++		t.Fatalf("recovered health selected %s, want hysteria2", got)
++	}
++}
++
++func TestAdaptiveNoBaselineSevereRXBlackholeFallsBack(t *testing.T) {
++	controller, start := adaptiveTestController()
++	controller.observe(start, adaptiveTestStats(start, 0, 0, 0, 0))
++
++	first := adaptiveTestStats(start.Add(time.Second), 0, 0, 0, 0)
++	first.RxPendingFrames = 2 * controller.settings.MinRxReorder
++	first.RxGapAge = 6 * time.Second
++	decision := controller.observe(start.Add(time.Second), first)
++	if decision.State != adaptiveSuspect || decision.Fallback {
++		t.Fatalf("no-baseline RX blackhole did not enter SUSPECT conservatively: %+v", decision)
++	}
++
++	later := first
++	later.RxGapAge = 15 * time.Second
++	decision = controller.observe(start.Add(10*time.Second), later)
++	if !decision.Fallback || decision.Reason != "rx_reorder" {
++		t.Fatalf("persistent no-baseline RX blackhole did not fallback: %+v", decision)
++	}
++}
++
++func TestAdaptiveNoBaselineSevereTXBlackholeFallsBack(t *testing.T) {
++	controller, start := adaptiveTestController()
++	controller.observe(start, adaptiveTestStats(start, 0, 0, 0, 0))
++
++	first := adaptiveTestStats(start.Add(6*time.Second), 0, 0, 0, 0)
++	first.OutstandingFrames = 2 * controller.settings.MinTxOutstanding
++	first.OutstandingFramesByLeg[1] = controller.settings.MinTxOutstanding
++	first.OldestOutstandingAge = 6 * time.Second
++	first.LastAckProgress = start
++	decision := controller.observe(start.Add(6*time.Second), first)
++	if decision.State != adaptiveSuspect || decision.Fallback {
++		t.Fatalf("no-baseline TX blackhole did not enter SUSPECT conservatively: %+v", decision)
++	}
++
++	later := first
++	later.OldestOutstandingAge = 15 * time.Second
++	decision = controller.observe(start.Add(15*time.Second), later)
++	if !decision.Fallback || decision.Reason != "tx_ack_stall" {
++		t.Fatalf("persistent no-baseline TX blackhole did not fallback: %+v", decision)
++	}
++}
++
++func TestProbationIdleTimeDoesNotCountTowardStableWindow(t *testing.T) {
++	start := time.Unix(10000, 0)
++	conn, _, settings := probationConnection(t, start)
++	if conn.observeCanary(start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
++		t.Fatal("canary recovered on first useful window")
++	}
++	if conn.observeCanary(start.Add(time.Second), adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
++		t.Fatal("canary recovered before stable window")
++	}
++	for second := 2; second <= 20; second++ {
++		if conn.observeCanary(start.Add(time.Duration(second)*time.Second), adaptiveDecision{State: adaptiveHealthy, Demand: true}) {
++			t.Fatalf("idle time counted toward stable canary window at second %d", second)
++		}
++	}
++	if conn.observeCanary(start.Add(21*time.Second), adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 1}) {
++		t.Fatal("long idle gap plus one byte incorrectly completed probation")
++	}
++	if conn.healthyActiveFrom.Before(start.Add(20 * time.Second)) {
++		t.Fatalf("stable window was not restarted after idle gap: %s", conn.healthyActiveFrom)
++	}
++	if conn.canaryUsefulBytes >= settings.MinCanaryUsefulBytes {
++		t.Fatalf("old canary bytes survived continuity break: %d", conn.canaryUsefulBytes)
++	}
++}
++
++func TestInitialFailureBurstOnlyAdvancesCooldownOnce(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	settings.InitialFailureThreshold = 3
++	settings.InitialFailureWindow = 30 * time.Second
++	start := time.Unix(11000, 0)
++	health := hy2GlobalHealth{}
++	for i := 0; i < 5; i++ {
++		health.noteInitialFailure(start.Add(time.Duration(i)*time.Millisecond), settings)
++	}
++	if health.state != hy2Cooldown {
++		t.Fatalf("failure burst did not enter cooldown: state=%v", health.state)
++	}
++	if health.cooldownPenalty != settings.Cooldown {
++		t.Fatalf("single concurrent failure burst multiplied cooldown: got=%s want=%s", health.cooldownPenalty, settings.Cooldown)
++	}
++	if len(health.initialFailures) != 0 {
++		t.Fatalf("consumed failure burst was retained: %d", len(health.initialFailures))
++	}
++}
++
++func TestActiveSuccessRequiresContinuousRealHy2Contribution(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	settings.Warmup = 0
++	settings.RecoveryStableWindow = 3 * time.Second
++	settings.MinCanaryUsefulBytes = 1 << 20
++	settings.MinCanaryActiveWindows = 3
++	start := time.Unix(12000, 0)
++	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++
++	for second := 0; second <= 5; second++ {
++		if conn.observeActiveSuccess(start.Add(time.Duration(second)*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Demand: true}) {
++			t.Fatalf("leg0-only logical demand cleared Hy2 failure history at second %d", second)
++		}
++	}
++	if conn.activeSuccessSeen {
++		t.Fatal("active success was recorded without Hy2 useful contribution")
++	}
++
++	if conn.observeActiveSuccess(start.Add(10*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
++		t.Fatal("active success recorded too early")
++	}
++	if conn.observeActiveSuccess(start.Add(11*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
++		t.Fatal("active success recorded before stable duration")
++	}
++	if conn.observeActiveSuccess(start.Add(12*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
++		t.Fatal("active success recorded before stable duration")
++	}
++	if !conn.observeActiveSuccess(start.Add(13*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
++		t.Fatal("continuous real Hy2 contribution did not record active success")
++	}
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/core.go alpha2.3/src/protocol/multipath/core.go
+--- alpha2.2/src/protocol/multipath/core.go	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/src/protocol/multipath/core.go	2026-08-27 14:32:36.000000000 +0000
+@@ -38,9 +38,57 @@
+ 	NotifyPeerOnActivate bool
+ }
+ 
++// coreStats is a point-in-time, logical-stream view of a core. Counters are
++// intentionally based on DATA accepted by SMP3, cumulative ACK retirement,
++// and bytes delivered to the application; carrier wire bytes are not used by
++// the adaptive controller.
++type coreStats struct {
++	TxSentBytesByLeg       [2]uint64
++	TxAckedUsefulByLeg     [2]uint64
++	TxRetransmitBytesByLeg [2]uint64
++	OutstandingFrames      int
++	OutstandingBytes       uint64
++	OutstandingFramesByLeg [2]int
++	LastAckProgress        time.Time
++	OldestOutstandingAge   time.Duration
++	OldestOutstandingByLeg [2]time.Duration
++
++	RxUniqueBytesByLeg [2]uint64
++	RxDeliveredBytes   uint64
++	RxPendingFrames    int
++	RxPendingBytes     uint64
++	RxGapAge           time.Duration
++
++	LegUp [2]bool
++}
++
+ type dataFrame struct {
+-	seq  uint64
+-	data []byte
++	seq        uint64
++	data       []byte
++	leg        uint8
++	receivedAt time.Time
++}
++
++// rxGapTracker describes the currently unresolved sequence gap. It is kept
++// separately from the pending-frame count because a later gap must not inherit
++// the age of an earlier, already-repaired gap. The timer starts when the
++// current expected sequence becomes unresolved, not when the oldest pending
++// frame originally arrived.
++type rxGapTracker struct {
++	gapExpectedSeq uint64
++	since          time.Time
++}
++
++func (g *rxGapTracker) refresh(expected uint64, pending map[uint64]dataFrame, now time.Time) {
++	if len(pending) == 0 {
++		g.gapExpectedSeq = expected
++		g.since = time.Time{}
++		return
++	}
++	if g.gapExpectedSeq != expected || g.since.IsZero() {
++		g.gapExpectedSeq = expected
++		g.since = now
++	}
+ }
+ 
+ type txRecord struct {
+@@ -50,11 +98,12 @@
+ 	// may still reference them after an ACK races with a queued retry.
+ 	data []byte
+ 
+-	lastSent   time.Time
+-	lastLeg    int16 // -1 until the first successful write
+-	inTransit  bool
+-	transitLeg uint8
+-	attempts   uint32
++	createdAt   time.Time
++	lastSentAt  time.Time
++	lastSentLeg int16 // -1 until the first successful write
++	inTransit   bool
++	transitLeg  uint8
++	sendCount   uint32
+ }
+ 
+ type mpLeg struct {
+@@ -118,6 +167,16 @@
+ 	ackForce  atomic.Bool
+ 	ackWakeCh chan struct{}
+ 
++	txSentBytes       [2]atomic.Uint64
++	txAckedUseful     [2]atomic.Uint64
++	txRetransmitBytes [2]atomic.Uint64
++	rxUniqueBytes     [2]atomic.Uint64
++	rxDeliveredBytes  atomic.Uint64
++	rxPendingFrames   atomic.Int64
++	rxPendingBytes    atomic.Uint64
++	rxGapSinceUnixNs  atomic.Int64
++	lastAckProgressNs atomic.Int64
++
+ 	// recoveryEpoch invalidates stale "no legs" recovery timers. A temporary
+ 	// recovery followed by a later outage must get a fresh RecoveryTimeout, not
+ 	// inherit the deadline from the earlier outage.
+@@ -209,10 +268,78 @@
+ 	return nil
+ }
+ 
++// replaceLeg intentionally tears down one carrier while keeping the logical
++// core, session ID, sequence numbers, ACK state, and outstanding records
++// intact. The normal handleLegFailure callback remains the single owner of
++// reconnect scheduling.
++func (c *mpCore) replaceLeg(id uint8, err error) bool {
++	leg := c.getLeg(id)
++	if leg == nil {
++		return false
++	}
++	c.handleLegFailure(leg, err)
++	return true
++}
++
+ func (c *mpCore) AppConn() net.Conn     { return c.appConn }
+ func (c *mpCore) Done() <-chan struct{} { return c.done }
+ 
++func (c *mpCore) snapshotStats() coreStats {
++	now := time.Now()
++	stats := coreStats{
++		TxSentBytesByLeg:       [2]uint64{c.txSentBytes[0].Load(), c.txSentBytes[1].Load()},
++		TxAckedUsefulByLeg:     [2]uint64{c.txAckedUseful[0].Load(), c.txAckedUseful[1].Load()},
++		TxRetransmitBytesByLeg: [2]uint64{c.txRetransmitBytes[0].Load(), c.txRetransmitBytes[1].Load()},
++		RxUniqueBytesByLeg:     [2]uint64{c.rxUniqueBytes[0].Load(), c.rxUniqueBytes[1].Load()},
++		RxDeliveredBytes:       c.rxDeliveredBytes.Load(),
++		RxPendingFrames:        int(c.rxPendingFrames.Load()),
++		RxPendingBytes:         c.rxPendingBytes.Load(),
++	}
++	if timestamp := c.lastAckProgressNs.Load(); timestamp != 0 {
++		stats.LastAckProgress = time.Unix(0, timestamp)
++	}
++	if gapSince := c.rxGapSinceUnixNs.Load(); gapSince != 0 {
++		stats.RxGapAge = now.Sub(time.Unix(0, gapSince))
++		if stats.RxGapAge < 0 {
++			stats.RxGapAge = 0
++		}
++	}
++
++	c.txMu.Lock()
++	for _, record := range c.outstanding {
++		stats.OutstandingFrames++
++		stats.OutstandingBytes += uint64(len(record.data))
++		age := now.Sub(record.createdAt)
++		if record.createdAt.IsZero() {
++			age = 0
++		}
++		if age > stats.OldestOutstandingAge {
++			stats.OldestOutstandingAge = age
++		}
++		if record.lastSentLeg >= 0 && record.lastSentLeg < int16(len(stats.OutstandingFramesByLeg)) {
++			legID := uint8(record.lastSentLeg)
++			stats.OutstandingFramesByLeg[legID]++
++			if age > stats.OldestOutstandingByLeg[legID] {
++				stats.OldestOutstandingByLeg[legID] = age
++			}
++		}
++	}
++	c.txMu.Unlock()
++
++	for id := range stats.LegUp {
++		stats.LegUp[id] = c.hasLeg(uint8(id))
++	}
++	if stats.LastAckProgress.IsZero() && stats.OutstandingFrames > 0 {
++		stats.LastAckProgress = now.Add(-stats.OldestOutstandingAge)
++	}
++	return stats
++}
++
+ func (c *mpCore) Close() error {
++	// Explicit core shutdown is not a carrier-health signal. Mark it before
++	// closing the done channel so adaptive probation cannot turn normal teardown
++	// into a global Hy2 cooldown.
++	c.closing.Store(true)
+ 	c.fail(io.EOF)
+ 	return nil
+ }
+@@ -320,9 +447,10 @@
+ 		if n > 0 {
+ 			c.ingressBytes.Add(uint64(n))
+ 			record := &txRecord{
+-				seq:     c.txSeq.Add(1) - 1,
+-				data:    buffer[:n],
+-				lastLeg: -1,
++				seq:         c.txSeq.Add(1) - 1,
++				data:        buffer[:n],
++				createdAt:   time.Now(),
++				lastSentLeg: -1,
+ 			}
+ 			c.txMu.Lock()
+ 			c.outstanding[record.seq] = record
+@@ -547,11 +675,15 @@
+ 
+ func (c *mpCore) markSent(record *txRecord, legID uint8) {
+ 	c.txMu.Lock()
+-	if current := c.outstanding[record.seq]; current == record && record.inTransit && record.transitLeg == legID {
++	if record.inTransit && record.transitLeg == legID {
+ 		record.inTransit = false
+-		record.lastSent = time.Now()
+-		record.lastLeg = int16(legID)
+-		record.attempts++
++		record.lastSentAt = time.Now()
++		record.lastSentLeg = int16(legID)
++		if record.sendCount > 0 {
++			c.txRetransmitBytes[legID].Add(uint64(len(record.data)))
++		}
++		c.txSentBytes[legID].Add(uint64(len(record.data)))
++		record.sendCount++
+ 	}
+ 	c.txMu.Unlock()
+ }
+@@ -671,7 +803,7 @@
+ 			return
+ 		case frameTypeData:
+ 			select {
+-			case c.incoming <- dataFrame{seq: frame.seq, data: frame.data}:
++			case c.incoming <- dataFrame{seq: frame.seq, data: frame.data, leg: leg.id, receivedAt: time.Now()}:
+ 			case <-c.done:
+ 				c.putBuffer(frame.data)
+ 				return
+@@ -806,15 +938,15 @@
+ 		if record.inTransit {
+ 			continue
+ 		}
+-		if record.lastLeg < 0 {
++		if record.lastSentLeg < 0 {
+ 			retry = append(retry, record)
+ 			avoids = append(avoids, -1)
+ 			continue
+ 		}
+-		lastID := uint8(record.lastLeg)
++		lastID := uint8(record.lastSentLeg)
+ 		if _, lastAlive := available[lastID]; !lastAlive {
+ 			retry = append(retry, record)
+-			avoids = append(avoids, record.lastLeg)
++			avoids = append(avoids, record.lastSentLeg)
+ 		}
+ 	}
+ 
+@@ -823,14 +955,14 @@
+ 	// duplicate storm. Timer-based black-hole recovery therefore retries only
+ 	// the oldest outstanding sequence; once it arrives, the cumulative ACK can
+ 	// retire all later frames that were already buffered by the peer.
+-	if head := c.outstanding[c.ackedNext]; head != nil && !head.inTransit && head.lastLeg >= 0 && !head.lastSent.IsZero() && now.Sub(head.lastSent) >= c.cfg.RetransmitTimeout {
++	if head := c.outstanding[c.ackedNext]; head != nil && !head.inTransit && head.lastSentLeg >= 0 && !head.lastSentAt.IsZero() && now.Sub(head.lastSentAt) >= c.cfg.RetransmitTimeout {
+ 		if len(legs) == 1 && !c.active.Load() {
+ 			// A TCP socket can stay ESTABLISHED while the path silently black-holes.
+ 			// Do not wait for bandwidth/queue activation forever: an overdue logical
+ 			// ACK is itself a failover signal and permits the lazy booster to dial.
+ 			activateForStall = true
+ 		} else if len(legs) > 1 {
+-			if _, lastAlive := available[uint8(head.lastLeg)]; lastAlive {
++			if _, lastAlive := available[uint8(head.lastSentLeg)]; lastAlive {
+ 				already := false
+ 				for _, record := range retry {
+ 					if record == head {
+@@ -840,7 +972,7 @@
+ 				}
+ 				if !already {
+ 					retry = append(retry, head)
+-					avoids = append(avoids, head.lastLeg)
++					avoids = append(avoids, head.lastSentLeg)
+ 				}
+ 			}
+ 		}
+@@ -878,13 +1010,27 @@
+ 	}
+ 	released := 0
+ 	for seq := c.ackedNext; seq < next; seq++ {
+-		if _, exists := c.outstanding[seq]; exists {
++		if record, exists := c.outstanding[seq]; exists {
++			legID := record.lastSentLeg
++			// A peer can ACK immediately after the frame write completes, before
++			// legWriteLoop gets to markSent. transitLeg still identifies the
++			// successful carrier in that narrow race, so useful TX goodput must not
++			// lose the frame's attribution.
++			if legID < 0 && record.inTransit {
++				legID = int16(record.transitLeg)
++			}
++			if legID >= 0 && legID < int16(len(c.txAckedUseful)) {
++				c.txAckedUseful[legID].Add(uint64(len(record.data)))
++			}
+ 			delete(c.outstanding, seq)
+ 			released++
+ 		}
+ 	}
+ 	c.ackedNext = next
+ 	c.txMu.Unlock()
++	if released > 0 {
++		c.lastAckProgressNs.Store(time.Now().UnixNano())
++	}
+ 	c.releaseInflight(released)
+ 	return nil
+ }
+@@ -998,6 +1144,7 @@
+ func (c *mpCore) rxLoop() {
+ 	expected := uint64(0)
+ 	pending := make(map[uint64]dataFrame)
++	var gap rxGapTracker
+ 	for {
+ 		select {
+ 		case <-c.done:
+@@ -1006,6 +1153,9 @@
+ 			}
+ 			return
+ 		case frame := <-c.incoming:
++			if frame.receivedAt.IsZero() {
++				frame.receivedAt = time.Now()
++			}
+ 			if frame.seq < expected {
+ 				c.putBuffer(frame.data)
+ 				c.forceAck()
+@@ -1022,8 +1172,22 @@
+ 					return
+ 				}
+ 				pending[frame.seq] = frame
++				if frame.leg < uint8(len(c.rxUniqueBytes)) {
++					c.rxUniqueBytes[frame.leg].Add(uint64(len(frame.data)))
++				}
++				c.rxPendingFrames.Add(1)
++				c.rxPendingBytes.Add(uint64(len(frame.data)))
++				gap.refresh(expected, pending, time.Now())
++				if gap.since.IsZero() {
++					c.rxGapSinceUnixNs.Store(0)
++				} else {
++					c.rxGapSinceUnixNs.Store(gap.since.UnixNano())
++				}
+ 				continue
+ 			}
++			if frame.leg < uint8(len(c.rxUniqueBytes)) {
++				c.rxUniqueBytes[frame.leg].Add(uint64(len(frame.data)))
++			}
+ 			for {
+ 				if err := writeAll(c.pipeConn, frame.data); err != nil {
+ 					c.putBuffer(frame.data)
+@@ -1035,13 +1199,22 @@
+ 					}
+ 					return
+ 				}
++				c.rxDeliveredBytes.Add(uint64(len(frame.data)))
+ 				c.putBuffer(frame.data)
+ 				expected++
+ 				next, exists := pending[expected]
+ 				if !exists {
++					gap.refresh(expected, pending, time.Now())
++					if gap.since.IsZero() {
++						c.rxGapSinceUnixNs.Store(0)
++					} else {
++						c.rxGapSinceUnixNs.Store(gap.since.UnixNano())
++					}
+ 					break
+ 				}
+ 				delete(pending, expected)
++				c.rxPendingFrames.Add(-1)
++				c.rxPendingBytes.Add(uint64(0) - uint64(len(next.data)))
+ 				frame = next
+ 			}
+ 			c.requestAck(expected)
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/core_test.go alpha2.3/src/protocol/multipath/core_test.go
+--- alpha2.2/src/protocol/multipath/core_test.go	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/src/protocol/multipath/core_test.go	2026-08-27 13:45:24.000000000 +0000
+@@ -95,7 +95,17 @@
+ }
+ 
+ func TestCoreLegFailureRetransmitsWithoutLogicalBreak(t *testing.T) {
+-	leftCore, leftApp := newCore(testCoreConfig())
++	cfg := testCoreConfig()
++	leg0Down := make(chan struct{}, 1)
++	cfg.OnLegDown = func(id uint8, _ error) {
++		if id == 0 {
++			select {
++			case leg0Down <- struct{}{}:
++			default:
++			}
++		}
++	}
++	leftCore, leftApp := newCore(cfg)
+ 	rightCore, rightApp := newCore(testCoreConfig())
+ 	defer leftCore.Close()
+ 	defer rightCore.Close()
+@@ -122,9 +132,15 @@
+ 		writeDone <- err
+ 	}()
+ 
+-	// Allow leg 0 to fail mid-frame, then add a completely new path with the
+-	// same leg id semantics as a secondary transport.
+-	time.Sleep(100 * time.Millisecond)
++	// Wait for the injected mid-frame failure instead of relying on a fixed
++	// scheduler sleep; this keeps the failover test reliable under -race.
++	select {
++	case <-leg0Down:
++	case <-time.After(5 * time.Second):
++		t.Fatal("faulty leg did not fail")
++	}
++	// Add a completely new path with the same leg id semantics as a secondary
++	// transport.
+ 	a1, b1 := net.Pipe()
+ 	if err := leftCore.addLeg(1, a1, nil); err != nil {
+ 		t.Fatal(err)
+@@ -138,7 +154,7 @@
+ 		if err != nil && !errors.Is(err, net.ErrClosed) {
+ 			t.Fatalf("logical write broke: %v", err)
+ 		}
+-	case <-time.After(5 * time.Second):
++	case <-time.After(15 * time.Second):
+ 		t.Fatal("logical write timeout")
+ 	}
+ 	select {
+@@ -146,7 +162,7 @@
+ 		if err != nil {
+ 			t.Fatalf("logical read broke: %v", err)
+ 		}
+-	case <-time.After(5 * time.Second):
++	case <-time.After(15 * time.Second):
+ 		t.Fatal("logical read timeout")
+ 	}
+ 	if !bytes.Equal(got, payload) {
+@@ -406,7 +422,7 @@
+ 	core, _ := newCore(cfg)
+ 	defer core.Close()
+ 
+-	record := &txRecord{seq: 0, data: []byte("pending"), lastLeg: 0}
++	record := &txRecord{seq: 0, data: []byte("pending"), lastSentLeg: 0}
+ 	core.txSeq.Store(1)
+ 	core.txMu.Lock()
+ 	core.outstanding[0] = record
+@@ -486,7 +502,7 @@
+ 	core.txSeq.Store(frames)
+ 	core.txMu.Lock()
+ 	for seq := uint64(0); seq < frames; seq++ {
+-		core.outstanding[seq] = &txRecord{seq: seq, data: []byte{byte(seq)}, lastLeg: 0}
++		core.outstanding[seq] = &txRecord{seq: seq, data: []byte{byte(seq)}, lastSentLeg: 0}
+ 	}
+ 	core.txMu.Unlock()
+ 
+@@ -570,3 +586,100 @@
+ 		t.Fatal("peer did not close promptly after logical CLOSE frame")
+ 	}
+ }
++
++func TestCoreSnapshotUsesLogicalBytesAndLegAttribution(t *testing.T) {
++	leftCore, leftApp := newCore(testCoreConfig())
++	rightCore, rightApp := newCore(testCoreConfig())
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a, b := net.Pipe()
++	if err := leftCore.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("logical-goodput-"), 512)
++	readDone := make(chan error, 1)
++	go func() {
++		_, err := io.CopyN(io.Discard, rightApp, int64(len(payload)))
++		readDone <- err
++	}()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	if err := <-readDone; err != nil {
++		t.Fatal(err)
++	}
++
++	deadline := time.Now().Add(time.Second)
++	for {
++		left := leftCore.snapshotStats()
++		right := rightCore.snapshotStats()
++		if left.TxAckedUsefulByLeg[0] == uint64(len(payload)) &&
++			right.RxUniqueBytesByLeg[0] == uint64(len(payload)) &&
++			right.RxDeliveredBytes == uint64(len(payload)) {
++			return
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("logical stats did not converge: left=%+v right=%+v", left, right)
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
++
++func TestCoreReplaceLegPreservesLogicalConnectionAndOtherLeg(t *testing.T) {
++	leftCore, _ := newCore(testCoreConfig())
++	rightCore, _ := newCore(testCoreConfig())
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a0, b0 := net.Pipe()
++	if err := leftCore.addLeg(0, a0, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b0, nil); err != nil {
++		t.Fatal(err)
++	}
++	a1, b1 := net.Pipe()
++	if err := leftCore.addLeg(1, a1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b1, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	if !leftCore.replaceLeg(1, errors.New("intentional carrier replacement")) {
++		t.Fatal("replaceLeg did not remove leg 1")
++	}
++	select {
++	case <-leftCore.Done():
++		t.Fatal("carrier replacement closed logical core")
++	default:
++	}
++	if !leftCore.hasLeg(0) || leftCore.hasLeg(1) {
++		t.Fatal("carrier replacement changed the wrong legs")
++	}
++	_ = b1.Close()
++	deadline := time.Now().Add(time.Second)
++	for rightCore.hasLeg(1) {
++		if time.Now().After(deadline) {
++			t.Fatal("peer did not release replaced leg")
++		}
++		time.Sleep(time.Millisecond)
++	}
++
++	// A replacement may rejoin with the same leg ID while leg 0 remains alive.
++	a1b, b1b := net.Pipe()
++	if err := leftCore.addLeg(1, a1b, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b1b, nil); err != nil {
++		t.Fatal(err)
++	}
++	if !leftCore.hasLeg(0) || !leftCore.hasLeg(1) {
++		t.Fatal("rejoined carrier did not restore both legs")
++	}
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/inbound.go alpha2.3/src/protocol/multipath/inbound.go
+--- alpha2.2/src/protocol/multipath/inbound.go	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/src/protocol/multipath/inbound.go	2026-08-27 10:25:14.000000000 +0000
+@@ -1,226 +1,226 @@
+-package multipath
+-
+-import (
+-	"context"
+-	"net"
+-	"sync"
+-	"time"
+-
+-	"github.com/sagernet/sing-box/adapter"
+-	"github.com/sagernet/sing-box/adapter/inbound"
+-	"github.com/sagernet/sing-box/common/listener"
+-	C "github.com/sagernet/sing-box/constant"
+-	"github.com/sagernet/sing-box/log"
+-	"github.com/sagernet/sing-box/option"
+-	E "github.com/sagernet/sing/common/exceptions"
+-	M "github.com/sagernet/sing/common/metadata"
+-	N "github.com/sagernet/sing/common/network"
+-)
+-
+-func RegisterInbound(registry *inbound.Registry) {
+-	inbound.Register[option.MultipathInboundOptions](registry, C.TypeMultipath, NewInbound)
+-}
+-
+-type serverSession struct {
+-	id          [16]byte
+-	destination M.Socksaddr
+-	core        *mpCore
+-	appConn     net.Conn
+-}
+-
+-type Inbound struct {
+-	inbound.Adapter
+-	ctx      context.Context
+-	router   adapter.ConnectionRouterEx
+-	logger   log.ContextLogger
+-	listener *listener.Listener
+-	cfg      coreConfig
+-	password string
+-	nonceMu  sync.Mutex
+-	nonces   map[[16]byte]time.Time
+-
+-	access   sync.Mutex
+-	sessions map[[16]byte]*serverSession
+-}
+-
+-func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MultipathInboundOptions) (adapter.Inbound, error) {
+-	if options.Password == "" {
+-		return nil, E.New("missing multipath password")
+-	}
+-	if len(options.BandwidthMbps) != 0 && len(options.BandwidthMbps) != 2 {
+-		return nil, E.New("multipath bandwidth_mbps must contain exactly 2 entries")
+-	}
+-	cfg, err := makeCoreConfig(
+-		options.ActivationThresholdMbps,
+-		time.Duration(options.ActivationWindow),
+-		int(options.ChunkSize),
+-		int(options.QueueFrames),
+-		options.BandwidthMbps,
+-		int(options.MaxReorderFrames),
+-		int(options.MaxInflightFrames),
+-		time.Duration(options.AckInterval),
+-		time.Duration(options.RetransmitTimeout),
+-		time.Duration(options.RecoveryTimeout),
+-	)
+-	if err != nil {
+-		return nil, err
+-	}
+-	cfg.NotifyPeerOnActivate = true
+-	i := &Inbound{
+-		Adapter:  inbound.NewAdapter(C.TypeMultipath, tag),
+-		ctx:      ctx,
+-		router:   router,
+-		logger:   logger,
+-		sessions: make(map[[16]byte]*serverSession),
+-		password: options.Password,
+-		nonces:   make(map[[16]byte]time.Time),
+-		cfg:      cfg,
+-	}
+-	i.listener = listener.New(listener.Options{
+-		Context:           ctx,
+-		Logger:            logger,
+-		Network:           []string{N.NetworkTCP},
+-		Listen:            options.ListenOptions,
+-		ConnectionHandler: i,
+-	})
+-	return i, nil
+-}
+-
+-func (i *Inbound) Start(stage adapter.StartStage) error {
+-	if stage != adapter.StartStateStart {
+-		return nil
+-	}
+-	return i.listener.Start()
+-}
+-
+-func (i *Inbound) Close() error {
+-	i.access.Lock()
+-	sessions := make([]*serverSession, 0, len(i.sessions))
+-	for _, session := range i.sessions {
+-		sessions = append(sessions, session)
+-	}
+-	i.sessions = make(map[[16]byte]*serverSession)
+-	i.access.Unlock()
+-	for _, session := range sessions {
+-		session.core.Close()
+-	}
+-	return i.listener.Close()
+-}
+-
+-func (i *Inbound) NewConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+-	hello, nonce, err := readHello(conn, i.password)
+-	_ = conn.SetReadDeadline(time.Time{})
+-	if err != nil {
+-		N.CloseOnHandshakeFailure(conn, onClose, E.Cause(err, "read multipath hello"))
+-		return
+-	}
+-	if !i.acceptNonce(nonce) {
+-		N.CloseOnHandshakeFailure(conn, onClose, E.New("replayed multipath hello"))
+-		return
+-	}
+-	if hello.LegID > 1 {
+-		N.CloseOnHandshakeFailure(conn, onClose, E.New("invalid multipath leg id: ", hello.LegID))
+-		return
+-	}
+-	destination := M.ParseSocksaddr(hello.Destination)
+-	if !destination.IsValid() || destination.Port == 0 {
+-		N.CloseOnHandshakeFailure(conn, onClose, E.New("invalid multipath destination: ", hello.Destination))
+-		return
+-	}
+-
+-	i.access.Lock()
+-	session := i.sessions[hello.Session]
+-	if session != nil {
+-		if session.destination.String() != destination.String() {
+-			i.access.Unlock()
+-			N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath session destination mismatch"))
+-			return
+-		}
+-		err = session.core.addLeg(hello.LegID, conn, onClose)
+-		i.access.Unlock()
+-		if err != nil {
+-			N.CloseOnHandshakeFailure(conn, onClose, err)
+-			return
+-		}
+-		i.logger.InfoContext(ctx, "multipath leg ", hello.LegID, " joined/rejoined session for ", destination)
+-		return
+-	}
+-
+-	// Only leg 0 may create a logical session. A delayed/replayed secondary leg
+-	// must never create a second routed connection after the original session
+-	// has already expired.
+-	if hello.LegID != 0 {
+-		i.access.Unlock()
+-		N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath secondary leg has no active session"))
+-		return
+-	}
+-
+-	cfg := i.cfg
+-	cfg.OnFutureAck = func(next, max, count uint64) {
+-		i.logger.WarnContext(ctx, "multipath server ignored future ACK for ", destination, ": next=", next, " tx_seq=", max, " count=", count)
+-	}
+-	cfg.OnActivate = func() {
+-		i.logger.InfoContext(ctx, "multipath server booster activated for ", destination)
+-	}
+-	cfg.OnLegDown = func(id uint8, legErr error) {
+-		i.logger.WarnContext(ctx, "multipath server leg ", id, " down for ", destination, ": ", legErr)
+-	}
+-	core, appConn := newCore(cfg)
+-	session = &serverSession{
+-		id:          hello.Session,
+-		destination: destination,
+-		core:        core,
+-		appConn:     appConn,
+-	}
+-	if err = core.addLeg(hello.LegID, conn, onClose); err != nil {
+-		i.access.Unlock()
+-		appConn.Close()
+-		N.CloseOnHandshakeFailure(conn, onClose, err)
+-		return
+-	}
+-	i.sessions[hello.Session] = session
+-	i.access.Unlock()
+-
+-	go func() {
+-		<-core.Done()
+-		i.removeSession(hello.Session, session)
+-	}()
+-
+-	metadata.Inbound = i.Tag()
+-	metadata.InboundType = i.Type()
+-	metadata.Destination = destination
+-	i.logger.InfoContext(ctx, "multipath session established to ", destination, " on leg ", hello.LegID)
+-	logicalOnClose := N.OnceClose(func(closeErr error) {
+-		// Ordinary routed EOF/close must not discard response bytes that have
+-		// already been accepted into SMP3 but are still awaiting cumulative ACKs.
+-		// The session remains registered until core.Done(), allowing any transport
+-		// repair needed during the graceful tail drain to rejoin the same core.
+-		core.startGracefulClose(closeErr)
+-	})
+-	i.router.RouteConnectionEx(ctx, appConn, metadata, logicalOnClose)
+-}
+-
+-func (i *Inbound) removeSession(id [16]byte, session *serverSession) {
+-	i.access.Lock()
+-	if current := i.sessions[id]; current == session {
+-		delete(i.sessions, id)
+-	}
+-	i.access.Unlock()
+-}
+-
+-func (i *Inbound) acceptNonce(nonce [16]byte) bool {
+-	now := time.Now()
+-	i.nonceMu.Lock()
+-	defer i.nonceMu.Unlock()
+-	for k, t := range i.nonces {
+-		if now.Sub(t) > 2*helloSkew {
+-			delete(i.nonces, k)
+-		}
+-	}
+-	if _, ok := i.nonces[nonce]; ok {
+-		return false
+-	}
+-	i.nonces[nonce] = now
+-	return true
+-}
++package multipath
++
++import (
++	"context"
++	"net"
++	"sync"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/adapter/inbound"
++	"github.com/sagernet/sing-box/common/listener"
++	C "github.com/sagernet/sing-box/constant"
++	"github.com/sagernet/sing-box/log"
++	"github.com/sagernet/sing-box/option"
++	E "github.com/sagernet/sing/common/exceptions"
++	M "github.com/sagernet/sing/common/metadata"
++	N "github.com/sagernet/sing/common/network"
++)
++
++func RegisterInbound(registry *inbound.Registry) {
++	inbound.Register[option.MultipathInboundOptions](registry, C.TypeMultipath, NewInbound)
++}
++
++type serverSession struct {
++	id          [16]byte
++	destination M.Socksaddr
++	core        *mpCore
++	appConn     net.Conn
++}
++
++type Inbound struct {
++	inbound.Adapter
++	ctx      context.Context
++	router   adapter.ConnectionRouterEx
++	logger   log.ContextLogger
++	listener *listener.Listener
++	cfg      coreConfig
++	password string
++	nonceMu  sync.Mutex
++	nonces   map[[16]byte]time.Time
++
++	access   sync.Mutex
++	sessions map[[16]byte]*serverSession
++}
++
++func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MultipathInboundOptions) (adapter.Inbound, error) {
++	if options.Password == "" {
++		return nil, E.New("missing multipath password")
++	}
++	if len(options.BandwidthMbps) != 0 && len(options.BandwidthMbps) != 2 {
++		return nil, E.New("multipath bandwidth_mbps must contain exactly 2 entries")
++	}
++	cfg, err := makeCoreConfig(
++		options.ActivationThresholdMbps,
++		time.Duration(options.ActivationWindow),
++		int(options.ChunkSize),
++		int(options.QueueFrames),
++		options.BandwidthMbps,
++		int(options.MaxReorderFrames),
++		int(options.MaxInflightFrames),
++		time.Duration(options.AckInterval),
++		time.Duration(options.RetransmitTimeout),
++		time.Duration(options.RecoveryTimeout),
++	)
++	if err != nil {
++		return nil, err
++	}
++	cfg.NotifyPeerOnActivate = true
++	i := &Inbound{
++		Adapter:  inbound.NewAdapter(C.TypeMultipath, tag),
++		ctx:      ctx,
++		router:   router,
++		logger:   logger,
++		sessions: make(map[[16]byte]*serverSession),
++		password: options.Password,
++		nonces:   make(map[[16]byte]time.Time),
++		cfg:      cfg,
++	}
++	i.listener = listener.New(listener.Options{
++		Context:           ctx,
++		Logger:            logger,
++		Network:           []string{N.NetworkTCP},
++		Listen:            options.ListenOptions,
++		ConnectionHandler: i,
++	})
++	return i, nil
++}
++
++func (i *Inbound) Start(stage adapter.StartStage) error {
++	if stage != adapter.StartStateStart {
++		return nil
++	}
++	return i.listener.Start()
++}
++
++func (i *Inbound) Close() error {
++	i.access.Lock()
++	sessions := make([]*serverSession, 0, len(i.sessions))
++	for _, session := range i.sessions {
++		sessions = append(sessions, session)
++	}
++	i.sessions = make(map[[16]byte]*serverSession)
++	i.access.Unlock()
++	for _, session := range sessions {
++		session.core.Close()
++	}
++	return i.listener.Close()
++}
++
++func (i *Inbound) NewConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
++	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
++	hello, nonce, err := readHello(conn, i.password)
++	_ = conn.SetReadDeadline(time.Time{})
++	if err != nil {
++		N.CloseOnHandshakeFailure(conn, onClose, E.Cause(err, "read multipath hello"))
++		return
++	}
++	if !i.acceptNonce(nonce) {
++		N.CloseOnHandshakeFailure(conn, onClose, E.New("replayed multipath hello"))
++		return
++	}
++	if hello.LegID > 1 {
++		N.CloseOnHandshakeFailure(conn, onClose, E.New("invalid multipath leg id: ", hello.LegID))
++		return
++	}
++	destination := M.ParseSocksaddr(hello.Destination)
++	if !destination.IsValid() || destination.Port == 0 {
++		N.CloseOnHandshakeFailure(conn, onClose, E.New("invalid multipath destination: ", hello.Destination))
++		return
++	}
++
++	i.access.Lock()
++	session := i.sessions[hello.Session]
++	if session != nil {
++		if session.destination.String() != destination.String() {
++			i.access.Unlock()
++			N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath session destination mismatch"))
++			return
++		}
++		err = session.core.addLeg(hello.LegID, conn, onClose)
++		i.access.Unlock()
++		if err != nil {
++			N.CloseOnHandshakeFailure(conn, onClose, err)
++			return
++		}
++		i.logger.InfoContext(ctx, "multipath leg ", hello.LegID, " joined/rejoined session for ", destination)
++		return
++	}
++
++	// Only leg 0 may create a logical session. A delayed/replayed secondary leg
++	// must never create a second routed connection after the original session
++	// has already expired.
++	if hello.LegID != 0 {
++		i.access.Unlock()
++		N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath secondary leg has no active session"))
++		return
++	}
++
++	cfg := i.cfg
++	cfg.OnFutureAck = func(next, max, count uint64) {
++		i.logger.WarnContext(ctx, "multipath server ignored future ACK for ", destination, ": next=", next, " tx_seq=", max, " count=", count)
++	}
++	cfg.OnActivate = func() {
++		i.logger.InfoContext(ctx, "multipath server booster activated for ", destination)
++	}
++	cfg.OnLegDown = func(id uint8, legErr error) {
++		i.logger.WarnContext(ctx, "multipath server leg ", id, " down for ", destination, ": ", legErr)
++	}
++	core, appConn := newCore(cfg)
++	session = &serverSession{
++		id:          hello.Session,
++		destination: destination,
++		core:        core,
++		appConn:     appConn,
++	}
++	if err = core.addLeg(hello.LegID, conn, onClose); err != nil {
++		i.access.Unlock()
++		appConn.Close()
++		N.CloseOnHandshakeFailure(conn, onClose, err)
++		return
++	}
++	i.sessions[hello.Session] = session
++	i.access.Unlock()
++
++	go func() {
++		<-core.Done()
++		i.removeSession(hello.Session, session)
++	}()
++
++	metadata.Inbound = i.Tag()
++	metadata.InboundType = i.Type()
++	metadata.Destination = destination
++	i.logger.InfoContext(ctx, "multipath session established to ", destination, " on leg ", hello.LegID)
++	logicalOnClose := N.OnceClose(func(closeErr error) {
++		// Ordinary routed EOF/close must not discard response bytes that have
++		// already been accepted into SMP3 but are still awaiting cumulative ACKs.
++		// The session remains registered until core.Done(), allowing any transport
++		// repair needed during the graceful tail drain to rejoin the same core.
++		core.startGracefulClose(closeErr)
++	})
++	i.router.RouteConnectionEx(ctx, appConn, metadata, logicalOnClose)
++}
++
++func (i *Inbound) removeSession(id [16]byte, session *serverSession) {
++	i.access.Lock()
++	if current := i.sessions[id]; current == session {
++		delete(i.sessions, id)
++	}
++	i.access.Unlock()
++}
++
++func (i *Inbound) acceptNonce(nonce [16]byte) bool {
++	now := time.Now()
++	i.nonceMu.Lock()
++	defer i.nonceMu.Unlock()
++	for k, t := range i.nonces {
++		if now.Sub(t) > 2*helloSkew {
++			delete(i.nonces, k)
++		}
++	}
++	if _, ok := i.nonces[nonce]; ok {
++		return false
++	}
++	i.nonces[nonce] = now
++	return true
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/outbound.go alpha2.3/src/protocol/multipath/outbound.go
+--- alpha2.2/src/protocol/multipath/outbound.go	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/src/protocol/multipath/outbound.go	2026-08-27 14:25:20.000000000 +0000
+@@ -25,17 +25,22 @@
+ 
+ type Outbound struct {
+ 	outbound.Adapter
+-	ctx            context.Context
+-	manager        adapter.OutboundManager
+-	logger         log.ContextLogger
+-	tags           []string
+-	children       []adapter.Outbound
+-	udpTag         string
+-	udpOutbound    adapter.Outbound
+-	aggregations   []M.Socksaddr
+-	cfg            coreConfig
+-	password       string
+-	redialInterval time.Duration
++	ctx             context.Context
++	manager         adapter.OutboundManager
++	logger          log.ContextLogger
++	tags            []string
++	children        []adapter.Outbound
++	leg1Fallback    adapter.Outbound
++	leg1FallbackTag string
++	udpTag          string
++	udpOutbound     adapter.Outbound
++	aggregations    []M.Socksaddr
++	cfg             coreConfig
++	password        string
++	redialInterval  time.Duration
++	adaptive        adaptiveSettings
++	adaptiveEnabled bool
++	hy2Health       hy2GlobalHealth
+ }
+ 
+ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MultipathOutboundOptions) (adapter.Outbound, error) {
+@@ -64,6 +69,21 @@
+ 	if options.Password == "" {
+ 		return nil, E.New("missing multipath password")
+ 	}
++	adaptiveEnabled := options.Leg1Adaptive != nil && options.Leg1Adaptive.Enabled
++	adaptiveSettings := defaultAdaptiveSettings()
++	if adaptiveEnabled {
++		if options.Leg1Fallback == "" {
++			return nil, E.New("leg1_fallback is required when leg1_adaptive.enabled")
++		}
++		if slices.Contains(options.Outbounds, options.Leg1Fallback) {
++			return nil, E.New("leg1_fallback must be a separate outbound from outbounds")
++		}
++		var err error
++		adaptiveSettings, err = makeAdaptiveSettings(*options.Leg1Adaptive)
++		if err != nil {
++			return nil, err
++		}
++	}
+ 	preferred := options.Preferred
+ 	if preferred == "" {
+ 		preferred = options.Outbounds[0]
+@@ -116,17 +136,23 @@
+ 	if !slices.Contains(dependencies, udpTag) {
+ 		dependencies = append(dependencies, udpTag)
+ 	}
++	if adaptiveEnabled && !slices.Contains(dependencies, options.Leg1Fallback) {
++		dependencies = append(dependencies, options.Leg1Fallback)
++	}
+ 	return &Outbound{
+-		Adapter:        outbound.NewAdapter(C.TypeMultipath, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
+-		ctx:            ctx,
+-		manager:        service.FromContext[adapter.OutboundManager](ctx),
+-		logger:         logger,
+-		tags:           tags,
+-		udpTag:         udpTag,
+-		aggregations:   aggregations,
+-		password:       options.Password,
+-		cfg:            cfg,
+-		redialInterval: redialInterval,
++		Adapter:         outbound.NewAdapter(C.TypeMultipath, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
++		ctx:             ctx,
++		manager:         service.FromContext[adapter.OutboundManager](ctx),
++		logger:          logger,
++		tags:            tags,
++		udpTag:          udpTag,
++		aggregations:    aggregations,
++		password:        options.Password,
++		cfg:             cfg,
++		redialInterval:  redialInterval,
++		adaptive:        adaptiveSettings,
++		adaptiveEnabled: adaptiveEnabled,
++		leg1FallbackTag: options.Leg1Fallback,
+ 	}, nil
+ }
+ 
+@@ -142,6 +168,16 @@
+ 		}
+ 		o.children[index] = child
+ 	}
++	if o.adaptiveEnabled {
++		fallback, loaded := o.manager.Outbound(o.leg1FallbackTag)
++		if !loaded {
++			return E.New("multipath leg1 fallback outbound not found: ", o.leg1FallbackTag)
++		}
++		if !slices.Contains(fallback.Network(), N.NetworkTCP) {
++			return E.New("multipath leg1 fallback outbound does not support TCP: ", o.leg1FallbackTag)
++		}
++		o.leg1Fallback = fallback
++	}
+ 	udpOutbound, loaded := o.manager.Outbound(o.udpTag)
+ 	if !loaded {
+ 		return E.New("multipath UDP outbound not found: ", o.udpTag)
+@@ -182,11 +218,57 @@
+ 	cfg := o.cfg
+ 	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
+ 	var core *mpCore
++	var appConn net.Conn
++	adaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.hy2Health, nil)
+ 	var dialMu sync.Mutex
+ 	joining := [2]bool{}
+ 	scheduled := [2]bool{}
+ 	var ensureLeg func(uint8)
+ 	var scheduleLeg func(uint8, time.Duration)
++	adaptive.onSelected = func(carrier leg1Carrier, probation bool) {
++		if !o.adaptiveEnabled {
++			return
++		}
++		o.logger.InfoContext(ctx, "multipath leg1 carrier selected: ", carrier.String(), " probation=", probation)
++	}
++	adaptive.onHealth = func(decision adaptiveDecision, stats coreStats) {
++		if decision.StateChanged && decision.State == adaptiveSuspect {
++			o.logger.InfoContext(ctx, "multipath leg1 carrier suspect: reason=", decision.Reason,
++				" pending=", stats.RxPendingFrames, " gap_age=", stats.RxGapAge)
++		}
++		if decision.Recovered {
++			o.logger.InfoContext(ctx, "multipath leg1 carrier recovered: hysteria2 remains selected")
++		}
++		o.logger.DebugContext(ctx, "mp health: carrier=", adaptive.currentCarrier(),
++			" state=", decision.State, " rx_goodput=", decision.RxLogicalGoodputBPS/1e6,
++			" rx_baseline=", decision.RxBaselineGoodputBPS/1e6,
++			" tx_goodput=", decision.TxLogicalGoodputBPS/1e6,
++			" tx_baseline=", decision.TxBaselineGoodputBPS/1e6,
++			" leg1_rx_goodput=", decision.Leg1RxGoodputBPS/1e6,
++			" leg1_tx_goodput=", decision.Leg1TxGoodputBPS/1e6,
++			" rx_pending=", stats.RxPendingFrames, " rx_gap_age=", stats.RxGapAge,
++			" tx_outstanding=", stats.OutstandingFrames, " ack_progress_age=", ackProgressAge(stats))
++	}
++	adaptive.onRecovery = func() {
++		o.hy2Health.noteRecovery()
++		o.logger.InfoContext(ctx, "multipath hysteria2 cooldown cleared after healthy active canary")
++	}
++	adaptive.onActiveSuccess = func() {
++		o.hy2Health.noteActiveSuccess()
++	}
++	adaptive.onFallback = func(reason string, cooldown bool, probation bool) {
++		if core == nil || core.closing.Load() || core.finalizing.Load() {
++			return
++		}
++		o.logger.InfoContext(ctx, "multipath leg1 carrier fallback: hysteria2 -> snell reason=", reason)
++		if cooldown || probation {
++			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive)
++			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration)
++		}
++		if !core.replaceLeg(1, errors.New("multipath adaptive carrier replacement: "+reason)) {
++			scheduleLeg(1, o.redialInterval)
++		}
++	}
+ 
+ 	// scheduleLeg coalesces delayed reconnect requests for a leg. This prevents
+ 	// a carrier that accepts and then immediately drops a connection from causing
+@@ -200,6 +282,9 @@
+ 			return
+ 		default:
+ 		}
++		if core.finalizing.Load() {
++			return
++		}
+ 		if id == 1 && !core.active.Load() {
+ 			return
+ 		}
+@@ -230,6 +315,9 @@
+ 			return
+ 		default:
+ 		}
++		if core.finalizing.Load() {
++			return
++		}
+ 		if id == 1 && !core.active.Load() {
+ 			return
+ 		}
+@@ -266,21 +354,42 @@
+ 					return
+ 				default:
+ 				}
++				if core.finalizing.Load() {
++					return
++				}
+ 				if id == 1 && !core.active.Load() {
+ 					return
+ 				}
+ 				if core.hasLeg(id) {
+ 					return
+ 				}
+-				conn, dialErr := o.children[id].DialContext(sessionCtx, N.NetworkTCP, o.aggregations[id])
++				child := o.children[id]
++				carrierTag := o.tags[id]
++				if id == 1 && o.adaptiveEnabled {
++					if adaptive.carrierForLeg1(time.Now()) == carrierSnell {
++						child = o.leg1Fallback
++						carrierTag = o.leg1FallbackTag
++					}
++				}
++				conn, dialErr := child.DialContext(sessionCtx, N.NetworkTCP, o.aggregations[id])
+ 				if dialErr == nil {
+ 					dialErr = writeHello(conn, helloMessage{Session: sessionID, LegID: id, Destination: destinationString}, o.password)
+ 				}
++				if dialErr == nil && core.finalizing.Load() {
++					_ = conn.Close()
++					return
++				}
++				if dialErr == nil && id == 1 {
++					adaptive.markHy2DialSucceeded()
++				}
+ 				if dialErr == nil {
+ 					dialErr = core.addLeg(id, conn, nil)
+ 				}
+ 				if dialErr == nil {
+-					o.logger.InfoContext(ctx, "multipath leg ", id, " ready via ", o.tags[id], " for ", destination)
++					if id == 1 {
++						adaptive.markLegReady()
++					}
++					o.logger.InfoContext(ctx, "multipath leg ", id, " ready via ", carrierTag, " for ", destination)
+ 					return
+ 				}
+ 				if conn != nil {
+@@ -294,7 +403,10 @@
+ 				if errors.Is(dialErr, errCoreClosed) {
+ 					return
+ 				}
+-				o.logger.WarnContext(ctx, "multipath leg ", id, " redial failed via ", o.tags[id], ": ", dialErr)
++				if id == 1 && o.adaptiveEnabled && !core.closing.Load() && !core.finalizing.Load() && adaptive.currentCarrier() == carrierHy2 && adaptive.recordCarrierFailure(adaptive.hy2WasEstablished()) {
++					continue
++				}
++				o.logger.WarnContext(ctx, "multipath leg ", id, " redial failed via ", carrierTag, ": ", dialErr)
+ 				timer := time.NewTimer(o.redialInterval)
+ 				select {
+ 				case <-core.Done():
+@@ -319,7 +431,17 @@
+ 			return
+ 		default:
+ 		}
+-		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", o.tags[id], ": ", legErr)
++		if core.finalizing.Load() {
++			return
++		}
++		if id == 1 && o.adaptiveEnabled && !core.closing.Load() && adaptive.currentCarrier() == carrierHy2 {
++			adaptive.recordCarrierFailure(adaptive.hy2WasEstablished())
++		}
++		carrierTag := o.tags[id]
++		if id == 1 && o.adaptiveEnabled && adaptive.currentCarrier() == carrierSnell {
++			carrierTag = o.leg1FallbackTag
++		}
++		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", carrierTag, ": ", legErr)
+ 		// Repair the failed leg no faster than redial_interval, even if the
+ 		// previous carrier completed the handshake before failing immediately.
+ 		scheduleLeg(id, o.redialInterval)
+@@ -329,7 +451,8 @@
+ 			ensureLeg(1)
+ 		}
+ 	}
+-	core, appConn := newCore(cfg)
++	core, appConn = newCore(cfg)
++	adaptive.core = core
+ 	go func() {
+ 		<-core.Done()
+ 		cancelSession()
+@@ -411,3 +534,89 @@
+ 		RecoveryTimeout:   recoveryTimeout,
+ 	}, nil
+ }
++
++func makeAdaptiveSettings(options option.MultipathAdaptiveOptions) (adaptiveSettings, error) {
++	settings := defaultAdaptiveSettings()
++	if value := time.Duration(options.EvaluationInterval); value > 0 {
++		settings.EvaluationInterval = value
++	}
++	if value := time.Duration(options.Warmup); value > 0 {
++		settings.Warmup = value
++	}
++	if value := time.Duration(options.SuspectWindow); value > 0 {
++		settings.SuspectWindow = value
++	}
++	if value := time.Duration(options.HardFailureWindow); value > 0 {
++		settings.HardFailureWindow = value
++	}
++	if value := time.Duration(options.Cooldown); value > 0 {
++		settings.Cooldown = value
++	}
++	if value := time.Duration(options.MaxCooldown); value > 0 {
++		settings.MaxCooldown = value
++	}
++	if value := time.Duration(options.RecoveryStableWindow); value > 0 {
++		settings.RecoveryStableWindow = value
++	}
++	if options.HardFailureThreshold > 0 {
++		settings.HardFailureThreshold = options.HardFailureThreshold
++	}
++	if options.MinTxOutstandingFrames > 0 {
++		settings.MinTxOutstanding = int(options.MinTxOutstandingFrames)
++	}
++	if value := time.Duration(options.TxAckStall); value > 0 {
++		settings.TxAckStall = value
++	}
++	if options.MinRxReorderFrames > 0 {
++		settings.MinRxReorder = int(options.MinRxReorderFrames)
++	}
++	if value := time.Duration(options.RxGapStall); value > 0 {
++		settings.RxGapStall = value
++	}
++	if options.GoodputDegradeRatio > 0 {
++		settings.GoodputDegradeRatio = options.GoodputDegradeRatio
++	}
++	if options.MinCanaryUsefulBytes > 0 {
++		settings.MinCanaryUsefulBytes = options.MinCanaryUsefulBytes
++	}
++	if options.MinCanaryActiveWindows > 0 {
++		settings.MinCanaryActiveWindows = int(options.MinCanaryActiveWindows)
++	}
++	if options.InitialFailureThreshold > 0 {
++		settings.InitialFailureThreshold = options.InitialFailureThreshold
++	}
++	if value := time.Duration(options.InitialFailureWindow); value > 0 {
++		settings.InitialFailureWindow = value
++	}
++	if settings.EvaluationInterval < 100*time.Millisecond || settings.EvaluationInterval > time.Minute {
++		return adaptiveSettings{}, E.New("leg1_adaptive evaluation_interval must be between 100ms and 1m")
++	}
++	if settings.Warmup > 10*time.Minute || settings.SuspectWindow < time.Second || settings.SuspectWindow > 10*time.Minute {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive warmup or suspect_window")
++	}
++	if settings.HardFailureThreshold < 1 || settings.HardFailureWindow < time.Second || settings.HardFailureWindow > 10*time.Minute {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive hard failure settings")
++	}
++	if settings.Cooldown < time.Second || settings.MaxCooldown < settings.Cooldown || settings.MaxCooldown > time.Hour {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive cooldown settings")
++	}
++	if settings.RecoveryStableWindow < time.Second || settings.RecoveryStableWindow > time.Hour {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive recovery_stable_window")
++	}
++	if settings.MinTxOutstanding < 1 || settings.TxAckStall < time.Second || settings.TxAckStall > time.Minute {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive TX pressure settings")
++	}
++	if settings.MinRxReorder < 1 || settings.RxGapStall < 100*time.Millisecond || settings.RxGapStall > time.Minute {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive RX pressure settings")
++	}
++	if settings.GoodputDegradeRatio <= 0 || settings.GoodputDegradeRatio >= 1 {
++		return adaptiveSettings{}, E.New("leg1_adaptive goodput_degrade_ratio must be between 0 and 1")
++	}
++	if settings.MinCanaryUsefulBytes == 0 || settings.MinCanaryActiveWindows < 1 {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive canary useful-data settings")
++	}
++	if settings.InitialFailureThreshold < 1 || settings.InitialFailureWindow < time.Second || settings.InitialFailureWindow > time.Hour {
++		return adaptiveSettings{}, E.New("invalid leg1_adaptive initial failure settings")
++	}
++	return settings, nil
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/outbound_test.go alpha2.3/src/protocol/multipath/outbound_test.go
+--- alpha2.2/src/protocol/multipath/outbound_test.go	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/src/protocol/multipath/outbound_test.go	2026-08-27 14:29:22.000000000 +0000
+@@ -0,0 +1,52 @@
++package multipath
++
++import (
++	"encoding/json"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/option"
++)
++
++func TestLegacyMultipathOptionsKeepAdaptiveDisabled(t *testing.T) {
++	var options option.MultipathOutboundOptions
++	if err := json.Unmarshal([]byte(`{
++		"type":"multipath",
++		"outbounds":["line-path","public-path"],
++		"server":"10.66.66.1",
++		"server_port":24444,
++		"password":"placeholder"
++	}`), &options); err != nil {
++		t.Fatal(err)
++	}
++	if options.Leg1Fallback != "" || options.Leg1Adaptive != nil {
++		t.Fatalf("legacy options unexpectedly enabled adaptive mode: %+v", options)
++	}
++}
++
++func TestAdaptiveMultipathOptionsParseDefaultsAndOverrides(t *testing.T) {
++	var options option.MultipathOutboundOptions
++	if err := json.Unmarshal([]byte(`{
++		"type":"multipath",
++		"outbounds":["line-path","public-hy2"],
++		"leg1_fallback":"public-snell",
++		"leg1_adaptive":{"enabled":true,"evaluation_interval":"2s","goodput_degrade_ratio":0.35},
++		"server":"10.66.66.1",
++		"server_port":24444,
++		"password":"placeholder"
++	}`), &options); err != nil {
++		t.Fatal(err)
++	}
++	if options.Leg1Adaptive == nil || !options.Leg1Adaptive.Enabled || options.Leg1Fallback != "public-snell" {
++		t.Fatalf("adaptive options did not parse: %+v", options)
++	}
++	settings, err := makeAdaptiveSettings(*options.Leg1Adaptive)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if settings.EvaluationInterval != 2*time.Second || settings.GoodputDegradeRatio != 0.35 ||
++		settings.MinCanaryUsefulBytes != 1<<20 || settings.MinCanaryActiveWindows != 3 ||
++		settings.InitialFailureThreshold != 3 || settings.InitialFailureWindow != 30*time.Second {
++		t.Fatalf("unexpected adaptive settings: %+v", settings)
++	}
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/protocol.go alpha2.3/src/protocol/multipath/protocol.go
+--- alpha2.2/src/protocol/multipath/protocol.go	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/src/protocol/multipath/protocol.go	2026-08-27 11:14:54.000000000 +0000
+@@ -1,99 +1,99 @@
+-package multipath
+-
+-import (
+-	"crypto/hmac"
+-	"crypto/rand"
+-	"crypto/sha256"
+-	"encoding/binary"
+-	"errors"
+-	"io"
+-	"net"
+-	"time"
+-)
+-
+-var helloMagic = [4]byte{'S', 'M', 'P', '3'}
+-
+-const helloVersion byte = 4
+-const helloSkew = 90 * time.Second
+-
+-type helloMessage struct {
+-	Session     [16]byte
+-	LegID       uint8
+-	Destination string
+-}
+-
+-func newSessionID() ([16]byte, error) { var id [16]byte; _, err := rand.Read(id[:]); return id, err }
+-
+-func writeHello(conn net.Conn, message helloMessage, password string) error {
+-	if password == "" {
+-		return errors.New("empty multipath password")
+-	}
+-	if len(message.Destination) == 0 || len(message.Destination) > 65535 {
+-		return errors.New("invalid multipath destination")
+-	}
+-	var nonce [16]byte
+-	if _, err := rand.Read(nonce[:]); err != nil {
+-		return err
+-	}
+-	dest := []byte(message.Destination)
+-	// magic(4) version(1) leg(1) session(16) unix(8) nonce(16) destlen(2)
+-	header := make([]byte, 48)
+-	copy(header[0:4], helloMagic[:])
+-	header[4] = helloVersion
+-	header[5] = message.LegID
+-	copy(header[6:22], message.Session[:])
+-	binary.BigEndian.PutUint64(header[22:30], uint64(time.Now().Unix()))
+-	copy(header[30:46], nonce[:])
+-	binary.BigEndian.PutUint16(header[46:48], uint16(len(dest)))
+-	mac := hmac.New(sha256.New, []byte(password))
+-	mac.Write(header)
+-	mac.Write(dest)
+-	sum := mac.Sum(nil)
+-	buffers := net.Buffers{header, dest, sum}
+-	_, err := buffers.WriteTo(conn)
+-	return err
+-}
+-
+-func readHello(conn net.Conn, password string) (helloMessage, [16]byte, error) {
+-	var message helloMessage
+-	var nonce [16]byte
+-	if password == "" {
+-		return message, nonce, errors.New("empty multipath password")
+-	}
+-	header := make([]byte, 48)
+-	if _, err := io.ReadFull(conn, header); err != nil {
+-		return message, nonce, err
+-	}
+-	if string(header[0:4]) != string(helloMagic[:]) || header[4] != helloVersion {
+-		return message, nonce, errors.New("invalid multipath hello")
+-	}
+-	message.LegID = header[5]
+-	copy(message.Session[:], header[6:22])
+-	copy(nonce[:], header[30:46])
+-	ts := int64(binary.BigEndian.Uint64(header[22:30]))
+-	now := time.Now()
+-	sent := time.Unix(ts, 0)
+-	if sent.Before(now.Add(-helloSkew)) || sent.After(now.Add(helloSkew)) {
+-		return message, nonce, errors.New("stale multipath hello")
+-	}
+-	length := int(binary.BigEndian.Uint16(header[46:48]))
+-	if length <= 0 {
+-		return message, nonce, errors.New("empty multipath destination")
+-	}
+-	dest := make([]byte, length)
+-	if _, err := io.ReadFull(conn, dest); err != nil {
+-		return message, nonce, err
+-	}
+-	got := make([]byte, sha256.Size)
+-	if _, err := io.ReadFull(conn, got); err != nil {
+-		return message, nonce, err
+-	}
+-	mac := hmac.New(sha256.New, []byte(password))
+-	mac.Write(header)
+-	mac.Write(dest)
+-	if !hmac.Equal(got, mac.Sum(nil)) {
+-		return message, nonce, errors.New("invalid multipath authentication")
+-	}
+-	message.Destination = string(dest)
+-	return message, nonce, nil
+-}
++package multipath
++
++import (
++	"crypto/hmac"
++	"crypto/rand"
++	"crypto/sha256"
++	"encoding/binary"
++	"errors"
++	"io"
++	"net"
++	"time"
++)
++
++var helloMagic = [4]byte{'S', 'M', 'P', '3'}
++
++const helloVersion byte = 4
++const helloSkew = 90 * time.Second
++
++type helloMessage struct {
++	Session     [16]byte
++	LegID       uint8
++	Destination string
++}
++
++func newSessionID() ([16]byte, error) { var id [16]byte; _, err := rand.Read(id[:]); return id, err }
++
++func writeHello(conn net.Conn, message helloMessage, password string) error {
++	if password == "" {
++		return errors.New("empty multipath password")
++	}
++	if len(message.Destination) == 0 || len(message.Destination) > 65535 {
++		return errors.New("invalid multipath destination")
++	}
++	var nonce [16]byte
++	if _, err := rand.Read(nonce[:]); err != nil {
++		return err
++	}
++	dest := []byte(message.Destination)
++	// magic(4) version(1) leg(1) session(16) unix(8) nonce(16) destlen(2)
++	header := make([]byte, 48)
++	copy(header[0:4], helloMagic[:])
++	header[4] = helloVersion
++	header[5] = message.LegID
++	copy(header[6:22], message.Session[:])
++	binary.BigEndian.PutUint64(header[22:30], uint64(time.Now().Unix()))
++	copy(header[30:46], nonce[:])
++	binary.BigEndian.PutUint16(header[46:48], uint16(len(dest)))
++	mac := hmac.New(sha256.New, []byte(password))
++	mac.Write(header)
++	mac.Write(dest)
++	sum := mac.Sum(nil)
++	buffers := net.Buffers{header, dest, sum}
++	_, err := buffers.WriteTo(conn)
++	return err
++}
++
++func readHello(conn net.Conn, password string) (helloMessage, [16]byte, error) {
++	var message helloMessage
++	var nonce [16]byte
++	if password == "" {
++		return message, nonce, errors.New("empty multipath password")
++	}
++	header := make([]byte, 48)
++	if _, err := io.ReadFull(conn, header); err != nil {
++		return message, nonce, err
++	}
++	if string(header[0:4]) != string(helloMagic[:]) || header[4] != helloVersion {
++		return message, nonce, errors.New("invalid multipath hello")
++	}
++	message.LegID = header[5]
++	copy(message.Session[:], header[6:22])
++	copy(nonce[:], header[30:46])
++	ts := int64(binary.BigEndian.Uint64(header[22:30]))
++	now := time.Now()
++	sent := time.Unix(ts, 0)
++	if sent.Before(now.Add(-helloSkew)) || sent.After(now.Add(helloSkew)) {
++		return message, nonce, errors.New("stale multipath hello")
++	}
++	length := int(binary.BigEndian.Uint16(header[46:48]))
++	if length <= 0 {
++		return message, nonce, errors.New("empty multipath destination")
++	}
++	dest := make([]byte, length)
++	if _, err := io.ReadFull(conn, dest); err != nil {
++		return message, nonce, err
++	}
++	got := make([]byte, sha256.Size)
++	if _, err := io.ReadFull(conn, got); err != nil {
++		return message, nonce, err
++	}
++	mac := hmac.New(sha256.New, []byte(password))
++	mac.Write(header)
++	mac.Write(dest)
++	if !hmac.Equal(got, mac.Sum(nil)) {
++		return message, nonce, errors.New("invalid multipath authentication")
++	}
++	message.Destination = string(dest)
++	return message, nonce, nil
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/src/protocol/multipath/protocol_test.go alpha2.3/src/protocol/multipath/protocol_test.go
+--- alpha2.2/src/protocol/multipath/protocol_test.go	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.3/src/protocol/multipath/protocol_test.go	2026-08-27 11:16:48.000000000 +0000
+@@ -0,0 +1,45 @@
++package multipath
++
++import (
++	"net"
++	"testing"
++)
++
++func TestHelloWireCompatibilityAndSessionReuse(t *testing.T) {
++	if string(helloMagic[:]) != "SMP3" {
++		t.Fatalf("hello magic=%q, want SMP3", helloMagic)
++	}
++	if helloVersion != 4 {
++		t.Fatalf("hello version=%d, want 4", helloVersion)
++	}
++	if frameHeaderSize != 13 {
++		t.Fatalf("frame header size=%d, want 13", frameHeaderSize)
++	}
++
++	password := "test-password"
++	session := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
++	for _, legID := range []uint8{0, 1} {
++		client, server := net.Pipe()
++		writeErr := make(chan error, 1)
++		go func() {
++			writeErr <- writeHello(client, helloMessage{
++				Session:     session,
++				LegID:       legID,
++				Destination: "example.com:443",
++			}, password)
++			_ = client.Close()
++		}()
++
++		got, _, err := readHello(server, password)
++		_ = server.Close()
++		if err != nil {
++			t.Fatalf("read leg %d hello: %v", legID, err)
++		}
++		if err := <-writeErr; err != nil {
++			t.Fatalf("write leg %d hello: %v", legID, err)
++		}
++		if got.Session != session || got.LegID != legID || got.Destination != "example.com:443" {
++			t.Fatalf("decoded leg %d hello=%+v", legID, got)
++		}
++	}
++}
+diff -ruN '--exclude=.git' '--exclude=.work' '--exclude=dist' '--exclude=MANIFEST.sha256' '--exclude=patches' alpha2.2/validate-kit.sh alpha2.3/validate-kit.sh
+--- alpha2.2/validate-kit.sh	2026-08-26 17:28:32.000000000 +0000
++++ alpha2.3/validate-kit.sh	2026-08-27 07:20:46.684533267 +0000
+@@ -6,19 +6,22 @@
+ 
+ echo '[+] JSON syntax'
+ python3 -m json.tool "$ROOT/config/client.example.json" >/dev/null
++python3 -m json.tool "$ROOT/config/client-legacy.example.json" >/dev/null
++python3 -m json.tool "$ROOT/config/client-adaptive.example.json" >/dev/null
+ python3 -m json.tool "$ROOT/config/server.example.json" >/dev/null
++python3 -m json.tool "$ROOT/config/server-hy2-snell.example.json" >/dev/null
+ 
+ echo '[+] standalone SMP3 reliability tests'
+ (
+   cd "$ROOT/src/protocol/multipath"
+-  go test core.go protocol.go core_test.go -race -count=5
+-  go vet core.go protocol.go core_test.go
++  go test core.go protocol.go adaptive.go core_test.go adaptive_test.go protocol_test.go -race -count=5
++  go vet core.go protocol.go adaptive.go core_test.go adaptive_test.go protocol_test.go
+ )
+ 
+ echo '[+] source injector syntax'
+ python3 -m py_compile "$ROOT/scripts/apply_source.py"
+ 
+ echo '[+] shell syntax'
+-bash -n "$ROOT/build.sh" "$ROOT/install-server.sh" "$ROOT/validate-kit.sh"
++bash -n "$ROOT/build.sh" "$ROOT/install-server.sh" "$ROOT/validate-kit.sh" "$ROOT/package-release.sh"
+ 
+ echo '[+] kit validation passed'

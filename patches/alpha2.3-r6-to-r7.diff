@@ -1,0 +1,948 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/BUILD_STATUS.md /mnt/data/smp3-multipath-kit-alpha2.3-r7/BUILD_STATUS.md
+--- /mnt/data/r6norm/BUILD_STATUS.md	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/BUILD_STATUS.md	2026-08-27 15:38:14.713751078 +0000
+@@ -1,23 +1,25 @@
+-# Alpha2.3-r6 verification status
++# Alpha2.3-r7 verification status
+ 
+-R6 is a source-only iteration focused on the lifecycle races discovered while reviewing R5 first-authenticated-leg session establishment.
++R7 is a source-only iteration focused on per-carrier control-plane isolation and graceful-close repair boundaries discovered by the R6 forced leg1-first fault-injection test.
+ 
+ Completed in this sandbox:
+-- standalone SMP3 core/adaptive/protocol tests: 48 tests
++- standalone SMP3 core/adaptive/protocol tests: 55 tests
+ - `go test -race -count=5`: PASS
+ - standalone `go vet`: PASS
+ - gofmt: PASS
+ - source injector syntax / shell syntax / JSON validation: covered by `validate-kit.sh`
+ 
+-New R6 regressions include:
+-- graceful CLOSING still accepts transport repair;
+-- FINALIZING rejects late leg attachment;
+-- same-ID replacement waits for old read/write workers to retire;
+-- completed session tombstone rejects a delayed old leg;
+-- expired tombstone permits a fresh create;
+-- closed inbound rejects new session creation.
++New R7 regressions include:
++- a blocked leg cannot head-of-line block cumulative ACK delivery on another leg;
++- ACK/control traffic is prioritized ahead of queued DATA at frame boundaries;
++- forced duplicate cumulative ACKs remain retransmittable after coalescing;
++- CLOSE is queued to all live legs and one blocked carrier cannot prevent healthy-carrier logical EOF delivery;
++- graceful CLOSING with no outstanding TX tail suppresses emergency booster activation/reconnect callbacks;
++- graceful CLOSING with outstanding DATA still permits required transport repair.
++
++R5 first-authenticated-leg establishment and all R6 lifecycle/tombstone/same-ID retirement protections remain unchanged. Wire/hello version and configuration schema remain unchanged.
+ 
+ The injected full sing-box package test and final Linux/Windows binaries are deferred to the user's WSL build because this sandbox cannot download the pinned Go 1.25.5 toolchain / missing external modules.
+ 
+ Expected binary version:
+-`1.14.0-beta.14-smp3-alpha2.3-r6`
++`1.14.0-beta.14-smp3-alpha2.3-r7`
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/CHANGELOG.md /mnt/data/smp3-multipath-kit-alpha2.3-r7/CHANGELOG.md
+--- /mnt/data/r6norm/CHANGELOG.md	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/CHANGELOG.md	2026-08-27 15:38:20.430324809 +0000
+@@ -1,5 +1,16 @@
+ # Changelog
+ 
++## alpha2.3-r7 — per-leg control-plane isolation / graceful-close boundary
++
++- Reworked ACK emission so cumulative ACKs are published independently to each leg's writer instead of synchronously writing every carrier from one ACK loop. A blocked/black-holed leg can no longer head-of-line block ACK progress on a healthy carrier.
++- Added per-leg cumulative ACK coalescing (`ackPending`) and wakeups; only the newest ACK value needs to be written. Forced ACK retransmission remains explicit so duplicate-DATA / ACK-loss recovery can resend the same cumulative value.
++- Prioritized ACK and explicit control frames ahead of queued DATA at wire-frame boundaries. Already-started stream writes are intentionally not preempted.
++- Routed ACTIVATE/CLOSE through the per-leg writer so all transport writes remain serialized without a cross-leg write lock.
++- Hardened logical CLOSE broadcast: CLOSE is queued to every live carrier first, and successful delivery on one healthy carrier is sufficient to proceed even if another carrier is blocked.
++- Tightened graceful CLOSING semantics: transport repair remains allowed while outstanding DATA exists, but once the TX tail is fully ACKed a racing leg EOF no longer wakes the booster, schedules reconnect, or starts recovery.
++- Fixed adaptive leg-down logging so the carrier that actually failed is captured before health accounting can switch the state from Hy2 to Snell.
++- Wire/hello version remains `4`; configuration is unchanged.
++
+ ## alpha2.3-r6 — session lifecycle / rejoin race hardening
+ 
+ - Added completed-session tombstones for `2 * helloSkew` so a delayed authenticated old leg cannot resurrect a finished wire-v4 session ID into a fresh destination TCP connection.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/README-zh_CN.md /mnt/data/smp3-multipath-kit-alpha2.3-r7/README-zh_CN.md
+--- /mnt/data/r6norm/README-zh_CN.md	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/README-zh_CN.md	2026-08-27 15:30:47.734573728 +0000
+@@ -5,7 +5,7 @@
+ 地址、证书和随机密钥；不要把真实部署配置提交到仓库或发布包。
+ 
+ 
+-## alpha2.3-r5/r6：根治服务端到达乱序并补齐生命周期竞态
++## alpha2.3-r5/r6/r7：到达乱序、生命周期与控制面隔离
+ 
+ R5 将服务端 session 建立从“必须 leg0 先注册”改为 **first authenticated leg establishes core**：leg0/leg1 谁先通过完整 SMP3 HELLO 认证并到达 `:24444`，谁就可以原子创建 logical core；另一条随后 JOIN。creator 不改变路径角色，leg0 仍然是 preferred，leg1 仍然是 lazy booster / Hy2 -> Snell fallback。
+ 
+@@ -18,5 +18,7 @@
+ - inbound Close 与 session 创建互斥，关闭过程中不再产生新 logical session。
+ - 真正仍然存活的 duplicate same-ID transport 仍然拒绝；wire v4 没有 monotonic generation 字段，不做不安全的盲替换。
+ 
+-R6 不改变 wire version、配置字段或 adaptive carrier 语义。它解决的是已经启动并写出 HELLO 的 carrier 在服务端的跨路径到达乱序；如果 preferred leg0 在客户端最初拨号阶段就直接失败，bootstrap failover 仍是后续独立能力。
++R7 在 R6 的基础上增加 per-leg ACK/control writer：累计 ACK 各自在对应 carrier 上异步合并发送，慢/黑洞 leg 不再阻塞健康 leg 的 ACK；ACK/ACTIVATE/CLOSE 在 frame 边界优先于排队 DATA。CLOSING 阶段只有 outstanding DATA 仍存在时才继续触发 transport repair，尾部已经 ACK 完成后不再无意义激活 booster。Adaptive leg-down 日志也会在 Hy2 -> Snell 状态切换前保留真实 failure carrier。
++
++R7 不改变 wire version、配置字段或 adaptive carrier 语义。它解决的是已经启动并写出 HELLO 的 carrier 在服务端的跨路径到达乱序，以及多 carrier 控制面互相阻塞问题；如果 preferred leg0 在客户端最初拨号阶段就直接失败，bootstrap failover 仍是后续独立能力。
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/README.md /mnt/data/smp3-multipath-kit-alpha2.3-r7/README.md
+--- /mnt/data/r6norm/README.md	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/README.md	2026-08-27 15:30:47.734486790 +0000
+@@ -2,7 +2,7 @@
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.3-r6**
++> **当前版本：alpha2.3-r7**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -67,9 +67,9 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
+-## 2.0.1 alpha2.3-r5/r6 session ordering 与生命周期修复
++## 2.0.1 alpha2.3-r5/r6/r7 session ordering、生命周期与控制面隔离
+ 
+-alpha2.3-r5/r6 保持 SMP3 wire/hello version `4` 和现有配置 schema 不变。实机双端日志证明：客户端虽然先启动 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`，因此服务端不能把“leg0 先注册”当成协议正确性的前提。
++alpha2.3-r5/r6/r7 保持 SMP3 wire/hello version `4` 和现有配置 schema 不变。实机双端日志证明：客户端虽然先启动 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`，因此服务端不能把“leg0 先注册”当成协议正确性的前提。
+ 
+ - **r5：first authenticated leg establishes core。** 通过完整 HELLO HMAC/时间戳/nonce 校验后，leg0 或 leg1 谁先到都可以原子创建 logical session；另一条随后 JOIN。同一个 session ID 的并发首到只会创建一个 core。
+ - **路径角色不变。** “谁创建 session”不决定调度角色；leg0 仍是 preferred path，leg1 仍是客户端按需激活的 booster，并继续使用 Hy2 -> Snell adaptive fallback。
+@@ -78,10 +78,13 @@
+ - **r6：same-ID rejoin retirement barrier。** 已确认死亡的旧 leg 会先从 scheduler 移除，并等待其 read/write workers 全部退出后才允许相同 leg ID 的新 transport attach，避免 wire v4 无 generation 字段时旧 worker 误清新 generation 的 `inTransit` 状态。
+ - **r6：dead-leg queue hardening。** 每条 leg 有独立 done 信号；writer 在 leg 关闭后退出，enqueue 在关闭竞态后会再次清理 transit 状态，避免 frame 永久挂在已经退休的 send queue。
+ - **r6：inbound shutdown gate。** 服务端进入 Close 后不再允许并发的新 session 创建。
++- **r7：per-leg ACK/control isolation。** ACK 不再由一个 goroutine 依次同步写所有 carrier；每条 leg 独立维护 cumulative `ackPending` 并由自己的 writer 发送，因此一条慢/黑洞路径不会把另一条健康路径的 ACK 一起堵住。ACK/ACTIVATE/CLOSE 在 wire frame 边界优先于已排队 DATA；已经开始写出的单个 DATA frame 不会被不安全地中断。
++- **r7：graceful-close repair boundary。** CLOSING 阶段只要仍有 outstanding DATA 就继续允许 transport repair；一旦 TX tail 已全部 ACK，竞态到达的 carrier EOF 不再触发 booster/reconnect/recovery。
++- **r7：control/logging hardening。** CLOSE 先投递到所有 live legs，健康路径成功写出 logical EOF 后不会继续被阻塞路径拖住；adaptive leg-down 日志在状态切换前记录实际 failure carrier，避免 Hy2 故障被误写成 `via public-snell`。
+ 
+ 真正仍然存活的 duplicate same-ID transport 继续被保守拒绝；wire v4 没有 monotonic leg generation，因此服务端不会猜测两个同时有效的同 ID transport 谁更新。
+ 
+-注意：first-leg-wins 解决的是**已经被客户端启动并成功发送 HELLO 的两条 carrier 的服务端到达乱序**。当前 outbound bootstrap 仍然先拨 preferred leg0；如果 leg0 在最初 `DialContext` 阶段就直接失败，当前版本不会自动用 leg1 创建新 logical connection。这个能力属于后续独立的 bootstrap failover，不在 r6 中偷偷改变。
++注意：first-leg-wins 解决的是**已经被客户端启动并成功发送 HELLO 的两条 carrier 的服务端到达乱序**。当前 outbound bootstrap 仍然先拨 preferred leg0；如果 leg0 在最初 `DialContext` 阶段就直接失败，当前版本不会自动用 leg1 创建新 logical connection。这个能力属于后续独立的 bootstrap failover，不在 r7 中偷偷改变。
+ 
+ R3 的客户端 EOF attribution / cooldown burst 修复继续保留。
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/TEST_RESULTS.txt /mnt/data/smp3-multipath-kit-alpha2.3-r7/TEST_RESULTS.txt
+--- /mnt/data/r6norm/TEST_RESULTS.txt	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/TEST_RESULTS.txt	2026-08-27 15:38:14.713843845 +0000
+@@ -1,27 +1,28 @@
+-SMP3 alpha2.3-r6 source verification
++SMP3 alpha2.3-r7 source verification
+ Date: 2026-08-27
+ 
+ Scope
+ - R5 first-authenticated-leg session establishment retained.
+-- R6 fixes lifecycle/tombstone/same-ID retirement races found in post-R5 review.
++- R6 lifecycle/tombstone/same-ID retirement hardening retained.
++- R7 isolates per-leg ACK/control writes and tightens graceful-close repair boundaries.
+ 
+ Validation completed
+-- standalone core/adaptive/protocol tests: 48
++- standalone core/adaptive/protocol tests: 55
+ - go test -race -count=5: PASS
+ - go vet: PASS
+ - gofmt: PASS
+ 
+-R6-specific coverage
+-1. FINALIZING/DONE is atomic with addLeg; late transports are rejected.
+-2. Graceful CLOSING still permits transport repair for outstanding-tail drain.
+-3. Dead same-ID leg replacement waits for both old workers to retire.
+-4. Per-leg writer exits on carrier close and enqueue-vs-close clears transit safely.
+-5. Completed session IDs are tombstoned for 2*helloSkew and cannot be resurrected by delayed authenticated legs.
+-6. Expired tombstones do not permanently reserve a random session ID.
+-7. Inbound shutdown rejects concurrent new session creation.
++R7-specific coverage
++1. A deliberately blocked leg0 writer does not delay cumulative ACK delivery on healthy leg1.
++2. A newly-published ACK is written ahead of already-queued DATA at the next frame boundary.
++3. Forced ACK retransmission can resend the same cumulative value after coalescing, preserving duplicate-DATA/ACK-loss recovery semantics.
++4. CLOSE is queued to all live legs; healthy-leg CLOSE can complete without waiting for a blocked peer leg.
++5. CLOSING + zero outstanding DATA suppresses emergency booster activation and repair callback.
++6. CLOSING + outstanding DATA still allows emergency transport repair.
++7. Adaptive leg-down logging preserves the actual failed carrier, including intentional Hy2 -> Snell replacement after adaptive state has already switched.
+ 
+ Deferred
+ - injected sing-box package test and final cross-platform build, because the sandbox cannot fetch Go 1.25.5 / missing modules.
+ 
+ Expected final binary version
+-  1.14.0-beta.14-smp3-alpha2.3-r6
++  1.14.0-beta.14-smp3-alpha2.3-r7
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/VERSION /mnt/data/smp3-multipath-kit-alpha2.3-r7/VERSION
+--- /mnt/data/r6norm/VERSION	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/VERSION	2026-08-27 15:30:47.733683465 +0000
+@@ -1,5 +1,5 @@
+ kit_version=alpha2.3
+-kit_revision=alpha2.3-r6
++kit_revision=alpha2.3-r7
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/build.sh /mnt/data/smp3-multipath-kit-alpha2.3-r7/build.sh
+--- /mnt/data/r6norm/build.sh	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/build.sh	2026-08-27 15:30:47.733810553 +0000
+@@ -48,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r6 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r7 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/package-release.sh /mnt/data/smp3-multipath-kit-alpha2.3-r7/package-release.sh
+--- /mnt/data/r6norm/package-release.sh	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/package-release.sh	2026-08-27 15:30:47.733859715 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-NAME="smp3-multipath-kit-alpha2.3-r6"
++NAME="smp3-multipath-kit-alpha2.3-r7"
+ STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
+ STAGE="$STAGE_ROOT/$NAME"
+ OUT_ZIP="${1:-$ROOT/$NAME.zip}"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/scripts/apply_source.py /mnt/data/smp3-multipath-kit-alpha2.3-r7/scripts/apply_source.py
+--- /mnt/data/r6norm/scripts/apply_source.py	2026-08-27 13:00:09.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/scripts/apply_source.py	2026-08-27 15:30:47.733960644 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.3-r6 source installed')
++print('[+] SMP3 multipath alpha2.3-r7 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/src/protocol/multipath/adaptive.go /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive.go
+--- /mnt/data/r6norm/src/protocol/multipath/adaptive.go	2026-08-27 11:05:16.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive.go	2026-08-27 15:31:33.139746706 +0000
+@@ -22,6 +22,19 @@
+ 	return "hysteria2"
+ }
+ 
++// adaptiveCarrierReplacementError preserves the carrier being intentionally
++// retired. The adaptive state is switched before core.replaceLeg() runs, so
++// reading currentCarrier() from the later OnLegDown callback would otherwise
++// misattribute the old carrier's teardown to the newly-selected carrier.
++type adaptiveCarrierReplacementError struct {
++	from   leg1Carrier
++	reason string
++}
++
++func (e *adaptiveCarrierReplacementError) Error() string {
++	return "multipath adaptive carrier replacement: " + e.reason
++}
++
+ type adaptiveState uint8
+ 
+ const (
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/src/protocol/multipath/adaptive_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive_test.go
+--- /mnt/data/r6norm/src/protocol/multipath/adaptive_test.go	2026-08-27 11:05:48.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive_test.go	2026-08-27 15:31:52.454675661 +0000
+@@ -739,3 +739,13 @@
+ 		t.Fatalf("short-session EOF burst poisoned global Hy2 health: state=%v penalty=%s failures=%d", health.state, health.cooldownPenalty, len(health.initialFailures))
+ 	}
+ }
++
++func TestAdaptiveCarrierReplacementErrorPreservesCarrier(t *testing.T) {
++	err := &adaptiveCarrierReplacementError{from: carrierHy2, reason: "tx_ack_stall"}
++	if err.from != carrierHy2 {
++		t.Fatalf("replacement error lost original carrier: %v", err.from)
++	}
++	if got := err.Error(); got != "multipath adaptive carrier replacement: tx_ack_stall" {
++		t.Fatalf("unexpected replacement error text: %q", got)
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/src/protocol/multipath/core.go /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core.go
+--- /mnt/data/r6norm/src/protocol/multipath/core.go	2026-08-27 12:53:35.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core.go	2026-08-27 15:36:55.918248289 +0000
+@@ -106,17 +106,29 @@
+ 	sendCount   uint32
+ }
+ 
++type legControl struct {
++	typ   byte
++	value uint64
++	done  chan error
++}
++
+ type mpLeg struct {
+ 	id      uint8
+ 	conn    net.Conn
+ 	send    chan *txRecord
+-	onClose func(error)
+-	once    sync.Once
+-	writeMu sync.Mutex
+-	closed  atomic.Bool
+-	done    chan struct{}
+-	workers sync.WaitGroup
+-	retired chan struct{}
++	control chan legControl
++	ackWake chan struct{}
++	// ackPending is cumulative and monotonic. ACK producers only publish the
++	// newest value and wake this leg's writer; a blocked carrier can therefore
++	// never hold up ACK delivery on another carrier.
++	ackPending atomic.Uint64
++	ackForce   atomic.Bool
++	onClose    func(error)
++	once       sync.Once
++	closed     atomic.Bool
++	done       chan struct{}
++	workers    sync.WaitGroup
++	retired    chan struct{}
+ }
+ 
+ func (l *mpLeg) close(err error) {
+@@ -291,6 +303,8 @@
+ 			id:      id,
+ 			conn:    conn,
+ 			send:    make(chan *txRecord, c.cfg.QueueFrames),
++			control: make(chan legControl, 8),
++			ackWake: make(chan struct{}, 1),
+ 			onClose: onClose,
+ 			done:    make(chan struct{}),
+ 			retired: make(chan struct{}),
+@@ -618,6 +632,13 @@
+ 			if c.active.Load() {
+ 				return
+ 			}
++			// A logical stream that has already entered graceful CLOSING and has
++			// no TX tail left must not wake a lazy booster from stale ingress/queue
++			// history. If outstanding DATA remains, activation is still allowed so
++			// transport repair can finish the graceful drain.
++			if c.closing.Load() && !c.hasOutstanding() {
++				return
++			}
+ 			if now.Sub(windowStart) >= c.cfg.ActivationWindow {
+ 				bytesNow := c.ingressBytes.Load()
+ 				delta := bytesNow - windowBase
+@@ -688,6 +709,13 @@
+ 	return n
+ }
+ 
++func (c *mpCore) hasOutstanding() bool {
++	c.txMu.Lock()
++	has := len(c.outstanding) > 0
++	c.txMu.Unlock()
++	return has
++}
++
+ func (c *mpCore) weightFor(id uint8) uint32 {
+ 	if int(id) < len(c.cfg.BandwidthMbps) && c.cfg.BandwidthMbps[id] > 0 {
+ 		return c.cfg.BandwidthMbps[id]
+@@ -833,24 +861,96 @@
+ }
+ 
+ func (c *mpCore) legWriteLoop(leg *mpLeg) {
++	var ackSent uint64
++
++	writeControl := func(control legControl) bool {
++		var header [frameHeaderSize]byte
++		header[0] = control.typ
++		binary.BigEndian.PutUint64(header[1:9], control.value)
++		err := writeAll(leg.conn, header[:])
++		if control.done != nil {
++			control.done <- err
++		}
++		if err != nil {
++			c.handleLegFailure(leg, err)
++			return false
++		}
++		return true
++	}
++
++	writePendingAck := func() bool {
++		next := leg.ackPending.Load()
++		force := leg.ackForce.Swap(false)
++		if next == 0 || (next <= ackSent && !force) {
++			return true
++		}
++		if !writeControl(legControl{typ: frameTypeAck, value: next}) {
++			return false
++		}
++		if next > ackSent {
++			ackSent = next
++		}
++		return true
++	}
++
+ 	for {
++		// ACKs are cumulative, cheap to coalesce, and latency-sensitive. Publish the
++		// latest ACK before selecting another DATA frame. This is priority at frame
++		// boundaries; an already-started stream write cannot be preempted safely.
++		if !writePendingAck() {
++			return
++		}
++
++		// Give explicit control frames (ACTIVATE/CLOSE) priority over queued DATA.
+ 		select {
+ 		case <-c.done:
+ 			return
+ 		case <-leg.done:
+ 			return
++		case <-leg.ackWake:
++			continue
++		case control := <-leg.control:
++			if !writeControl(control) {
++				return
++			}
++			continue
++		default:
++		}
++
++		select {
++		case <-c.done:
++			return
++		case <-leg.done:
++			return
++		case <-leg.ackWake:
++			continue
++		case control := <-leg.control:
++			if !writeControl(control) {
++				return
++			}
+ 		case record := <-leg.send:
+ 			if record == nil {
+ 				continue
+ 			}
++			// An ACK/control wake can race with DATA becoming selectable. Recheck the
++			// high-priority lanes after dequeuing DATA but before starting its wire
++			// frame, so queued DATA cannot win that race and add another full-frame
++			// delay to control traffic.
++			if !writePendingAck() {
++				return
++			}
++			select {
++			case control := <-leg.control:
++				if !writeControl(control) {
++					return
++				}
++			default:
++			}
+ 			if !c.isOutstanding(record) {
+ 				c.clearTransit(record, leg.id)
+ 				continue
+ 			}
+-			leg.writeMu.Lock()
+-			err := writeDataFrame(leg.conn, dataFrame{seq: record.seq, data: record.data})
+-			leg.writeMu.Unlock()
+-			if err != nil {
++			if err := writeDataFrame(leg.conn, dataFrame{seq: record.seq, data: record.data}); err != nil {
+ 				c.clearTransit(record, leg.id)
+ 				c.handleLegFailure(leg, err)
+ 				return
+@@ -947,6 +1047,13 @@
+ 	if c.finalizing.Load() {
+ 		return
+ 	}
++	// Graceful CLOSING still permits transport repair while DATA remains
++	// outstanding. Once the TX tail is fully ACKed, however, a racing carrier EOF
++	// is ordinary teardown and must not wake the booster, schedule reconnects, or
++	// start a no-leg recovery timer.
++	if c.closing.Load() && !c.hasOutstanding() {
++		return
++	}
+ 
+ 	// Primary loss before the threshold is an emergency activation: leg 1 is
+ 	// allowed to come up immediately so the logical stream has a chance to live.
+@@ -1166,7 +1273,7 @@
+ 			}
+ 			continue
+ 		}
+-		if c.sendAckFrame(next) {
++		if c.sendAckFrame(next, force) {
+ 			sent = next
+ 		} else if force {
+ 			c.ackForce.Store(true)
+@@ -1174,26 +1281,72 @@
+ 	}
+ }
+ 
+-func (c *mpCore) sendAckFrame(value uint64) bool {
++func (c *mpCore) queueAck(leg *mpLeg, value uint64, force bool) bool {
++	if leg == nil || leg.closed.Load() {
++		return false
++	}
++	updated := false
++	for {
++		old := leg.ackPending.Load()
++		if value <= old {
++			break
++		}
++		if leg.ackPending.CompareAndSwap(old, value) {
++			updated = true
++			break
++		}
++	}
++	if force {
++		leg.ackForce.Store(true)
++	}
++	select {
++	case <-leg.done:
++		return false
++	default:
++	}
++	if updated || force {
++		select {
++		case leg.ackWake <- struct{}{}:
++		default:
++		}
++	}
++	return true
++}
++
++func (c *mpCore) sendAckFrame(value uint64, force bool) bool {
+ 	legs := c.availableLegs()
+ 	if len(legs) == 0 {
+ 		return false
+ 	}
+-	var header [frameHeaderSize]byte
+-	header[0] = frameTypeAck
+-	binary.BigEndian.PutUint64(header[1:9], value)
+-	success := false
++	// Never synchronously write ACKs while iterating over carriers. Each leg has
++	// its own writer and cumulative ACK slot, so one slow/black-holed transport
++	// cannot head-of-line block ACK progress on a healthy transport.
++	scheduled := false
+ 	for _, leg := range legs {
+-		leg.writeMu.Lock()
+-		err := writeAll(leg.conn, header[:])
+-		leg.writeMu.Unlock()
+-		if err != nil {
+-			c.handleLegFailure(leg, err)
+-			continue
++		if c.queueAck(leg, value, force) {
++			scheduled = true
+ 		}
+-		success = true
+ 	}
+-	return success
++	return scheduled
++}
++
++func (c *mpCore) queueControl(leg *mpLeg, typ byte, value uint64, wait bool) (chan error, bool) {
++	if leg == nil || leg.closed.Load() {
++		return nil, false
++	}
++	var done chan error
++	if wait {
++		done = make(chan error, 1)
++	}
++	control := legControl{typ: typ, value: value, done: done}
++	select {
++	case <-c.done:
++		return nil, false
++	case <-leg.done:
++		return nil, false
++	case leg.control <- control:
++		return done, true
++	}
+ }
+ 
+ func (c *mpCore) sendCloseFrame(value uint64) bool {
+@@ -1201,21 +1354,45 @@
+ 	if len(legs) == 0 {
+ 		return false
+ 	}
+-	var header [frameHeaderSize]byte
+-	header[0] = frameTypeClose
+-	binary.BigEndian.PutUint64(header[1:9], value)
+-	success := false
++
++	// Queue CLOSE on every live leg first. Then wait only until one carrier has
++	// actually written it; a blocked carrier must not prevent a healthy carrier
++	// from delivering the logical EOF before fail() tears transports down.
++	waiters := make([]struct {
++		leg  *mpLeg
++		done chan error
++	}, 0, len(legs))
+ 	for _, leg := range legs {
+-		leg.writeMu.Lock()
+-		err := writeAll(leg.conn, header[:])
+-		leg.writeMu.Unlock()
+-		if err != nil {
+-			c.handleLegFailure(leg, err)
+-			continue
++		if done, ok := c.queueControl(leg, frameTypeClose, value, true); ok {
++			waiters = append(waiters, struct {
++				leg  *mpLeg
++				done chan error
++			}{leg: leg, done: done})
+ 		}
+-		success = true
+ 	}
+-	return success
++	if len(waiters) == 0 {
++		return false
++	}
++
++	result := make(chan bool, len(waiters))
++	for _, waiter := range waiters {
++		go func(leg *mpLeg, done chan error) {
++			select {
++			case err := <-done:
++				result <- err == nil
++			case <-leg.done:
++				result <- false
++			case <-c.done:
++				result <- false
++			}
++		}(waiter.leg, waiter.done)
++	}
++	for range waiters {
++		if <-result {
++			return true
++		}
++	}
++	return false
+ }
+ 
+ func (c *mpCore) sendControlFrame(typ byte, value uint64) bool {
+@@ -1223,22 +1400,15 @@
+ 	if len(legs) == 0 {
+ 		return false
+ 	}
+-	// Prefer leg 0 for control traffic, otherwise use any surviving leg.
++	// Prefer leg 0 for one-shot control traffic, otherwise use any surviving leg.
++	// The per-leg writer serializes this ahead of queued DATA at the next frame
++	// boundary, without taking a global/cross-leg write lock.
+ 	leg := c.getLeg(0)
+ 	if leg == nil {
+ 		leg = legs[0]
+ 	}
+-	var header [frameHeaderSize]byte
+-	header[0] = typ
+-	binary.BigEndian.PutUint64(header[1:9], value)
+-	leg.writeMu.Lock()
+-	err := writeAll(leg.conn, header[:])
+-	leg.writeMu.Unlock()
+-	if err != nil {
+-		c.handleLegFailure(leg, err)
+-		return false
+-	}
+-	return true
++	_, ok := c.queueControl(leg, typ, value, false)
++	return ok
+ }
+ 
+ func (c *mpCore) rxLoop() {
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/src/protocol/multipath/core_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core_test.go
+--- /mnt/data/r6norm/src/protocol/multipath/core_test.go	2026-08-27 12:54:45.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core_test.go	2026-08-27 15:37:17.977412091 +0000
+@@ -859,3 +859,279 @@
+ 	}
+ 	_ = b0.Close()
+ }
++
++type signalWriteConn struct {
++	net.Conn
++	once    sync.Once
++	started chan struct{}
++}
++
++func (c *signalWriteConn) Write(p []byte) (int, error) {
++	c.once.Do(func() { close(c.started) })
++	return c.Conn.Write(p)
++}
++
++type gatedWriteConn struct {
++	net.Conn
++	once    sync.Once
++	started chan struct{}
++	release chan struct{}
++}
++
++func (c *gatedWriteConn) Write(p []byte) (int, error) {
++	c.once.Do(func() { close(c.started) })
++	<-c.release
++	return c.Conn.Write(p)
++}
++
++func TestCoreAckBroadcastDoesNotHOLAcrossLegs(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	a0, b0 := net.Pipe()
++	release := make(chan struct{})
++	slow := &gatedWriteConn{Conn: a0, started: make(chan struct{}), release: release}
++	if err := core.addLeg(0, slow, nil); err != nil {
++		t.Fatal(err)
++	}
++	a1, b1 := net.Pipe()
++	defer b1.Close()
++	if err := core.addLeg(1, a1, nil); err != nil {
++		close(release)
++		t.Fatal(err)
++	}
++
++	if !core.sendAckFrame(7, false) {
++		close(release)
++		t.Fatal("ACK was not scheduled")
++	}
++	select {
++	case <-slow.started:
++		// leg0 is now intentionally blocked inside its own writer.
++	case <-time.After(time.Second):
++		close(release)
++		t.Fatal("slow leg did not begin ACK write")
++	}
++
++	_ = b1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
++	frame, err := readWireFrame(b1, core)
++	if err != nil {
++		close(release)
++		t.Fatalf("healthy leg ACK was HOL-blocked by slow leg: %v", err)
++	}
++	if frame.typ != frameTypeAck || frame.seq != 7 {
++		close(release)
++		t.Fatalf("unexpected healthy-leg control frame: type=%d value=%d", frame.typ, frame.seq)
++	}
++
++	// Release the synthetic blocked writer before cleanup. Closing the peer makes
++	// its pending net.Pipe write return immediately without needing a reader.
++	close(release)
++	_ = b0.Close()
++}
++
++func TestCoreAckPriorityAheadOfQueuedData(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	a, b := net.Pipe()
++	defer b.Close()
++	wrapped := &signalWriteConn{Conn: a, started: make(chan struct{})}
++	if err := core.addLeg(0, wrapped, nil); err != nil {
++		t.Fatal(err)
++	}
++	leg := core.getLeg(0)
++	if leg == nil {
++		t.Fatal("leg0 missing")
++	}
++
++	record0 := &txRecord{seq: 0, data: []byte("first"), lastSentLeg: -1}
++	record1 := &txRecord{seq: 1, data: []byte("second"), lastSentLeg: -1}
++	core.txMu.Lock()
++	core.outstanding[0] = record0
++	core.outstanding[1] = record1
++	core.txMu.Unlock()
++	leg.send <- record0
++
++	select {
++	case <-wrapped.started:
++		// The first DATA frame is already in progress and blocked on net.Pipe.
++	case <-time.After(time.Second):
++		t.Fatal("first DATA write did not start")
++	}
++	leg.send <- record1
++	if !core.sendAckFrame(9, false) {
++		t.Fatal("ACK was not scheduled")
++	}
++
++	_ = b.SetReadDeadline(time.Now().Add(time.Second))
++	first, err := readWireFrame(b, core)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if first.typ != frameTypeData || first.seq != 0 {
++		t.Fatalf("expected first DATA frame, got type=%d seq=%d", first.typ, first.seq)
++	}
++	core.putBuffer(first.data)
++
++	second, err := readWireFrame(b, core)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if second.typ != frameTypeAck || second.seq != 9 {
++		if second.typ == frameTypeData {
++			core.putBuffer(second.data)
++		}
++		t.Fatalf("ACK did not get priority over queued DATA: type=%d value=%d", second.typ, second.seq)
++	}
++}
++
++func TestCoreClosingWithoutOutstandingSuppressesEmergencyActivation(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60
++	legDown := make(chan struct{}, 1)
++	cfg.OnLegDown = func(uint8, error) { legDown <- struct{}{} }
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	a, b := net.Pipe()
++	defer b.Close()
++	if err := core.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	old := core.getLeg(0)
++	core.closing.Store(true)
++	core.handleLegFailure(old, io.EOF)
++
++	if core.active.Load() {
++		t.Fatal("graceful closing with no outstanding DATA activated booster")
++	}
++	select {
++	case <-legDown:
++		t.Fatal("graceful closing with no outstanding DATA emitted repair callback")
++	case <-time.After(25 * time.Millisecond):
++	}
++}
++
++func TestCoreClosingWithOutstandingStillAllowsEmergencyActivation(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	a, b := net.Pipe()
++	defer b.Close()
++	if err := core.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	core.txMu.Lock()
++	core.outstanding[0] = &txRecord{seq: 0, data: []byte("tail"), lastSentLeg: 0}
++	core.txMu.Unlock()
++
++	old := core.getLeg(0)
++	core.closing.Store(true)
++	core.handleLegFailure(old, io.ErrClosedPipe)
++	if !core.active.Load() {
++		t.Fatal("graceful closing with outstanding DATA suppressed required transport repair")
++	}
++}
++
++func TestCoreCloseBroadcastDoesNotHOLAcrossLegs(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	a0, b0 := net.Pipe()
++	release := make(chan struct{})
++	slow := &gatedWriteConn{Conn: a0, started: make(chan struct{}), release: release}
++	if err := core.addLeg(0, slow, nil); err != nil {
++		t.Fatal(err)
++	}
++	a1, b1 := net.Pipe()
++	defer b1.Close()
++	if err := core.addLeg(1, a1, nil); err != nil {
++		close(release)
++		t.Fatal(err)
++	}
++
++	result := make(chan bool, 1)
++	go func() { result <- core.sendCloseFrame(11) }()
++	select {
++	case <-slow.started:
++	case <-time.After(time.Second):
++		close(release)
++		t.Fatal("slow leg did not begin CLOSE write")
++	}
++
++	_ = b1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
++	frame, err := readWireFrame(b1, core)
++	if err != nil {
++		close(release)
++		t.Fatalf("healthy leg CLOSE was HOL-blocked by slow leg: %v", err)
++	}
++	if frame.typ != frameTypeClose || frame.seq != 11 {
++		close(release)
++		t.Fatalf("unexpected healthy-leg CLOSE frame: type=%d value=%d", frame.typ, frame.seq)
++	}
++	select {
++	case ok := <-result:
++		if !ok {
++			close(release)
++			t.Fatal("sendCloseFrame reported failure despite healthy carrier")
++		}
++	case <-time.After(500 * time.Millisecond):
++		close(release)
++		t.Fatal("sendCloseFrame waited for blocked carrier after healthy CLOSE delivery")
++	}
++
++	close(release)
++	_ = b0.Close()
++}
++
++func TestCoreForcedAckResendsSameCumulativeValue(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60
++	core, appConn := newCore(cfg)
++	defer core.Close()
++	defer appConn.Close()
++
++	a, b := net.Pipe()
++	defer b.Close()
++	if err := core.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	if !core.sendAckFrame(5, false) {
++		t.Fatal("initial ACK was not scheduled")
++	}
++	_ = b.SetReadDeadline(time.Now().Add(time.Second))
++	first, err := readWireFrame(b, core)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if first.typ != frameTypeAck || first.seq != 5 {
++		t.Fatalf("unexpected initial ACK: type=%d value=%d", first.typ, first.seq)
++	}
++
++	if !core.sendAckFrame(5, true) {
++		t.Fatal("forced duplicate ACK was not scheduled")
++	}
++	_ = b.SetReadDeadline(time.Now().Add(time.Second))
++	second, err := readWireFrame(b, core)
++	if err != nil {
++		t.Fatalf("forced cumulative ACK was not retransmitted: %v", err)
++	}
++	if second.typ != frameTypeAck || second.seq != 5 {
++		t.Fatalf("unexpected forced ACK: type=%d value=%d", second.typ, second.seq)
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r6-to-r7.diff' /mnt/data/r6norm/src/protocol/multipath/outbound.go /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/outbound.go
+--- /mnt/data/r6norm/src/protocol/multipath/outbound.go	2026-08-27 11:05:28.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/outbound.go	2026-08-27 15:38:14.713994006 +0000
+@@ -276,7 +276,7 @@
+ 			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
+ 			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration)
+ 		}
+-		if !core.replaceLeg(1, errors.New("multipath adaptive carrier replacement: "+reason)) {
++		if !core.replaceLeg(1, &adaptiveCarrierReplacementError{from: carrierHy2, reason: reason}) {
+ 			scheduleLeg(1, o.redialInterval)
+ 		}
+ 	}
+@@ -468,8 +468,22 @@
+ 		if core.finalizing.Load() {
+ 			return
+ 		}
++		// Preserve the carrier that actually owned leg1. Ordinary failures capture the
++		// current carrier before health accounting can switch it; intentional adaptive
++		// replacement carries the old carrier explicitly because the state switch
++		// necessarily happens before core.replaceLeg().
++		carrierAtFailure := carrierHy2
++		intentionalReplacement := false
++		if id == 1 && o.adaptiveEnabled {
++			carrierAtFailure = adaptive.currentCarrier()
++			var replacementErr *adaptiveCarrierReplacementError
++			if errors.As(legErr, &replacementErr) {
++				carrierAtFailure = replacementErr.from
++				intentionalReplacement = true
++			}
++		}
+ 		benignSecondaryEOF := false
+-		if id == 1 && o.adaptiveEnabled && !core.closing.Load() && !core.finalizing.Load() && adaptive.currentCarrier() == carrierHy2 {
++		if id == 1 && o.adaptiveEnabled && !intentionalReplacement && !core.closing.Load() && !core.finalizing.Load() && carrierAtFailure == carrierHy2 {
+ 			stats := core.snapshotStats()
+ 			if adaptive.shouldRecordCarrierFailure(legErr, stats, true) {
+ 				adaptive.recordCarrierFailure(true)
+@@ -481,7 +495,7 @@
+ 			}
+ 		}
+ 		carrierTag := o.tags[id]
+-		if id == 1 && o.adaptiveEnabled && adaptive.currentCarrier() == carrierSnell {
++		if id == 1 && o.adaptiveEnabled && carrierAtFailure == carrierSnell {
+ 			carrierTag = o.leg1FallbackTag
+ 		}
+ 		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", carrierTag, ": ", legErr)

@@ -1,0 +1,77 @@
+SMP3 alpha2.3-r10 verification
+===============================
+
+Source / standalone scope
+-------------------------
+Files exercised include the standalone multipath core, protocol and adaptive logic plus corresponding tests.
+
+Result:
+  tests discovered: 65
+  go test: PASS
+  go test -race -count=5: PASS
+  go vet: PASS
+  gofmt: PASS
+  example JSON syntax: PASS
+  Python/shell syntax: PASS
+
+R10-specific coverage
+---------------------
+  - ACK progress wakes newly exposed overdue cumulative frontier
+  - ACK fast path uses dedicated O(1) frontier check
+  - healthy/non-overdue frontier fast path avoids transport snapshot allocation
+  - rescue remains single-seq and never speculatively bursts beyond ackedNext
+  - failed/full rescue enqueue does not consume retransmit cooldown
+  - same-ID leg failure invalidates retired-generation lastSentLeg ownership
+  - dead-leg replay is ordered from cumulative ACK frontier forward
+
+Retained R9/R8 coverage
+-----------------------
+  - blocked inTransit ACK frontier can be rescued on alternate leg
+  - rescue lane bypasses ordinary DATA queue pressure
+  - concurrent frontier attempts are marked multipath
+  - stale older write completion cannot override newer attempt attribution
+  - multipath frontier ownership does not blame Hy2
+  - one-sample leg1 frontier ownership does not enter SUSPECT
+  - persistent exclusive leg1 TX stall still reaches SUSPECT/FALLBACK
+
+Live acceptance
+---------------
+Payload: 524288000 bytes (500 MiB)
+
+  R9 reference baseline:
+    HTTP=200, exact payload
+    456.219367 s
+    1,149,201 B/s
+
+  R10 normal multipath:
+    HTTP=200, exact payload
+    37.503315 s
+    13,979,829 B/s
+
+  R10 controlled +300 ms preferred-path delay:
+    HTTP=200, exact payload
+    119.762398 s
+    4,377,740 B/s
+
+  R10 forced preferred-leg TCP destruction + same-ID rejoin:
+    HTTP=200, exact payload
+    22.664969 s
+    23,132,211 B/s
+    old preferred-leg TCP was destroyed while outstanding DATA remained
+    replacement used a new TCP connection
+    server logged leg 0 joined/rejoined into the existing logical session
+    client returned to leg 0 ready and resumed participation
+
+No accepted r10 run showed an actual tx_ack_stall or false adaptive fallback.
+Benchmark speeds are environment-specific and are not throughput guarantees.
+
+Compatibility
+-------------
+  wire hello version: 4 (unchanged)
+  configuration schema: unchanged
+  adaptive thresholds: unchanged
+  rescue queue size: unchanged
+
+Expected built binary version
+-----------------------------
+  1.14.0-beta.14-smp3-alpha2.3-r10

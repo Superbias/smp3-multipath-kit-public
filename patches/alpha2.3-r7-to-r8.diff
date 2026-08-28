@@ -1,0 +1,867 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/BUILD_STATUS.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/BUILD_STATUS.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/BUILD_STATUS.md	2026-08-27 16:18:10.158645959 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/BUILD_STATUS.md	2026-08-27 16:22:47.723775946 +0000
+@@ -1,25 +1,22 @@
+-# Alpha2.3-r7 verification status
++# Alpha2.3-r8 verification status
+ 
+-R7 is a source-only iteration focused on per-carrier control-plane isolation and graceful-close repair boundaries discovered by the R6 forced leg1-first fault-injection test.
++R8 addresses a live R7 adaptive false positive found under forced leg1-first + 3s slow-leg0 upload testing. R7 successfully isolated per-leg ACK/control writes, but SMP3 v4 still has a single cumulative ACK frontier: an earlier delayed leg0 sequence can prevent later healthy leg1 frames from retiring and falsely satisfy aggregate `tx_ack_stall` heuristics.
+ 
+ Completed in this sandbox:
+-- standalone SMP3 core/adaptive/protocol tests: 55 tests
++- standalone SMP3 core/adaptive/protocol tests: 57 tests
+ - `go test -race -count=5`: PASS
+ - standalone `go vet`: PASS
+ - gofmt: PASS
+ - source injector syntax / shell syntax / JSON validation: covered by `validate-kit.sh`
+ 
+-New R7 regressions include:
+-- a blocked leg cannot head-of-line block cumulative ACK delivery on another leg;
+-- ACK/control traffic is prioritized ahead of queued DATA at frame boundaries;
+-- forced duplicate cumulative ACKs remain retransmittable after coalescing;
+-- CLOSE is queued to all live legs and one blocked carrier cannot prevent healthy-carrier logical EOF delivery;
+-- graceful CLOSING with no outstanding TX tail suppresses emergency booster activation/reconnect callbacks;
+-- graceful CLOSING with outstanding DATA still permits required transport repair.
++New R8 regressions include:
++- slow leg0 as the cumulative ACK frontier does not blame healthy Hy2 even with many leg1 outstanding frames and stale global ACK progress;
++- a real leg1-owned ACK frontier still enters SUSPECT/FALLBACK under persistent TX stall;
++- core snapshots report cumulative ACK frontier ownership and age.
+ 
+-R5 first-authenticated-leg establishment and all R6 lifecycle/tombstone/same-ID retirement protections remain unchanged. Wire/hello version and configuration schema remain unchanged.
++R7 per-leg ACK/control isolation, R6 lifecycle/tombstone/same-ID retirement protections, and R5 first-authenticated-leg establishment remain unchanged. Wire/hello version and configuration schema remain unchanged.
+ 
+ The injected full sing-box package test and final Linux/Windows binaries are deferred to the user's WSL build because this sandbox cannot download the pinned Go 1.25.5 toolchain / missing external modules.
+ 
+ Expected binary version:
+-`1.14.0-beta.14-smp3-alpha2.3-r7`
++`1.14.0-beta.14-smp3-alpha2.3-r8`
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/CHANGELOG.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/CHANGELOG.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/CHANGELOG.md	2026-08-27 16:18:09.994646681 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/CHANGELOG.md	2026-08-27 16:22:47.723298532 +0000
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## alpha2.3-r8 — cumulative-ACK frontier attribution
++
++- Fixed a live R7 false positive where a deliberately slow leg0 could freeze the single SMP3 v4 cumulative ACK frontier and make healthy Hy2/leg1 look like `tx_ack_stall`. Per-leg ACK writers solved write-side control HOL, but they cannot make cumulative ACK advance across an earlier missing sequence.
++- Added explicit ACK-frontier attribution to core health snapshots. The adaptive controller now treats TX ACK stall as Hy2 pressure only when the oldest unacknowledged cumulative frontier frame is currently owned by leg1. If leg0 is the earlier blocker, Hy2 is not penalized merely because later leg1 frames cannot yet retire.
++- Applied the same frontier ownership gate to the no-baseline severe TX black-hole path.
++- Improved SUSPECT diagnostics to log TX outstanding counts, leg1 outstanding count, ACK-frontier owner/age, and ACK-progress age instead of the misleading RX `pending=0 gap_age=0s` fields for a TX stall.
++- Added regressions for slow-leg0 cumulative-ACK blocking and direct snapshot verification of ACK-frontier ownership.
++- R7 per-leg ACK/control isolation, R6 lifecycle hardening, and R5 first-authenticated-leg session creation are retained. Wire/hello version remains `4`; configuration is unchanged.
++
+ ## alpha2.3-r7 — per-leg control-plane isolation / graceful-close boundary
+ 
+ - Reworked ACK emission so cumulative ACKs are published independently to each leg's writer instead of synchronously writing every carrier from one ACK loop. A blocked/black-holed leg can no longer head-of-line block ACK progress on a healthy carrier.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/NOTICE.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/NOTICE.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/NOTICE.md	2026-08-27 16:18:15.498622498 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/NOTICE.md	2026-08-27 16:20:10.390811869 +0000
+@@ -1,10 +1,10 @@
+-# Downstream / license notice
+-
+-This kit contains original experimental SMP3 multipath source and a source injector that modifies a fixed upstream sing-box source revision at build time.
+-
+-Upstream project: https://github.com/SagerNet/sing-box
+-Pinned revision: 4902660f8424fef3c2a60dfcdce7aeadfe3f3b88 (v1.14.0-beta.14)
+-
+-This kit is not an official sing-box release and is not affiliated with or endorsed by SagerNet. The generated downstream executable is named `smp3-proxy` to avoid implying that it is an official upstream binary.
+-
+-When building, redistributing, or modifying the combined work, review and comply with the upstream repository's license terms at the pinned revision. Keep the corresponding source and modifications available as required by those terms.
++# Downstream / license notice
++
++This kit contains original experimental SMP3 multipath source and a source injector that modifies a fixed upstream sing-box source revision at build time.
++
++Upstream project: https://github.com/SagerNet/sing-box
++Pinned revision: 4902660f8424fef3c2a60dfcdce7aeadfe3f3b88 (v1.14.0-beta.14)
++
++This kit is not an official sing-box release and is not affiliated with or endorsed by SagerNet. The generated downstream executable is named `smp3-proxy` to avoid implying that it is an official upstream binary.
++
++When building, redistributing, or modifying the combined work, review and comply with the upstream repository's license terms at the pinned revision. Keep the corresponding source and modifications available as required by those terms.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/README-zh_CN.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/README-zh_CN.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/README-zh_CN.md	2026-08-27 16:18:10.406644866 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/README-zh_CN.md	2026-08-27 16:22:47.723710590 +0000
+@@ -1,4 +1,6 @@
+-# SMP3 Multipath Kit alpha2.3
++# SMP3 Multipath Kit
++
++> 当前 revision：alpha2.3-r8 alpha2.3
+ 
+ 本项目说明与 alpha2.3 自适应 Hy2/Snell carrier 的健康语义见
+ [README.md](README.md)。发布包中的示例配置均为占位符，部署前请替换为你自己的
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/README.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/README.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/README.md	2026-08-27 16:18:10.598644019 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/README.md	2026-08-27 16:22:47.723575811 +0000
+@@ -2,7 +2,7 @@
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.3-r7**
++> **当前版本：alpha2.3-r8**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -67,7 +67,7 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
+-## 2.0.1 alpha2.3-r5/r6/r7 session ordering、生命周期与控制面隔离
++## 2.0.1 alpha2.3-r5/r6/r7/r8 session ordering、生命周期与控制面隔离
+ 
+ alpha2.3-r5/r6/r7 保持 SMP3 wire/hello version `4` 和现有配置 schema 不变。实机双端日志证明：客户端虽然先启动 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`，因此服务端不能把“leg0 先注册”当成协议正确性的前提。
+ 
+@@ -78,6 +78,8 @@
+ - **r6：same-ID rejoin retirement barrier。** 已确认死亡的旧 leg 会先从 scheduler 移除，并等待其 read/write workers 全部退出后才允许相同 leg ID 的新 transport attach，避免 wire v4 无 generation 字段时旧 worker 误清新 generation 的 `inTransit` 状态。
+ - **r6：dead-leg queue hardening。** 每条 leg 有独立 done 信号；writer 在 leg 关闭后退出，enqueue 在关闭竞态后会再次清理 transit 状态，避免 frame 永久挂在已经退休的 send queue。
+ - **r6：inbound shutdown gate。** 服务端进入 Close 后不再允许并发的新 session 创建。
++- **r7：per-leg ACK/control writer。** ACK/ACTIVATE/CLOSE 不再由一个跨路径同步 writer 串行写两条 carrier；一条阻塞路径不会直接卡住另一条 carrier 的控制帧发送。
++- **r8：cumulative-ACK frontier attribution。** SMP3 v4 仍只有一个全局累计 ACK，因此更早的慢 leg0 frame 会阻止更晚的 leg1 frame 被累计确认。adaptive `tx_ack_stall` 现在只有在当前累计 ACK frontier 本身归属 leg1 时才会归因 Hy2；如果 frontier 是 leg0，就不会因为跨路径重排而误判 Hy2。
+ - **r7：per-leg ACK/control isolation。** ACK 不再由一个 goroutine 依次同步写所有 carrier；每条 leg 独立维护 cumulative `ackPending` 并由自己的 writer 发送，因此一条慢/黑洞路径不会把另一条健康路径的 ACK 一起堵住。ACK/ACTIVATE/CLOSE 在 wire frame 边界优先于已排队 DATA；已经开始写出的单个 DATA frame 不会被不安全地中断。
+ - **r7：graceful-close repair boundary。** CLOSING 阶段只要仍有 outstanding DATA 就继续允许 transport repair；一旦 TX tail 已全部 ACK，竞态到达的 carrier EOF 不再触发 booster/reconnect/recovery。
+ - **r7：control/logging hardening。** CLOSE 先投递到所有 live legs，健康路径成功写出 logical EOF 后不会继续被阻塞路径拖住；adaptive leg-down 日志在状态切换前记录实际 failure carrier，避免 Hy2 故障被误写成 `via public-snell`。
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/TEST_RESULTS.txt /mnt/data/smp3-multipath-kit-alpha2.3-r8/TEST_RESULTS.txt
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/TEST_RESULTS.txt	2026-08-27 15:38:14.713843845 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/TEST_RESULTS.txt	2026-08-27 16:22:47.723825790 +0000
+@@ -1,28 +1,26 @@
+-SMP3 alpha2.3-r7 source verification
++SMP3 alpha2.3-r8 source verification
+ Date: 2026-08-27
+ 
+ Scope
+ - R5 first-authenticated-leg session establishment retained.
+ - R6 lifecycle/tombstone/same-ID retirement hardening retained.
+-- R7 isolates per-leg ACK/control writes and tightens graceful-close repair boundaries.
++- R7 per-leg ACK/control write isolation retained.
++- R8 attributes TX ACK stalls to the current cumulative ACK frontier owner.
+ 
+ Validation completed
+-- standalone core/adaptive/protocol tests: 55
++- standalone core/adaptive/protocol tests: 57
+ - go test -race -count=5: PASS
+ - go vet: PASS
+ - gofmt: PASS
+ 
+-R7-specific coverage
+-1. A deliberately blocked leg0 writer does not delay cumulative ACK delivery on healthy leg1.
+-2. A newly-published ACK is written ahead of already-queued DATA at the next frame boundary.
+-3. Forced ACK retransmission can resend the same cumulative value after coalescing, preserving duplicate-DATA/ACK-loss recovery semantics.
+-4. CLOSE is queued to all live legs; healthy-leg CLOSE can complete without waiting for a blocked peer leg.
+-5. CLOSING + zero outstanding DATA suppresses emergency booster activation and repair callback.
+-6. CLOSING + outstanding DATA still allows emergency transport repair.
+-7. Adaptive leg-down logging preserves the actual failed carrier, including intentional Hy2 -> Snell replacement after adaptive state has already switched.
++R8-specific coverage
++1. Slow leg0 can own the cumulative ACK frontier while many later leg1 frames are outstanding without falsely blaming Hy2.
++2. A true leg1-owned stalled frontier still drives TX SUSPECT/FALLBACK.
++3. Snapshot stats expose ACK frontier validity, owner leg and age.
++4. R7 control-plane isolation regressions remain green.
+ 
+ Deferred
+ - injected sing-box package test and final cross-platform build, because the sandbox cannot fetch Go 1.25.5 / missing modules.
+ 
+ Expected final binary version
+-  1.14.0-beta.14-smp3-alpha2.3-r7
++  1.14.0-beta.14-smp3-alpha2.3-r8
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/UPGRADE-alpha2-to-alpha2.1.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/UPGRADE-alpha2-to-alpha2.1.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/UPGRADE-alpha2-to-alpha2.1.md	2026-08-27 16:18:15.574622181 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/UPGRADE-alpha2-to-alpha2.1.md	2026-08-27 16:20:10.390894061 +0000
+@@ -1,30 +1,30 @@
+-# Upgrade alpha2 -> alpha2.1
+-
+-No configuration schema or SMP3 password change is required. Both client and server binaries should be rebuilt/replaced together.
+-
+-Recommended flow:
+-
+-```bash
+-# WSL/Linux build machine
+-cd smp3-multipath-kit-alpha2.1
+-./validate-kit.sh
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
+-```
+-
+-Then replace the landing binary and Windows binary with the newly built alpha2.1 outputs. Keep the existing `config.json` files.
+-
+-Before replacement, stop the foreground test instances. After replacement:
+-
+-```bash
+-# landing
+-/opt/smp3/smp3-proxy check -c /opt/smp3/config.json
+-/opt/smp3/smp3-proxy run -c /opt/smp3/config.json
+-```
+-
+-```powershell
+-# Windows
+-.\smp3-proxy.exe check -c .\config.json
+-.\smp3-proxy.exe run -c .\config.json
+-```
+-
+-For the first retest, keep `activation_threshold_mbps` low (for example 5 Mbps), repeat the landing-local HTTP download, and verify that leg 1 remains up instead of cycling through `Remote EOF`.
++# Upgrade alpha2 -> alpha2.1
++
++No configuration schema or SMP3 password change is required. Both client and server binaries should be rebuilt/replaced together.
++
++Recommended flow:
++
++```bash
++# WSL/Linux build machine
++cd smp3-multipath-kit-alpha2.1
++./validate-kit.sh
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
++```
++
++Then replace the landing binary and Windows binary with the newly built alpha2.1 outputs. Keep the existing `config.json` files.
++
++Before replacement, stop the foreground test instances. After replacement:
++
++```bash
++# landing
++/opt/smp3/smp3-proxy check -c /opt/smp3/config.json
++/opt/smp3/smp3-proxy run -c /opt/smp3/config.json
++```
++
++```powershell
++# Windows
++.\smp3-proxy.exe check -c .\config.json
++.\smp3-proxy.exe run -c .\config.json
++```
++
++For the first retest, keep `activation_threshold_mbps` low (for example 5 Mbps), repeat the landing-local HTTP download, and verify that leg 1 remains up instead of cycling through `Remote EOF`.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/UPGRADE-alpha2.1-to-alpha2.2.md /mnt/data/smp3-multipath-kit-alpha2.3-r8/UPGRADE-alpha2.1-to-alpha2.2.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/UPGRADE-alpha2.1-to-alpha2.2.md	2026-08-27 16:18:10.574644124 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/UPGRADE-alpha2.1-to-alpha2.2.md	2026-08-27 16:20:10.391088257 +0000
+@@ -1,35 +1,35 @@
+-# Upgrade alpha2.1 -> alpha2.2
+-
+-alpha2.2 keeps the same JSON configuration schema, secrets, ports, child outbounds and SMP3 aggregation addresses. Only the binaries need to be rebuilt/replaced.
+-
+-**Upgrade both Windows and landing-server binaries together.** alpha2.2 bumps the SMP3 hello version byte to 4 because it adds the logical CLOSE frame. Mixing alpha2.1 and alpha2.2 is intentionally rejected at handshake time.
+-
+-## Build
+-
+-```bash
+-cd smp3-multipath-kit-alpha2.2
+-mkdir -p ~/go-tmp ~/go-build-cache
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./validate-kit.sh
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
+-```
+-
+-Outputs remain:
+-
+-```text
+-dist/smp3-proxy-linux-amd64
+-dist/smp3-proxy-windows-amd64.exe
+-```
+-
+-## Live regression test
+-
+-Keep the existing configs. Replace both binaries, start both processes, then repeat the same 256 MiB local landing test without restarting any process during the transfer. Expected behavior:
+-
+-```text
+-preferred leg connects
+-booster activates
+-leg 1 joins and remains stable
+-256 MiB reaches 100%
+-normal logical CLOSE ends the session without a reconnect loop
+-```
+-
+-The server must no longer truncate the tail because a fixed 5-second drain deadline expired.
++# Upgrade alpha2.1 -> alpha2.2
++
++alpha2.2 keeps the same JSON configuration schema, secrets, ports, child outbounds and SMP3 aggregation addresses. Only the binaries need to be rebuilt/replaced.
++
++**Upgrade both Windows and landing-server binaries together.** alpha2.2 bumps the SMP3 hello version byte to 4 because it adds the logical CLOSE frame. Mixing alpha2.1 and alpha2.2 is intentionally rejected at handshake time.
++
++## Build
++
++```bash
++cd smp3-multipath-kit-alpha2.2
++mkdir -p ~/go-tmp ~/go-build-cache
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./validate-kit.sh
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
++```
++
++Outputs remain:
++
++```text
++dist/smp3-proxy-linux-amd64
++dist/smp3-proxy-windows-amd64.exe
++```
++
++## Live regression test
++
++Keep the existing configs. Replace both binaries, start both processes, then repeat the same 256 MiB local landing test without restarting any process during the transfer. Expected behavior:
++
++```text
++preferred leg connects
++booster activates
++leg 1 joins and remains stable
++256 MiB reaches 100%
++normal logical CLOSE ends the session without a reconnect loop
++```
++
++The server must no longer truncate the tail because a fixed 5-second drain deadline expired.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/VERSION /mnt/data/smp3-multipath-kit-alpha2.3-r8/VERSION
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/VERSION	2026-08-27 15:30:47.733683465 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/VERSION	2026-08-27 16:20:10.390525046 +0000
+@@ -1,5 +1,5 @@
+ kit_version=alpha2.3
+-kit_revision=alpha2.3-r7
++kit_revision=alpha2.3-r8
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/build.sh /mnt/data/smp3-multipath-kit-alpha2.3-r8/build.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/build.sh	2026-08-27 15:30:47.733810553 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/build.sh	2026-08-27 16:20:10.391435600 +0000
+@@ -48,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r7 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r8 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/config/client.example.json /mnt/data/smp3-multipath-kit-alpha2.3-r8/config/client.example.json
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/config/client.example.json	2026-08-27 10:25:12.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/config/client.example.json	2026-08-27 16:20:10.395595468 +0000
+@@ -1,56 +1,56 @@
+-{
+-  "log": { "level": "info", "timestamp": true },
+-  "inbounds": [
+-    {
+-      "type": "mixed",
+-      "tag": "mihomo-local",
+-      "listen": "127.0.0.1",
+-      "listen_port": 2080
+-    }
+-  ],
+-  "outbounds": [
+-    {
+-      "type": "snell",
+-      "tag": "line-path",
+-      "server": "YOUR_LINE_ENTRY",
+-      "server_port": 12345,
+-      "version": 4,
+-      "psk": "YOUR_LINE_SNELL_PSK"
+-    },
+-    {
+-      "type": "snell",
+-      "tag": "public-path",
+-      "server": "YOUR_LANDING_PUBLIC_IP",
+-      "server_port": 23456,
+-      "version": 4,
+-      "psk": "YOUR_PUBLIC_SNELL_PSK"
+-    },
+-    {
+-      "type": "multipath",
+-      "tag": "mp-jp",
+-      "outbounds": ["line-path", "public-path"],
+-      "preferred": "line-path",
+-      "udp_outbound": "line-path",
+-
+-      "endpoints": [
+-        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
+-        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
+-      ],
+-
+-      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+-      "activation_threshold_mbps": 80,
+-      "activation_window": "1s",
+-      "chunk_size": 65536,
+-      "queue_frames": 256,
+-      "bandwidth_mbps": [100, 500],
+-
+-      "max_reorder_frames": 4096,
+-      "max_inflight_frames": 1024,
+-      "ack_interval": "20ms",
+-      "retransmit_timeout": "1500ms",
+-      "recovery_timeout": "15s",
+-      "redial_interval": "1s"
+-    }
+-  ],
+-  "route": { "final": "mp-jp" }
+-}
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
++    {
++      "type": "mixed",
++      "tag": "mihomo-local",
++      "listen": "127.0.0.1",
++      "listen_port": 2080
++    }
++  ],
++  "outbounds": [
++    {
++      "type": "snell",
++      "tag": "line-path",
++      "server": "YOUR_LINE_ENTRY",
++      "server_port": 12345,
++      "version": 4,
++      "psk": "YOUR_LINE_SNELL_PSK"
++    },
++    {
++      "type": "snell",
++      "tag": "public-path",
++      "server": "YOUR_LANDING_PUBLIC_IP",
++      "server_port": 23456,
++      "version": 4,
++      "psk": "YOUR_PUBLIC_SNELL_PSK"
++    },
++    {
++      "type": "multipath",
++      "tag": "mp-jp",
++      "outbounds": ["line-path", "public-path"],
++      "preferred": "line-path",
++      "udp_outbound": "line-path",
++
++      "endpoints": [
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
++      ],
++
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++      "activation_threshold_mbps": 80,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [100, 500],
++
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s",
++      "redial_interval": "1s"
++    }
++  ],
++  "route": { "final": "mp-jp" }
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/config/mihomo-snippet.yaml /mnt/data/smp3-multipath-kit-alpha2.3-r8/config/mihomo-snippet.yaml
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/config/mihomo-snippet.yaml	2026-08-27 10:25:12.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/config/mihomo-snippet.yaml	2026-08-27 16:20:10.395736426 +0000
+@@ -1,11 +1,11 @@
+-proxies:
+-  - name: MP-JP
+-    type: socks5
+-    server: 127.0.0.1
+-    port: 2080
+-    udp: false
+-
+-# Add MP-JP to whichever proxy-group you already use.
+-# TCP is multipath through the local patched sing-box. UDP aggregation is not
+-# implemented; if you need UDP, route it separately in Mihomo or configure the
+-# sing-box udp_outbound for clients that connect directly to its mixed port.
++proxies:
++  - name: MP-JP
++    type: socks5
++    server: 127.0.0.1
++    port: 2080
++    udp: false
++
++# Add MP-JP to whichever proxy-group you already use.
++# TCP is multipath through the local patched sing-box. UDP aggregation is not
++# implemented; if you need UDP, route it separately in Mihomo or configure the
++# sing-box udp_outbound for clients that connect directly to its mixed port.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/config/server.example.json /mnt/data/smp3-multipath-kit-alpha2.3-r8/config/server.example.json
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/config/server.example.json	2026-08-27 10:52:54.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/config/server.example.json	2026-08-27 16:20:10.395637269 +0000
+@@ -1,12 +1,12 @@
+-{
+-  "log": { "level": "info", "timestamp": true },
+-  "inbounds": [
++{
++  "log": { "level": "info", "timestamp": true },
++  "inbounds": [
+     {
+       "type": "snell",
+       "tag": "public-carrier",
+-      "listen": "0.0.0.0",
+-      "listen_port": 23456,
+-      "version": 5,
++      "listen": "0.0.0.0",
++      "listen_port": 23456,
++      "version": 5,
+       "psk": "CHANGE_PUBLIC_SNELL_PSK"
+     },
+     {
+@@ -26,28 +26,28 @@
+         "key_path": "/etc/smp3/server.key"
+       }
+     },
+-    {
+-      "type": "multipath",
+-      "tag": "mp-in",
+-      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
+-      "listen_port": 24444,
+-      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+-
+-      "activation_threshold_mbps": 80,
+-      "activation_window": "1s",
+-      "chunk_size": 65536,
+-      "queue_frames": 256,
+-      "bandwidth_mbps": [100, 500],
+-
+-      "max_reorder_frames": 4096,
+-      "max_inflight_frames": 1024,
+-      "ack_interval": "20ms",
+-      "retransmit_timeout": "1500ms",
+-      "recovery_timeout": "15s"
+-    }
+-  ],
+-  "outbounds": [
+-    { "type": "direct", "tag": "direct" }
+-  ],
+-  "route": { "final": "direct" }
+-}
++    {
++      "type": "multipath",
++      "tag": "mp-in",
++      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
++      "listen_port": 24444,
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++
++      "activation_threshold_mbps": 80,
++      "activation_window": "1s",
++      "chunk_size": 65536,
++      "queue_frames": 256,
++      "bandwidth_mbps": [100, 500],
++
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s"
++    }
++  ],
++  "outbounds": [
++    { "type": "direct", "tag": "direct" }
++  ],
++  "route": { "final": "direct" }
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/install-client.ps1 /mnt/data/smp3-multipath-kit-alpha2.3-r8/install-client.ps1
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/install-client.ps1	2026-08-27 10:25:14.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/install-client.ps1	2026-08-27 16:20:10.391605520 +0000
+@@ -1,36 +1,36 @@
+-param([string]$Config = "$PSScriptRoot\config\client.json")
+-$ErrorActionPreference = "Stop"
+-$bin = "$PSScriptRoot\dist\smp3-proxy-windows-amd64.exe"
+-if (!(Test-Path $bin)) { throw "Build first with build.sh in WSL/Linux." }
+-if (!(Test-Path $Config)) { throw "Create config\client.json from client.example.json first." }
+-
+-$dst = "$env:ProgramData\smp3-proxy"
+-$taskName = "smp3-multipath"
+-New-Item -ItemType Directory -Force $dst | Out-Null
+-
+-# Validate the new config before replacing a running installation.
+-& $bin check -c $Config
+-if ($LASTEXITCODE -ne 0) { throw "New multipath config check failed." }
+-
+-try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
+-try { Stop-ScheduledTask -TaskName "sing-box-multipath" -ErrorAction SilentlyContinue } catch {}
+-try { Unregister-ScheduledTask -TaskName "sing-box-multipath" -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+-Get-Process "smp3-proxy","sing-box-mp" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+-Start-Sleep -Milliseconds 300
+-
+-Copy-Item $bin "$dst\smp3-proxy.exe" -Force
+-Copy-Item $Config "$dst\config.json" -Force
+-& "$dst\smp3-proxy.exe" check -c "$dst\config.json"
+-if ($LASTEXITCODE -ne 0) { throw "Installed config check failed." }
+-
+-$action = New-ScheduledTaskAction -Execute "$dst\smp3-proxy.exe" -Argument "run -c `"$dst\config.json`""
+-$trigger = New-ScheduledTaskTrigger -AtLogOn
+-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+-Start-ScheduledTask -TaskName $taskName
+-Start-Sleep -Seconds 1
+-
+-$p = Get-Process "smp3-proxy" -ErrorAction SilentlyContinue
+-if (!$p) { throw "smp3-proxy did not stay running; start it manually to inspect logs." }
+-Write-Host "Installed/updated. Mihomo can use SOCKS5 127.0.0.1:2080"
+-Write-Host "Config: $dst\config.json"
++param([string]$Config = "$PSScriptRoot\config\client.json")
++$ErrorActionPreference = "Stop"
++$bin = "$PSScriptRoot\dist\smp3-proxy-windows-amd64.exe"
++if (!(Test-Path $bin)) { throw "Build first with build.sh in WSL/Linux." }
++if (!(Test-Path $Config)) { throw "Create config\client.json from client.example.json first." }
++
++$dst = "$env:ProgramData\smp3-proxy"
++$taskName = "smp3-multipath"
++New-Item -ItemType Directory -Force $dst | Out-Null
++
++# Validate the new config before replacing a running installation.
++& $bin check -c $Config
++if ($LASTEXITCODE -ne 0) { throw "New multipath config check failed." }
++
++try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
++try { Stop-ScheduledTask -TaskName "sing-box-multipath" -ErrorAction SilentlyContinue } catch {}
++try { Unregister-ScheduledTask -TaskName "sing-box-multipath" -Confirm:$false -ErrorAction SilentlyContinue } catch {}
++Get-Process "smp3-proxy","sing-box-mp" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
++Start-Sleep -Milliseconds 300
++
++Copy-Item $bin "$dst\smp3-proxy.exe" -Force
++Copy-Item $Config "$dst\config.json" -Force
++& "$dst\smp3-proxy.exe" check -c "$dst\config.json"
++if ($LASTEXITCODE -ne 0) { throw "Installed config check failed." }
++
++$action = New-ScheduledTaskAction -Execute "$dst\smp3-proxy.exe" -Argument "run -c `"$dst\config.json`""
++$trigger = New-ScheduledTaskTrigger -AtLogOn
++$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
++Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
++Start-ScheduledTask -TaskName $taskName
++Start-Sleep -Seconds 1
++
++$p = Get-Process "smp3-proxy" -ErrorAction SilentlyContinue
++if (!$p) { throw "smp3-proxy did not stay running; start it manually to inspect logs." }
++Write-Host "Installed/updated. Mihomo can use SOCKS5 127.0.0.1:2080"
++Write-Host "Config: $dst\config.json"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/package-release.sh /mnt/data/smp3-multipath-kit-alpha2.3-r8/package-release.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/package-release.sh	2026-08-27 15:30:47.733859715 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/package-release.sh	2026-08-27 16:20:10.392124797 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-NAME="smp3-multipath-kit-alpha2.3-r7"
++NAME="smp3-multipath-kit-alpha2.3-r8"
+ STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
+ STAGE="$STAGE_ROOT/$NAME"
+ OUT_ZIP="${1:-$ROOT/$NAME.zip}"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/scripts/apply_source.py /mnt/data/smp3-multipath-kit-alpha2.3-r8/scripts/apply_source.py
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/scripts/apply_source.py	2026-08-27 15:30:47.733960644 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/scripts/apply_source.py	2026-08-27 16:20:10.392308277 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.3-r7 source installed')
++print('[+] SMP3 multipath alpha2.3-r8 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/scripts/gen-secrets.sh /mnt/data/smp3-multipath-kit-alpha2.3-r8/scripts/gen-secrets.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/scripts/gen-secrets.sh	2026-08-27 10:25:14.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/scripts/gen-secrets.sh	2026-08-27 16:20:10.392243201 +0000
+@@ -1,5 +1,5 @@
+-#!/usr/bin/env bash
+-set -euo pipefail
+-command -v openssl >/dev/null || { echo 'openssl is required'; exit 1; }
+-echo "SMP3_PASSWORD=$(openssl rand -hex 32)"
+-echo "PUBLIC_SNELL_PSK=$(openssl rand -base64 24 | tr -d '\n')"
++#!/usr/bin/env bash
++set -euo pipefail
++command -v openssl >/dev/null || { echo 'openssl is required'; exit 1; }
++echo "SMP3_PASSWORD=$(openssl rand -hex 32)"
++echo "PUBLIC_SNELL_PSK=$(openssl rand -base64 24 | tr -d '\n')"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive.go /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/adaptive.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive.go	2026-08-27 15:31:33.139746706 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/adaptive.go	2026-08-27 16:20:46.708085711 +0000
+@@ -786,10 +786,16 @@
+ 		}
+ 	}
+ 	rxPressure := stats.RxPendingFrames >= c.settings.MinRxReorder && stats.RxGapAge >= c.settings.RxGapStall
++	// SMP3 v4 uses one cumulative ACK sequence across both carriers. A missing
++	// earlier leg0 frame can therefore freeze global ACK progress even while later
++	// Hy2/leg1 DATA is arriving perfectly. Aggregate outstanding age would blame
++	// Hy2 for that cross-path ordering gap. Only treat a TX ACK stall as leg1
++	// pressure when the cumulative ACK frontier itself is currently owned by leg1.
+ 	txPressure := stats.OutstandingFrames >= c.settings.MinTxOutstanding &&
+ 		stats.OutstandingFramesByLeg[1] >= c.settings.MinTxOutstanding &&
++		stats.AckFrontierValid && stats.AckFrontierLeg == 1 &&
+ 		ackProgressAge >= c.settings.TxAckStall &&
+-		stats.OldestOutstandingAge >= c.settings.TxAckStall
++		stats.AckFrontierAge >= c.settings.TxAckStall
+ 	decision.RxPressure = rxPressure
+ 	decision.TxPressure = txPressure
+ 
+@@ -820,7 +826,8 @@
+ 		txGoodput == 0 && leg1TxGoodput == 0 &&
+ 		stats.OutstandingFrames >= 2*c.settings.MinTxOutstanding &&
+ 		stats.OutstandingFramesByLeg[1] >= c.settings.MinTxOutstanding &&
+-		ackProgressAge >= severeStall && stats.OldestOutstandingAge >= severeStall
++		stats.AckFrontierValid && stats.AckFrontierLeg == 1 &&
++		ackProgressAge >= severeStall && stats.AckFrontierAge >= severeStall
+ 
+ 	rxImpact := rxDemand && rxPressure && ((leg1RxDegraded && rxLogicalDegraded) || rxNoBaselineSevere)
+ 	txImpact := txDemand && txPressure && ((leg1TxDegraded && txLogicalDegraded) || txNoBaselineSevere)
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/adaptive_test.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/adaptive_test.go	2026-08-27 15:31:52.454675661 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/adaptive_test.go	2026-08-27 16:21:20.509256102 +0000
+@@ -78,6 +78,9 @@
+ 		stats.OutstandingFramesByLeg[1] = 96
+ 		stats.OutstandingBytes = 96 * 64 * 1024
+ 		stats.OldestOutstandingAge = 3 * time.Second
++		stats.AckFrontierValid = true
++		stats.AckFrontierLeg = 1
++		stats.AckFrontierAge = 3 * time.Second
+ 		stats.LastAckProgress = start
+ 		decision := controller.observe(start.Add(elapsed), stats)
+ 		if elapsed == 3*time.Second && decision.State != adaptiveSuspect {
+@@ -89,6 +92,30 @@
+ 	}
+ }
+ 
++func TestAdaptiveTXBlockedByLeg0FrontierDoesNotBlameHy2(t *testing.T) {
++	controller, start := adaptiveTestController()
++	establishDirectionalBaseline(controller, start)
++	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 11 * time.Second, 40 * time.Second} {
++		// Model the R7 live failure: global cumulative ACK progress is old and many
++		// leg1 frames are outstanding, but the oldest unacked sequence is a slow
++		// leg0 frame. Later Hy2 frames cannot retire until that earlier gap closes.
++		stats := adaptiveTestStats(start.Add(elapsed), uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit)
++		stats.OutstandingFrames = 128
++		stats.OutstandingFramesByLeg[0] = 32
++		stats.OutstandingFramesByLeg[1] = 96
++		stats.OutstandingBytes = 128 * 64 * 1024
++		stats.OldestOutstandingAge = elapsed
++		stats.AckFrontierValid = true
++		stats.AckFrontierLeg = 0
++		stats.AckFrontierAge = elapsed
++		stats.LastAckProgress = start
++		decision := controller.observe(start.Add(elapsed), stats)
++		if decision.State != adaptiveHealthy || decision.Fallback || decision.TxPressure {
++			t.Fatalf("slow leg0 cumulative-ACK frontier blamed Hy2 at %s: %+v", elapsed, decision)
++		}
++	}
++}
++
+ func TestAdaptiveTransientRXIssueRecoversWithIdleTX(t *testing.T) {
+ 	controller, start := adaptiveTestController()
+ 	establishDirectionalBaseline(controller, start)
+@@ -112,6 +139,9 @@
+ 	stalled.OutstandingFrames = 96
+ 	stalled.OutstandingFramesByLeg[1] = 96
+ 	stalled.OldestOutstandingAge = 3 * time.Second
++	stalled.AckFrontierValid = true
++	stalled.AckFrontierLeg = 1
++	stalled.AckFrontierAge = 3 * time.Second
+ 	stalled.LastAckProgress = start
+ 	if decision := controller.observe(start.Add(3*time.Second), stalled); decision.State != adaptiveSuspect {
+ 		t.Fatalf("expected TX SUSPECT, got %+v", decision)
+@@ -499,6 +529,9 @@
+ 	first.OutstandingFrames = 2 * controller.settings.MinTxOutstanding
+ 	first.OutstandingFramesByLeg[1] = controller.settings.MinTxOutstanding
+ 	first.OldestOutstandingAge = 6 * time.Second
++	first.AckFrontierValid = true
++	first.AckFrontierLeg = 1
++	first.AckFrontierAge = 6 * time.Second
+ 	first.LastAckProgress = start
+ 	decision := controller.observe(start.Add(6*time.Second), first)
+ 	if decision.State != adaptiveSuspect || decision.Fallback {
+@@ -507,6 +540,7 @@
+ 
+ 	later := first
+ 	later.OldestOutstandingAge = 15 * time.Second
++	later.AckFrontierAge = 15 * time.Second
+ 	decision = controller.observe(start.Add(15*time.Second), later)
+ 	if !decision.Fallback || decision.Reason != "tx_ack_stall" {
+ 		t.Fatalf("persistent no-baseline TX blackhole did not fallback: %+v", decision)
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core.go /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/core.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core.go	2026-08-27 15:36:55.918248289 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/core.go	2026-08-27 16:20:31.334980561 +0000
+@@ -52,6 +52,14 @@
+ 	LastAckProgress        time.Time
+ 	OldestOutstandingAge   time.Duration
+ 	OldestOutstandingByLeg [2]time.Duration
++	// AckFrontier identifies the oldest cumulative-ACK blocker (ackedNext).
++	// With a cumulative ACK wire format, later leg1 frames cannot retire while
++	// an earlier leg0 frame is missing. Adaptive health must therefore blame
++	// tx_ack_stall on leg1 only when the ACK frontier itself is currently owned
++	// by leg1, rather than using aggregate outstanding age alone.
++	AckFrontierValid bool
++	AckFrontierLeg   uint8
++	AckFrontierAge   time.Duration
+ 
+ 	RxUniqueBytesByLeg [2]uint64
+ 	RxDeliveredBytes   uint64
+@@ -386,6 +394,24 @@
+ 			}
+ 		}
+ 	}
++	if frontier, exists := c.outstanding[c.ackedNext]; exists {
++		legID := frontier.lastSentLeg
++		// ACK can race markSent in the same way as handleAck attribution. If the
++		// frontier is actively being written, transitLeg is the best current owner.
++		if legID < 0 && frontier.inTransit {
++			legID = int16(frontier.transitLeg)
++		}
++		if legID >= 0 && legID < 2 {
++			stats.AckFrontierValid = true
++			stats.AckFrontierLeg = uint8(legID)
++			if !frontier.createdAt.IsZero() {
++				stats.AckFrontierAge = now.Sub(frontier.createdAt)
++				if stats.AckFrontierAge < 0 {
++					stats.AckFrontierAge = 0
++				}
++			}
++		}
++	}
+ 	c.txMu.Unlock()
+ 
+ 	for id := range stats.LegUp {
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/core_test.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/core_test.go	2026-08-27 15:37:17.977412091 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/core_test.go	2026-08-27 16:21:32.205711802 +0000
+@@ -1135,3 +1135,28 @@
+ 		t.Fatalf("unexpected forced ACK: type=%d value=%d", second.typ, second.seq)
+ 	}
+ }
++
++func TestSnapshotStatsTracksCumulativeAckFrontierLeg(t *testing.T) {
++	now := time.Now()
++	core := &mpCore{
++		legs:        make(map[uint8]*mpLeg),
++		retiring:    make(map[uint8]*mpLeg),
++		outstanding: make(map[uint64]*txRecord),
++		ackedNext:   10,
++	}
++	core.outstanding[10] = &txRecord{seq: 10, data: []byte("slow-primary"), createdAt: now.Add(-4 * time.Second), lastSentLeg: 0}
++	core.outstanding[11] = &txRecord{seq: 11, data: []byte("fast-booster"), createdAt: now.Add(-3 * time.Second), lastSentLeg: 1}
++	stats := core.snapshotStats()
++	if !stats.AckFrontierValid {
++		t.Fatal("ACK frontier not reported")
++	}
++	if stats.AckFrontierLeg != 0 {
++		t.Fatalf("ACK frontier leg=%d, want leg0", stats.AckFrontierLeg)
++	}
++	if stats.AckFrontierAge < 3*time.Second {
++		t.Fatalf("ACK frontier age=%s, want old leg0 blocker", stats.AckFrontierAge)
++	}
++	if stats.OutstandingFramesByLeg != [2]int{1, 1} {
++		t.Fatalf("outstanding by leg=%v, want [1 1]", stats.OutstandingFramesByLeg)
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=patches' /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/outbound.go /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/outbound.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r7/src/protocol/multipath/outbound.go	2026-08-27 15:38:14.713994006 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r8/src/protocol/multipath/outbound.go	2026-08-27 16:21:02.280913812 +0000
+@@ -244,8 +244,18 @@
+ 			scheduleLeg(1, o.redialInterval)
+ 		}
+ 		if decision.StateChanged && decision.State == adaptiveSuspect {
+-			o.logger.InfoContext(ctx, "multipath leg1 carrier suspect: reason=", decision.Reason,
+-				" pending=", stats.RxPendingFrames, " gap_age=", stats.RxGapAge)
++			if decision.Reason == "tx_ack_stall" {
++				o.logger.InfoContext(ctx, "multipath leg1 carrier suspect: reason=", decision.Reason,
++					" tx_outstanding=", stats.OutstandingFrames,
++					" leg1_outstanding=", stats.OutstandingFramesByLeg[1],
++					" ack_frontier_valid=", stats.AckFrontierValid,
++					" ack_frontier_leg=", stats.AckFrontierLeg,
++					" ack_frontier_age=", stats.AckFrontierAge,
++					" ack_progress_age=", ackProgressAge(stats))
++			} else {
++				o.logger.InfoContext(ctx, "multipath leg1 carrier suspect: reason=", decision.Reason,
++					" rx_pending=", stats.RxPendingFrames, " gap_age=", stats.RxGapAge)
++			}
+ 		}
+ 		if decision.Recovered {
+ 			o.logger.InfoContext(ctx, "multipath leg1 carrier recovered: hysteria2 remains selected")
+@@ -258,7 +268,11 @@
+ 			" leg1_rx_goodput=", decision.Leg1RxGoodputBPS/1e6,
+ 			" leg1_tx_goodput=", decision.Leg1TxGoodputBPS/1e6,
+ 			" rx_pending=", stats.RxPendingFrames, " rx_gap_age=", stats.RxGapAge,
+-			" tx_outstanding=", stats.OutstandingFrames, " ack_progress_age=", ackProgressAge(stats))
++			" tx_outstanding=", stats.OutstandingFrames,
++			" ack_frontier_valid=", stats.AckFrontierValid,
++			" ack_frontier_leg=", stats.AckFrontierLeg,
++			" ack_frontier_age=", stats.AckFrontierAge,
++			" ack_progress_age=", ackProgressAge(stats))
+ 	}
+ 	adaptive.onRecovery = func() {
+ 		o.hy2Health.noteRecovery()

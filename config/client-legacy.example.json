@@ -1,0 +1,53 @@
+{
+  "log": { "level": "info", "timestamp": true },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mihomo-local",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "snell",
+      "tag": "line-path",
+      "server": "YOUR_LINE_ENTRY",
+      "server_port": 12345,
+      "version": 4,
+      "psk": "YOUR_LINE_SNELL_PSK"
+    },
+    {
+      "type": "snell",
+      "tag": "public-path",
+      "server": "YOUR_LANDING_PUBLIC_IP",
+      "server_port": 23456,
+      "version": 4,
+      "psk": "YOUR_PUBLIC_SNELL_PSK"
+    },
+    {
+      "type": "multipath",
+      "tag": "mp-jp",
+      "outbounds": ["line-path", "public-path"],
+      "preferred": "line-path",
+      "udp_outbound": "line-path",
+      "endpoints": [
+        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
+        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
+      ],
+      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+      "activation_threshold_mbps": 80,
+      "activation_window": "1s",
+      "chunk_size": 65536,
+      "queue_frames": 256,
+      "bandwidth_mbps": [100, 500],
+      "max_reorder_frames": 4096,
+      "max_inflight_frames": 1024,
+      "ack_interval": "20ms",
+      "retransmit_timeout": "1500ms",
+      "recovery_timeout": "15s",
+      "redial_interval": "1s"
+    }
+  ],
+  "route": { "final": "mp-jp" }
+}

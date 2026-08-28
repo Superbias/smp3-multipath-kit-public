@@ -1,0 +1,11 @@
+proxies:
+  - name: MP-JP
+    type: socks5
+    server: 127.0.0.1
+    port: 2080
+    udp: false
+
+# Add MP-JP to whichever proxy-group you already use.
+# TCP is multipath through the local patched sing-box. UDP aggregation is not
+# implemented; if you need UDP, route it separately in Mihomo or configure the
+# sing-box udp_outbound for clients that connect directly to its mixed port.

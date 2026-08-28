@@ -1,0 +1,923 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/BUILD_STATUS.md /mnt/data/smp3-multipath-kit-alpha2.3-r6/BUILD_STATUS.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/BUILD_STATUS.md	2026-08-27 12:25:32.462186442 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/BUILD_STATUS.md	2026-08-27 13:00:09.855528878 +0000
+@@ -1,29 +1,23 @@
+-# Alpha2.3-r4 verification status
++# Alpha2.3-r6 verification status
+ 
+-R4 source changes are complete. The standalone SMP3 core/adaptive suite passes
+-under the sandbox's local Go 1.23.2 toolchain with race detection. R4 also adds
+-injected-package tests for the server secondary-before-primary wait and duplicate
+-join serialization; those tests run as part of `go test ./protocol/multipath`
+-inside `build.sh` on the pinned sing-box tree.
++R6 is a source-only iteration focused on the lifecycle races discovered while reviewing R5 first-authenticated-leg session establishment.
+ 
+-The release intentionally does **not** include prebuilt Linux or Windows binaries.
+-The pinned sing-box revision requires Go 1.25.5, while this sandbox has Go 1.23.2
+-and cannot fetch the required toolchain/modules because outbound network/DNS is
+-unavailable.
++Completed in this sandbox:
++- standalone SMP3 core/adaptive/protocol tests: 48 tests
++- `go test -race -count=5`: PASS
++- standalone `go vet`: PASS
++- gofmt: PASS
++- source injector syntax / shell syntax / JSON validation: covered by `validate-kit.sh`
++
++New R6 regressions include:
++- graceful CLOSING still accepts transport repair;
++- FINALIZING rejects late leg attachment;
++- same-ID replacement waits for old read/write workers to retire;
++- completed session tombstone rejects a delayed old leg;
++- expired tombstone permits a fresh create;
++- closed inbound rejects new session creation.
+ 
+-Build in WSL:
+-
+-```bash
+-mkdir -p ~/go-tmp ~/go-build-cache
+-GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
+-```
++The injected full sing-box package test and final Linux/Windows binaries are deferred to the user's WSL build because this sandbox cannot download the pinned Go 1.25.5 toolchain / missing external modules.
+ 
+ Expected binary version:
+-
+-```text
+-1.14.0-beta.14-smp3-alpha2.3-r4
+-```
+-
+-For the live r4 validation, upgrade the landing-server binary as well as the
+-Windows client. The key r4 fix is server-side; running an r4 client against the
+-old r2/r3 server will keep the secondary-HELLO ordering race.
++`1.14.0-beta.14-smp3-alpha2.3-r6`
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/CHANGELOG.md /mnt/data/smp3-multipath-kit-alpha2.3-r6/CHANGELOG.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/CHANGELOG.md	2026-08-27 12:25:32.206180196 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/CHANGELOG.md	2026-08-27 13:00:09.855438665 +0000
+@@ -1,5 +1,23 @@
+ # Changelog
+ 
++## alpha2.3-r6 — session lifecycle / rejoin race hardening
++
++- Added completed-session tombstones for `2 * helloSkew` so a delayed authenticated old leg cannot resurrect a finished wire-v4 session ID into a fresh destination TCP connection.
++- Made FINALIZING/DONE transition atomic with `addLeg()`. ACTIVE and graceful CLOSING still accept transport repair required to drain outstanding DATA; FINALIZING/DONE reject all new legs.
++- Added per-leg retiring barriers. A confirmed-dead same-ID transport is removed from scheduling, but its replacement waits until both old read/write workers have exited, preventing stale generation workers from modifying new-generation TX transit state.
++- Added a per-leg done signal so idle write workers terminate on carrier close, and hardened enqueue-vs-close so DATA cannot remain pinned to a dead send queue.
++- Removed the session-wide attach mutex; core-level locking now serializes attachment without allowing a waiting same-ID retirement to head-of-line block the other leg.
++- Added inbound shutdown gating so `Close()` cannot race with creation of a new logical session.
++- Wire/hello version remains `4`; configuration is unchanged.
++
++## alpha2.3-r5 — first authenticated leg establishes the server core
++
++- Removed the R4 fixed 10-second secondary-before-primary ordering grace. Ordering is no longer a correctness prerequisite.
++- After full HELLO authentication/validation, either leg0 or leg1 may atomically create a missing logical session; a concurrent arrival joins that same fully initialized core.
++- Session creator identity does not change scheduling roles: leg0 remains preferred when present and leg1 remains the client-controlled lazy booster / adaptive public carrier.
++- Retained conservative rejection of truly simultaneous live duplicate same-ID transports because wire v4 has no monotonic leg generation.
++- Wire/hello version remains `4`; configuration is unchanged.
++
+ ## alpha2.3-r4 — server secondary-HELLO ordering fix
+ 
+ - Live client/server logs proved that public Hy2/Snell leg1 can reach the landing SMP3 listener before the preferred-line leg0 has registered the logical session. The old server rejected such an authenticated secondary immediately as an orphan, producing a false zero-useful EOF and eventually adaptive fallback.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/README-zh_CN.md /mnt/data/smp3-multipath-kit-alpha2.3-r6/README-zh_CN.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/README-zh_CN.md	2026-08-27 12:25:32.434185752 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/README-zh_CN.md	2026-08-27 13:00:09.855319526 +0000
+@@ -5,18 +5,18 @@
+ 地址、证书和随机密钥；不要把真实部署配置提交到仓库或发布包。
+ 
+ 
+-## alpha2.3-r4 服务端乱序修复
++## alpha2.3-r5/r6：根治服务端到达乱序并补齐生命周期竞态
+ 
+-R3 实机双端日志已经定位到一个比 EOF 归因更底层的竞态：客户端虽然先创建 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`。旧服务端在尚未看到该 session ID 的 leg0 时会立即拒绝 leg1，于是客户端表现为 `leg1 ready -> EOF -> repeated_zero_useful_eof -> fallback`。
++R5 将服务端 session 建立从“必须 leg0 先注册”改为 **first authenticated leg establishes core**：leg0/leg1 谁先通过完整 SMP3 HELLO 认证并到达 `:24444`，谁就可以原子创建 logical core；另一条随后 JOIN。creator 不改变路径角色，leg0 仍然是 preferred，leg1 仍然是 lazy booster / Hy2 -> Snell fallback。
+ 
+-R4 保持 wire/hello v4 不变，服务端对**已经通过 SMP3 HMAC 验证**、但暂时找不到 primary session 的 leg1 增加最多 10 秒的 ordering grace。leg0 在窗口内注册后，等待中的 leg1 直接 JOIN 同一个 core；HELLO 后已经进入 carrier 缓冲区的数据不会被重新解释为新 session。
++R6 在这个架构上继续补齐逻辑竞态：
+ 
+-同时新增服务端诊断日志：
++- 完成的 session ID 保留约 180 秒 tombstone，迟到旧 leg 不得“复活”成新 core。
++- `addLeg()` 与 FINALIZING/DONE 生命周期切换原子互斥；graceful CLOSING 仍允许用于尾部 ACK/drain 的 transport repair。
++- 同 ID 旧 leg 失败后进入 retiring 状态，必须等其 read/write worker 全部退出，新的同 ID transport 才能 attach，避免旧 generation 的 goroutine 误操作新 generation 的 TX 状态。
++- 每条 leg 增加独立 done 信号，并强化 enqueue/close 竞态处理，防止 frame 永久卡在已退休 transport 的 send queue。
++- inbound Close 与 session 创建互斥，关闭过程中不再产生新 logical session。
++- 真正仍然存活的 duplicate same-ID transport 仍然拒绝；wire v4 没有 monotonic generation 字段，不做不安全的盲替换。
+ 
+-- `multipath secondary leg waited ... for primary session to register`
+-- `multipath leg 1 join rejected ...`
+-- `multipath secondary leg has no active session after wait ...`
++R6 不改变 wire version、配置字段或 adaptive carrier 语义。它解决的是已经启动并写出 HELLO 的 carrier 在服务端的跨路径到达乱序；如果 preferred leg0 在客户端最初拨号阶段就直接失败，bootstrap failover 仍是后续独立能力。
+ 
+-同一 session 的并发 attach 会串行化。R4 仍然保守拒绝真正的 duplicate leg ID，不盲目替换，因为 wire v4 没有 monotonic leg generation，无法可靠判断两个同 ID transport 哪一个更新。
+-
+-R3 的客户端修复继续保留：首次 ambiguous zero-useful EOF 不直接毒化 Hy2 健康状态；同一故障 burst 只建立一次 cooldown。
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/README.md /mnt/data/smp3-multipath-kit-alpha2.3-r6/README.md
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/README.md	2026-08-27 12:25:33.754218265 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/README.md	2026-08-27 13:00:09.855201854 +0000
+@@ -2,7 +2,7 @@
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.3-r4**
++> **当前版本：alpha2.3-r6**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -67,16 +67,23 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
+-## 2.0.1 alpha2.3-r4 server ordering fix
++## 2.0.1 alpha2.3-r5/r6 session ordering 与生命周期修复
+ 
+-alpha2.3-r4 keeps SMP3 wire/hello version `4` unchanged. Live R3 logs exposed a server-side ordering race that the client EOF classifier could only mask:
++alpha2.3-r5/r6 保持 SMP3 wire/hello version `4` 和现有配置 schema 不变。实机双端日志证明：客户端虽然先启动 leg0，但公网 Hy2/Snell leg1 可能更早抵达落地机 `:24444`，因此服务端不能把“leg0 先注册”当成协议正确性的前提。
+ 
+-- The client creates leg0 first, but the public Hy2/Snell leg1 can physically reach `:24444` before the preferred-line leg0 HELLO has registered the session on the landing server.
+-- r3 server immediately rejected a secondary whose session ID was not yet present. The client therefore saw `leg1 ready -> EOF`, retried, and could eventually report `repeated_zero_useful_eof` even though the public carrier itself was healthy.
+-- r4 server holds an authenticated early secondary for up to 10 seconds waiting for the matching primary session to be published. Once leg0 appears, the same connection joins the existing core; bytes already buffered after the HELLO are then consumed normally.
+-- Server now logs explicit `join rejected` reasons and secondary wait timeout events. Same-ID duplicate joins remain rejected rather than blindly replacing a possibly newer transport because wire v4 has no leg-generation counter.
++- **r5：first authenticated leg establishes core。** 通过完整 HELLO HMAC/时间戳/nonce 校验后，leg0 或 leg1 谁先到都可以原子创建 logical session；另一条随后 JOIN。同一个 session ID 的并发首到只会创建一个 core。
++- **路径角色不变。** “谁创建 session”不决定调度角色；leg0 仍是 preferred path，leg1 仍是客户端按需激活的 booster，并继续使用 Hy2 -> Snell adaptive fallback。
++- **r6：completed-session tombstone。** core 完成后，旧 session ID 在 `2 * helloSkew`（当前约 180 秒）内进入 tombstone。迟到的已认证旧 leg 只能被拒绝，不能把已结束的 session 重新创建成一个全新的目标 TCP 连接。
++- **r6：原子 lifecycle gate。** ACTIVE 和 graceful CLOSING 允许 transport repair；FINALIZING/DONE 与 `addLeg()` 互斥，避免 JOIN 在 shutdown snapshot 之后偷偷加入并泄漏。
++- **r6：same-ID rejoin retirement barrier。** 已确认死亡的旧 leg 会先从 scheduler 移除，并等待其 read/write workers 全部退出后才允许相同 leg ID 的新 transport attach，避免 wire v4 无 generation 字段时旧 worker 误清新 generation 的 `inTransit` 状态。
++- **r6：dead-leg queue hardening。** 每条 leg 有独立 done 信号；writer 在 leg 关闭后退出，enqueue 在关闭竞态后会再次清理 transit 状态，避免 frame 永久挂在已经退休的 send queue。
++- **r6：inbound shutdown gate。** 服务端进入 Close 后不再允许并发的新 session 创建。
+ 
+-The r3 client fixes remain in place: ambiguous first zero-useful Hy2 EOF is not an immediate carrier failure, and concurrent failure bursts cannot multiply one cooldown transition.
++真正仍然存活的 duplicate same-ID transport 继续被保守拒绝；wire v4 没有 monotonic leg generation，因此服务端不会猜测两个同时有效的同 ID transport 谁更新。
++
++注意：first-leg-wins 解决的是**已经被客户端启动并成功发送 HELLO 的两条 carrier 的服务端到达乱序**。当前 outbound bootstrap 仍然先拨 preferred leg0；如果 leg0 在最初 `DialContext` 阶段就直接失败，当前版本不会自动用 leg1 创建新 logical connection。这个能力属于后续独立的 bootstrap failover，不在 r6 中偷偷改变。
++
++R3 的客户端 EOF attribution / cooldown burst 修复继续保留。
+ 
+ ## 2.1 alpha2.3 自适应公网 carrier
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/TEST_RESULTS.txt /mnt/data/smp3-multipath-kit-alpha2.3-r6/TEST_RESULTS.txt
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/TEST_RESULTS.txt	2026-08-27 12:20:57.126823192 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/TEST_RESULTS.txt	2026-08-27 13:00:09.855587250 +0000
+@@ -1,52 +1,27 @@
+-SMP3 alpha2.3-r5 source verification
++SMP3 alpha2.3-r6 source verification
+ Date: 2026-08-27
+ 
+-Live evidence behind r5
+-- Public Hy2 and public Snell both reached the landing SMP3 listener.
+-- Server logs proved that successful leg1 JOINs are possible over both carrier
+-  types, excluding basic password/wire/session-ID incompatibility as the root
+-  cause.
+-- Earlier connections could reach :24444 before their matching leg0 session was
+-  registered, proving that cross-carrier HELLO arrival order is not deterministic.
+-- R4 bounded that race with a 10s wait; R5 removes the ordering dependency rather
+-  than extending the timeout.
++Scope
++- R5 first-authenticated-leg session establishment retained.
++- R6 fixes lifecycle/tombstone/same-ID retirement races found in post-R5 review.
+ 
+-R5 changes
+-1. First authenticated leg establishes the server core
+-   - either leg0 or leg1 may create a missing logical session after full HELLO
+-     authentication/validation;
+-   - creator identity does not change scheduling roles;
+-   - leg0 remains preferred when present;
+-   - leg1 remains client-controlled lazy booster / Hy2->Snell adaptive path.
+-2. Atomic create-vs-join
+-   - the server session-map mutex serializes first arrival;
+-   - creator installs its leg before publishing the session;
+-   - a concurrent second leg can only JOIN the same fully initialized core;
+-   - only one routed destination connection is created.
+-3. Leg1-only temporary operation
+-   - core scheduler can send/receive using leg1 while leg0 is absent;
+-   - when leg0 later joins, new inactive/preferred traffic naturally returns to
+-     leg0 without forcibly moving already-outstanding frames.
+-4. Duplicate safety retained
+-   - true duplicate same-ID legs remain rejected because wire v4 has no monotonic
+-     leg-generation field.
+-5. R3 adaptive fixes retained unchanged
+-   - ambiguous first zero-useful EOF suppression;
+-   - repeated still-live zero-useful failure escalation;
+-   - cooldown burst coalescing and probation backoff.
+-
+-Validation completed in this sandbox
+-- standalone core/adaptive/protocol tests: 45 PASS
+-- standalone go test -race -count=5: PASS
+-- standalone go vet: PASS
+-- leg1-only core round-trip regression: PASS
+-- late-leg0 preferred-scheduler regression: PASS
++Validation completed
++- standalone core/adaptive/protocol tests: 48
++- go test -race -count=5: PASS
++- go vet: PASS
+ - gofmt: PASS
+ 
+-Validation deferred to WSL build
+-- injected sing-box package test, including R5 inbound first-leg-wins tests
+-- Linux/Windows final build with pinned sing-box dependency graph
+-Reason: required external Go modules are not fully cached in this sandbox.
++R6-specific coverage
++1. FINALIZING/DONE is atomic with addLeg; late transports are rejected.
++2. Graceful CLOSING still permits transport repair for outstanding-tail drain.
++3. Dead same-ID leg replacement waits for both old workers to retire.
++4. Per-leg writer exits on carrier close and enqueue-vs-close clears transit safely.
++5. Completed session IDs are tombstoned for 2*helloSkew and cannot be resurrected by delayed authenticated legs.
++6. Expired tombstones do not permanently reserve a random session ID.
++7. Inbound shutdown rejects concurrent new session creation.
++
++Deferred
++- injected sing-box package test and final cross-platform build, because the sandbox cannot fetch Go 1.25.5 / missing modules.
+ 
+ Expected final binary version
+-  1.14.0-beta.14-smp3-alpha2.3-r5
++  1.14.0-beta.14-smp3-alpha2.3-r6
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/VERSION /mnt/data/smp3-multipath-kit-alpha2.3-r6/VERSION
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/VERSION	2026-08-27 12:16:01.130332120 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/VERSION	2026-08-27 13:00:09.854304678 +0000
+@@ -1,5 +1,5 @@
+ kit_version=alpha2.3
+-kit_revision=alpha2.3-r5
++kit_revision=alpha2.3-r6
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/build.sh /mnt/data/smp3-multipath-kit-alpha2.3-r6/build.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/build.sh	2026-08-27 12:16:01.130484843 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/build.sh	2026-08-27 13:00:09.854454840 +0000
+@@ -48,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r5 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r6 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/package-release.sh /mnt/data/smp3-multipath-kit-alpha2.3-r6/package-release.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/package-release.sh	2026-08-27 12:16:01.130642127 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/package-release.sh	2026-08-27 13:00:09.854515817 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-NAME="smp3-multipath-kit-alpha2.3-r5"
++NAME="smp3-multipath-kit-alpha2.3-r6"
+ STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
+ STAGE="$STAGE_ROOT/$NAME"
+ OUT_ZIP="${1:-$ROOT/$NAME.zip}"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/scripts/apply_source.py /mnt/data/smp3-multipath-kit-alpha2.3-r6/scripts/apply_source.py
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/scripts/apply_source.py	2026-08-27 12:16:01.130750577 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/scripts/apply_source.py	2026-08-27 13:00:09.854570038 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.3-r5 source installed')
++print('[+] SMP3 multipath alpha2.3-r6 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/core.go /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/core.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/core.go	2026-08-27 14:32:36.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/core.go	2026-08-27 12:53:35.591971103 +0000
+@@ -113,10 +113,16 @@
+ 	onClose func(error)
+ 	once    sync.Once
+ 	writeMu sync.Mutex
++	closed  atomic.Bool
++	done    chan struct{}
++	workers sync.WaitGroup
++	retired chan struct{}
+ }
+ 
+ func (l *mpLeg) close(err error) {
+ 	l.once.Do(func() {
++		l.closed.Store(true)
++		close(l.done)
+ 		_ = l.conn.Close()
+ 		if l.onClose != nil {
+ 			l.onClose(err)
+@@ -135,8 +141,13 @@
+ 	appConn  net.Conn
+ 	pipeConn net.Conn
+ 
+-	legsMu sync.RWMutex
+-	legs   map[uint8]*mpLeg
++	// lifecycleMu serializes the transition into FINALIZING/DONE with leg
++	// attachment. ACTIVE and graceful CLOSING still accept transport repair;
++	// FINALIZING/DONE never do. Lock order is lifecycleMu -> legsMu.
++	lifecycleMu sync.Mutex
++	legsMu      sync.RWMutex
++	legs        map[uint8]*mpLeg
++	retiring    map[uint8]*mpLeg
+ 
+ 	incoming  chan dataFrame
+ 	done      chan struct{}
+@@ -216,6 +227,7 @@
+ 		appConn:     appConn,
+ 		pipeConn:    pipeConn,
+ 		legs:        make(map[uint8]*mpLeg),
++		retiring:    make(map[uint8]*mpLeg),
+ 		incoming:    make(chan dataFrame, cfg.QueueFrames*2),
+ 		done:        make(chan struct{}),
+ 		txStopped:   make(chan struct{}),
+@@ -241,31 +253,67 @@
+ }
+ 
+ func (c *mpCore) addLeg(id uint8, conn net.Conn, onClose func(error)) error {
+-	select {
+-	case <-c.done:
+-		return errCoreClosed
+-	default:
+-	}
+-	c.legsMu.Lock()
+-	if _, exists := c.legs[id]; exists {
++	for {
++		c.lifecycleMu.Lock()
++		if c.finalizing.Load() {
++			c.lifecycleMu.Unlock()
++			return errCoreClosed
++		}
++		select {
++		case <-c.done:
++			c.lifecycleMu.Unlock()
++			return errCoreClosed
++		default:
++		}
++
++		c.legsMu.Lock()
++		if _, exists := c.legs[id]; exists {
++			c.legsMu.Unlock()
++			c.lifecycleMu.Unlock()
++			return errors.New("duplicate multipath leg")
++		}
++		if retiring := c.retiring[id]; retiring != nil {
++			retired := retiring.retired
++			c.legsMu.Unlock()
++			c.lifecycleMu.Unlock()
++			// A dead same-ID leg is not replaceable until both of its worker
++			// goroutines have exited. Otherwise an old worker can clear inTransit
++			// state that already belongs to the new generation.
++			select {
++			case <-retired:
++				continue
++			case <-c.done:
++				return errCoreClosed
++			}
++		}
++
++		leg := &mpLeg{
++			id:      id,
++			conn:    conn,
++			send:    make(chan *txRecord, c.cfg.QueueFrames),
++			onClose: onClose,
++			done:    make(chan struct{}),
++			retired: make(chan struct{}),
++		}
++		leg.workers.Add(2)
++		c.legs[id] = leg
+ 		c.legsMu.Unlock()
+-		return errors.New("duplicate multipath leg")
+-	}
+-	leg := &mpLeg{
+-		id:      id,
+-		conn:    conn,
+-		send:    make(chan *txRecord, c.cfg.QueueFrames),
+-		onClose: onClose,
++		c.lifecycleMu.Unlock()
++
++		// Any successful join/rejoin cancels an older zero-leg recovery deadline.
++		c.recoveryEpoch.Add(1)
++		go func() {
++			defer leg.workers.Done()
++			c.legWriteLoop(leg)
++		}()
++		go func() {
++			defer leg.workers.Done()
++			c.legReadLoop(leg)
++		}()
++		c.kickRetry()
++		c.forceAck()
++		return nil
+ 	}
+-	c.legs[id] = leg
+-	c.legsMu.Unlock()
+-	// Any successful join/rejoin cancels an older zero-leg recovery deadline.
+-	c.recoveryEpoch.Add(1)
+-	go c.legWriteLoop(leg)
+-	go c.legReadLoop(leg)
+-	c.kickRetry()
+-	c.forceAck()
+-	return nil
+ }
+ 
+ // replaceLeg intentionally tears down one carrier while keeping the logical
+@@ -379,18 +427,37 @@
+ 			// From this point on, leg loss is part of normal final teardown and must
+ 			// not start another reconnect/recovery cycle. CLOSE is broadcast because
+ 			// it is the only logical EOF marker and should survive loss of one leg.
+-			c.finalizing.Store(true)
++			if !c.beginFinalizing() {
++				return
++			}
+ 			c.sendCloseFrame(c.txSeq.Load())
+ 			c.fail(closeErr)
+ 		}(err)
+ 	})
+ }
+ 
++func (c *mpCore) beginFinalizing() bool {
++	c.lifecycleMu.Lock()
++	defer c.lifecycleMu.Unlock()
++	select {
++	case <-c.done:
++		return false
++	default:
++	}
++	c.finalizing.Store(true)
++	return true
++}
++
+ func (c *mpCore) fail(err error) {
+ 	if err == nil {
+ 		err = errCoreClosed
+ 	}
+ 	c.closeOne.Do(func() {
++		// This lock makes FINALIZING/DONE atomic with addLeg(). A leg is either
++		// installed before shutdown snapshots transports, or rejected after the
++		// lifecycle transition; it can never appear in between.
++		c.lifecycleMu.Lock()
++		c.finalizing.Store(true)
+ 		c.closeErr.Store(err)
+ 		close(c.done)
+ 		_ = c.pipeConn.Close()
+@@ -401,6 +468,7 @@
+ 			legs = append(legs, leg)
+ 		}
+ 		c.legsMu.RUnlock()
++		c.lifecycleMu.Unlock()
+ 		for _, leg := range legs {
+ 			leg.close(err)
+ 		}
+@@ -696,11 +764,25 @@
+ }
+ 
+ func (c *mpCore) tryQueue(leg *mpLeg, record *txRecord) bool {
++	if leg.closed.Load() {
++		return false
++	}
+ 	if !c.markTransit(record, leg.id) {
+ 		return !c.isOutstanding(record)
+ 	}
+ 	select {
++	case <-leg.done:
++		c.clearTransit(record, leg.id)
++		return false
+ 	case leg.send <- record:
++		// A buffered send can win the select while the leg is closing. Recheck
++		// after enqueue so a record never remains pinned inTransit to a writer
++		// that has already retired. The stale queue entry is harmless because the
++		// record is identity-checked before every write/retry.
++		if leg.closed.Load() {
++			c.clearTransit(record, leg.id)
++			return false
++		}
+ 		return true
+ 	default:
+ 		c.clearTransit(record, leg.id)
+@@ -755,6 +837,8 @@
+ 		select {
+ 		case <-c.done:
+ 			return
++		case <-leg.done:
++			return
+ 		case record := <-leg.send:
+ 			if record == nil {
+ 				continue
+@@ -818,6 +902,7 @@
+ 	c.legsMu.Lock()
+ 	if current := c.legs[leg.id]; current == leg {
+ 		delete(c.legs, leg.id)
++		c.retiring[leg.id] = leg
+ 		removed = true
+ 	}
+ 	remaining := len(c.legs)
+@@ -836,6 +921,21 @@
+ 	}
+ 	c.txMu.Unlock()
+ 
++	// Do not allow a same-ID replacement to attach until *both* old worker
++	// goroutines have exited. The old read/write loops use only an 8-bit leg ID
++	// in TX bookkeeping, so overlap between generations would let a stale worker
++	// clear state belonging to the replacement.
++	go func() {
++		leg.workers.Wait()
++		c.legsMu.Lock()
++		if current := c.retiring[leg.id]; current == leg {
++			delete(c.retiring, leg.id)
++		}
++		c.legsMu.Unlock()
++		close(leg.retired)
++		c.kickRetry()
++	}()
++
+ 	// If the logical core is already closing, this is ordinary transport
+ 	// teardown. Do not re-activate, emit leg-down callbacks, or start recovery
+ 	// timers from the read/write goroutines racing with Close/fail.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/core_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/core_test.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/core_test.go	2026-08-27 12:20:16.838465052 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/core_test.go	2026-08-27 12:54:45.080765308 +0000
+@@ -746,3 +746,116 @@
+ 		t.Fatalf("late leg0 did not regain preferred scheduling role: %#v", chosen)
+ 	}
+ }
++
++type delayedReadCloseConn struct {
++	net.Conn
++	started sync.Once
++	ready   chan struct{}
++	release chan struct{}
++}
++
++func (c *delayedReadCloseConn) Read(p []byte) (int, error) {
++	c.started.Do(func() { close(c.ready) })
++	n, err := c.Conn.Read(p)
++	if err != nil {
++		<-c.release
++	}
++	return n, err
++}
++
++func TestCoreGracefulClosingStillAllowsTransportRepair(t *testing.T) {
++	core, appConn := newCore(testCoreConfig())
++	defer core.Close()
++	defer appConn.Close()
++
++	// CLOSING means no new application payload, not "no transport repair".
++	// Tail ACK/drain may still require a rejoined carrier.
++	core.closing.Store(true)
++	a, b := net.Pipe()
++	defer b.Close()
++	if err := core.addLeg(1, a, nil); err != nil {
++		t.Fatalf("graceful closing rejected transport repair: %v", err)
++	}
++}
++
++func TestCoreFinalizingRejectsLateLeg(t *testing.T) {
++	core, appConn := newCore(testCoreConfig())
++	defer core.Close()
++	defer appConn.Close()
++
++	if !core.beginFinalizing() {
++		t.Fatal("failed to enter finalizing state")
++	}
++	a, b := net.Pipe()
++	defer a.Close()
++	defer b.Close()
++	if err := core.addLeg(0, a, nil); !errors.Is(err, errCoreClosed) {
++		t.Fatalf("late leg attached after finalizing: %v", err)
++	}
++	if core.hasLeg(0) {
++		t.Fatal("finalizing core published a late leg")
++	}
++}
++
++func TestCoreSameIDRejoinWaitsForOldWorkersToRetire(t *testing.T) {
++	core, appConn := newCore(testCoreConfig())
++	defer core.Close()
++	defer appConn.Close()
++
++	a0, b0 := net.Pipe()
++	release := make(chan struct{})
++	wrapped := &delayedReadCloseConn{Conn: a0, ready: make(chan struct{}), release: release}
++	if err := core.addLeg(0, wrapped, nil); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-wrapped.ready:
++	case <-time.After(time.Second):
++		t.Fatal("old leg read worker did not start")
++	}
++	old := core.getLeg(0)
++	if old == nil {
++		t.Fatal("old leg missing")
++	}
++
++	// Drive failure externally so the old read worker can be held after Close.
++	core.handleLegFailure(old, io.ErrClosedPipe)
++	deadline := time.Now().Add(time.Second)
++	for {
++		core.legsMu.RLock()
++		retiring := core.retiring[0]
++		core.legsMu.RUnlock()
++		if retiring == old {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("old leg was not marked retiring")
++		}
++		time.Sleep(time.Millisecond)
++	}
++
++	a1, b1 := net.Pipe()
++	defer b1.Close()
++	joined := make(chan error, 1)
++	go func() { joined <- core.addLeg(0, a1, nil) }()
++
++	select {
++	case err := <-joined:
++		t.Fatalf("replacement attached before old workers retired: %v", err)
++	case <-time.After(50 * time.Millisecond):
++	}
++
++	close(release)
++	select {
++	case err := <-joined:
++		if err != nil {
++			t.Fatalf("replacement failed after retirement: %v", err)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("replacement did not attach after old workers retired")
++	}
++	if current := core.getLeg(0); current == nil || current == old {
++		t.Fatal("same-ID replacement did not become current leg")
++	}
++	_ = b0.Close()
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound.go /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/inbound.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound.go	2026-08-27 12:11:53.410691161 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/inbound.go	2026-08-27 12:56:27.367576298 +0000
+@@ -26,7 +26,6 @@
+ 	destination M.Socksaddr
+ 	core        *mpCore
+ 	appConn     net.Conn
+-	attachMu    sync.Mutex
+ }
+ 
+ type Inbound struct {
+@@ -40,8 +39,11 @@
+ 	nonceMu  sync.Mutex
+ 	nonces   map[[16]byte]time.Time
+ 
+-	access   sync.Mutex
+-	sessions map[[16]byte]*serverSession
++	access             sync.Mutex
++	closed             bool
++	sessions           map[[16]byte]*serverSession
++	tombstones         map[[16]byte]time.Time
++	lastTombstonePrune time.Time
+ }
+ 
+ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MultipathInboundOptions) (adapter.Inbound, error) {
+@@ -68,14 +70,15 @@
+ 	}
+ 	cfg.NotifyPeerOnActivate = true
+ 	i := &Inbound{
+-		Adapter:  inbound.NewAdapter(C.TypeMultipath, tag),
+-		ctx:      ctx,
+-		router:   router,
+-		logger:   logger,
+-		sessions: make(map[[16]byte]*serverSession),
+-		password: options.Password,
+-		nonces:   make(map[[16]byte]time.Time),
+-		cfg:      cfg,
++		Adapter:    inbound.NewAdapter(C.TypeMultipath, tag),
++		ctx:        ctx,
++		router:     router,
++		logger:     logger,
++		sessions:   make(map[[16]byte]*serverSession),
++		tombstones: make(map[[16]byte]time.Time),
++		password:   options.Password,
++		nonces:     make(map[[16]byte]time.Time),
++		cfg:        cfg,
+ 	}
+ 	i.listener = listener.New(listener.Options{
+ 		Context:           ctx,
+@@ -96,11 +99,13 @@
+ 
+ func (i *Inbound) Close() error {
+ 	i.access.Lock()
++	i.closed = true
+ 	sessions := make([]*serverSession, 0, len(i.sessions))
+ 	for _, session := range i.sessions {
+ 		sessions = append(sessions, session)
+ 	}
+ 	i.sessions = make(map[[16]byte]*serverSession)
++	i.tombstones = make(map[[16]byte]time.Time)
+ 	i.access.Unlock()
+ 	for _, session := range sessions {
+ 		session.core.Close()
+@@ -171,6 +176,19 @@
+ // prevents a joiner from observing a half-created session.
+ func (i *Inbound) createOrJoinSession(ctx context.Context, hello helloMessage, destination M.Socksaddr, conn net.Conn, onClose N.CloseHandlerFunc) (*serverSession, bool, error) {
+ 	i.access.Lock()
++	if i.closed {
++		i.access.Unlock()
++		return nil, false, errCoreClosed
++	}
++	now := time.Now()
++	i.pruneTombstonesLocked(now)
++	if expires, retired := i.tombstones[hello.Session]; retired {
++		if now.Before(expires) {
++			i.access.Unlock()
++			return nil, false, E.New("multipath session id is retired")
++		}
++		delete(i.tombstones, hello.Session)
++	}
+ 	if existing := i.sessions[hello.Session]; existing != nil {
+ 		i.access.Unlock()
+ 		if existing.destination.String() != destination.String() {
+@@ -220,19 +238,9 @@
+ }
+ 
+ func (s *serverSession) attachLeg(id uint8, conn net.Conn, onClose func(error)) error {
+-	s.attachMu.Lock()
+-	defer s.attachMu.Unlock()
+-
+-	select {
+-	case <-s.core.Done():
+-		return errCoreClosed
+-	default:
+-	}
+-
+-	// Serialize concurrent joins for the same logical session. Duplicate leg IDs
+-	// remain conservatively rejected in r5: wire v4 has no monotonic generation
+-	// field, so the server must not guess which of two simultaneously valid
+-	// same-ID transports is newer.
++	// mpCore owns attachment serialization. Avoid a session-wide join mutex here:
++	// a same-ID replacement may legitimately wait for its old workers to retire,
++	// and that wait must not head-of-line block the other leg from joining.
+ 	return s.core.addLeg(id, conn, onClose)
+ }
+ 
+@@ -240,10 +248,35 @@
+ 	i.access.Lock()
+ 	if current := i.sessions[id]; current == session {
+ 		delete(i.sessions, id)
++		// A completed wire-v4 session ID must not be allowed to create another
++		// core when a delayed authenticated leg arrives after teardown. New logical
++		// connections use cryptographically random IDs, so retiring the old ID for
++		// the full HELLO replay horizon has no effect on legitimate new sessions.
++		if i.tombstones == nil {
++			i.tombstones = make(map[[16]byte]time.Time)
++		}
++		i.tombstones[id] = time.Now().Add(2 * helloSkew)
+ 	}
+ 	i.access.Unlock()
+ }
+ 
++func (i *Inbound) pruneTombstonesLocked(now time.Time) {
++	if i.tombstones == nil {
++		i.tombstones = make(map[[16]byte]time.Time)
++	}
++	// Avoid an O(number-of-recent-sessions) scan on every short connection. A
++	// direct lookup above still expires the requested ID immediately.
++	if !i.lastTombstonePrune.IsZero() && now.Sub(i.lastTombstonePrune) < 30*time.Second {
++		return
++	}
++	for id, expires := range i.tombstones {
++		if !now.Before(expires) {
++			delete(i.tombstones, id)
++		}
++	}
++	i.lastTombstonePrune = now
++}
++
+ func (i *Inbound) acceptNonce(nonce [16]byte) bool {
+ 	now := time.Now()
+ 	i.nonceMu.Lock()
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound_test.go /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/inbound_test.go
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/src/protocol/multipath/inbound_test.go	2026-08-27 12:12:22.342945438 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/src/protocol/multipath/inbound_test.go	2026-08-27 12:57:02.412101815 +0000
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"net"
+ 	"sync"
+ 	"testing"
+@@ -16,8 +17,9 @@
+ 	// immediate activation callbacks before a logger is installed.
+ 	cfg.ThresholdBytesPS = 1 << 60
+ 	return &Inbound{
+-		sessions: make(map[[16]byte]*serverSession),
+-		cfg:      cfg,
++		sessions:   make(map[[16]byte]*serverSession),
++		tombstones: make(map[[16]byte]time.Time),
++		cfg:        cfg,
+ 	}
+ }
+ 
+@@ -130,7 +132,7 @@
+ 	}
+ }
+ 
+-func TestServerSessionSerializesDuplicateLegJoin(t *testing.T) {
++func TestServerSessionRejectsLiveDuplicateLegJoin(t *testing.T) {
+ 	core, appConn := newCore(testCoreConfig())
+ 	defer core.Close()
+ 	defer appConn.Close()
+@@ -158,3 +160,92 @@
+ 		t.Fatal("duplicate join disturbed existing logical session")
+ 	}
+ }
++
++func TestInboundCompletedSessionTombstoneRejectsLateLeg(t *testing.T) {
++	inbound := newTestInboundForSessionCreation()
++	var id [16]byte
++	id[0] = 0x77
++	destination := M.ParseSocksaddr("example.com:443")
++
++	leg0, peer0 := net.Pipe()
++	defer peer0.Close()
++	session, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
++		Session: id, LegID: 0, Destination: destination.String(),
++	}, destination, leg0, nil)
++	if err != nil || !created {
++		t.Fatalf("create session: created=%v err=%v", created, err)
++	}
++	_ = session.core.Close()
++
++	deadline := time.Now().Add(time.Second)
++	for {
++		inbound.access.Lock()
++		_, active := inbound.sessions[id]
++		expires, retired := inbound.tombstones[id]
++		inbound.access.Unlock()
++		if !active && retired && time.Now().Before(expires) {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("completed session was not tombstoned")
++		}
++		time.Sleep(time.Millisecond)
++	}
++
++	late, latePeer := net.Pipe()
++	defer late.Close()
++	defer latePeer.Close()
++	got, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
++		Session: id, LegID: 1, Destination: destination.String(),
++	}, destination, late, nil)
++	if err == nil || err.Error() != "multipath session id is retired" {
++		t.Fatalf("late old-session leg was not rejected by tombstone: %v", err)
++	}
++	if created || got != nil {
++		t.Fatalf("late leg resurrected completed session: created=%v session=%p", created, got)
++	}
++}
++
++func TestInboundExpiredTombstoneAllowsFreshCreate(t *testing.T) {
++	inbound := newTestInboundForSessionCreation()
++	var id [16]byte
++	id[0] = 0x78
++	inbound.tombstones[id] = time.Now().Add(-time.Second)
++	destination := M.ParseSocksaddr("example.net:443")
++
++	leg, peer := net.Pipe()
++	defer peer.Close()
++	session, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
++		Session: id, LegID: 1, Destination: destination.String(),
++	}, destination, leg, nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer session.core.Close()
++	defer session.appConn.Close()
++	if !created {
++		t.Fatal("expired tombstone blocked a fresh create")
++	}
++}
++
++func TestInboundClosedRejectsNewSession(t *testing.T) {
++	inbound := newTestInboundForSessionCreation()
++	inbound.access.Lock()
++	inbound.closed = true
++	inbound.access.Unlock()
++	var id [16]byte
++	id[0] = 0x79
++	destination := M.ParseSocksaddr("example.org:443")
++	leg, peer := net.Pipe()
++	defer leg.Close()
++	defer peer.Close()
++	got, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
++		Session: id, LegID: 0, Destination: destination.String(),
++	}, destination, leg, nil)
++	if !errors.Is(err, errCoreClosed) {
++		t.Fatalf("closed inbound accepted new session: %v", err)
++	}
++	if created || got != nil {
++		t.Fatalf("closed inbound created session: created=%v session=%p", created, got)
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=*.pyc' '--exclude=__pycache__' '--exclude=.release-stage' '--exclude=.work' '--exclude=dist' '--exclude=alpha2.3-r5-to-r6.diff' /mnt/data/smp3-multipath-kit-alpha2.3-r5/validate-kit.sh /mnt/data/smp3-multipath-kit-alpha2.3-r6/validate-kit.sh
+--- /mnt/data/smp3-multipath-kit-alpha2.3-r5/validate-kit.sh	2026-08-27 07:20:46.000000000 +0000
++++ /mnt/data/smp3-multipath-kit-alpha2.3-r6/validate-kit.sh	2026-08-27 13:04:21.287994582 +0000
+@@ -19,7 +19,12 @@
+ )
+ 
+ echo '[+] source injector syntax'
+-python3 -m py_compile "$ROOT/scripts/apply_source.py"
++python3 - "$ROOT/scripts/apply_source.py" <<'PY'
++from pathlib import Path
++import sys
++path = Path(sys.argv[1])
++compile(path.read_text(), str(path), 'exec')
++PY
+ 
+ echo '[+] shell syntax'
+ bash -n "$ROOT/build.sh" "$ROOT/install-server.sh" "$ROOT/validate-kit.sh" "$ROOT/package-release.sh"

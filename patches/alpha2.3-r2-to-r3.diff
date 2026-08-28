@@ -1,0 +1,769 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/CHANGELOG.md smp3-multipath-kit-alpha2.3/CHANGELOG.md
+--- r2-snapshot/CHANGELOG.md	2026-08-27 07:19:51.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/CHANGELOG.md	2026-08-27 11:06:13.641238898 +0000
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## alpha2.3-r3 — live EOF attribution / cooldown burst fix
++
++- Do not treat every immediate secondary-leg EOF as a Hy2 carrier failure. Zero-useful EOFs on small, unpressured logical sessions with healthy leg0 are classified as an ambiguous short-session JOIN/teardown race.
++- Still count EOF as a real carrier signal after leg1 useful contribution, under RX/TX pressure, or when leg0 is also unavailable. Repeated zero-useful EOFs on the same still-live, demand-driven logical session also become actionable.
++- Suppress immediate reconnect for ambiguous Hy2 EOF; sustained logical demand triggers demand-driven repair from the health loop.
++- Coalesce concurrent established-failure bursts at global health level so one physical outage opens one cooldown penalty. Only a later failed probation canary advances exponential backoff.
++- Keep SMP3 wire/hello version 4 unchanged.
++
++
+ ## alpha2.3 — adaptive public carrier
+ 
+ ### r2 stabilization
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/README-zh_CN.md smp3-multipath-kit-alpha2.3/README-zh_CN.md
+--- r2-snapshot/README-zh_CN.md	2026-08-27 07:19:51.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/README-zh_CN.md	2026-08-27 11:06:13.641073457 +0000
+@@ -5,8 +5,15 @@
+ 地址、证书和随机密钥；不要把真实部署配置提交到仓库或发布包。
+ 
+ 
+-## alpha2.3-r2 稳定性补丁
++## alpha2.3-r3 稳定性补丁
+ 
+ 本轮进一步处理了四个边界：无健康 baseline 的首发黑洞、canary/active-success 的 idle 时间误计、
+ 并发 initial dial failure 对 cooldown 的重复放大，以及仅 leg0 有流量时错误清除 Hy2 failure history。
+ 完整算法和参数说明见 `README.md`。
++
++### r3 实机修复
++
++- 短生命周期逻辑连接中，leg1 刚 JOIN/ready 后出现零 useful-byte EOF 时，不再直接计为 Hy2 carrier 故障；只有在 leg1 已有 useful contribution、出现 RX/TX pressure、leg0 同时不可用，或同一个仍有持续 demand 的逻辑会话在 demand-driven repair 后再次出现零 useful-byte EOF 时才计入 carrier failure。
++- 被判定为短连接 JOIN/teardown 竞态的 Hy2 EOF 不立即重拨；若逻辑连接仍有持续 demand，health loop 再触发 demand-driven repair，避免 connect/JOIN/EOF 重连风暴。
++- 多个并发逻辑连接同时观察到同一 Hy2 物理故障时，只允许第一个建立 cooldown；同一 burst 不再把 90s 立即放大成 180s/300s。只有 cooldown 后新的 probation canary 失败才升级退避。
++- SMP3 wire/hello version 保持 v4，不改线协议。
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/README.md smp3-multipath-kit-alpha2.3/README.md
+--- r2-snapshot/README.md	2026-08-27 07:19:51.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/README.md	2026-08-27 11:06:13.640898321 +0000
+@@ -2,7 +2,7 @@
+ 
+ > 基于固定版本 sing-box 的实验性应用层多路径传输方案。
+ >
+-> **当前版本：alpha2.3**
++> **当前版本：alpha2.3-r3**
+ > **固定上游：sing-box v1.14.0-beta.14**  
+ > **固定 revision：`4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`**
+ 
+@@ -67,6 +67,15 @@
+ - 正常 EOF 会等待 outstanding 数据完成 ACK 后再结束，避免大文件尾部截断。
+ - UDP 不做 multipath 聚合，而是交给 `udp_outbound`。
+ 
++## 2.0.1 alpha2.3-r3 live-fix
++
++alpha2.3-r3 keeps SMP3 wire/hello version `4` unchanged and fixes two issues confirmed by live Windows + landing-server logs:
++
++- **Short-session EOF attribution:** a secondary Hy2 leg may be locally ready while the remote logical TCP session has already ended before the server processes JOIN. A zero-useful EOF on a small, unpressured logical session is now treated as an ambiguous teardown race instead of an immediate carrier-health failure. Useful Hy2 contribution, logical pressure, or simultaneous leg0 loss still make the EOF immediately actionable. If useful demand persists after an ambiguous EOF, a demand-driven repair is attempted; repeated zero-useful EOF on that same live logical session then becomes actionable.
++- **Cooldown burst coalescing:** concurrent logical connections observing the same Hy2 outage share the already-active cooldown. They no longer multiply a single burst from 90s to 180s/300s. A later failed probation canary is still allowed to advance exponential backoff.
++
++Ambiguous zero-useful Hy2 EOFs do not immediately redial. If the logical stream remains active with useful demand, the adaptive health loop requests a demand-driven leg1 repair.
++
+ ## 2.1 alpha2.3 自适应公网 carrier
+ 
+ alpha2.3 保持 SMP3 wire protocol 不变（magic `SMP3`、hello version `4`），只在
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/VERSION smp3-multipath-kit-alpha2.3/VERSION
+--- r2-snapshot/VERSION	2026-08-27 07:19:51.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/VERSION	2026-08-27 10:59:47.001705791 +0000
+@@ -1,5 +1,5 @@
+ kit_version=alpha2.3
+-kit_revision=alpha2.3-r2
++kit_revision=alpha2.3-r3
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/build.sh smp3-multipath-kit-alpha2.3/build.sh
+--- r2-snapshot/build.sh	2026-08-27 07:19:51.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/build.sh	2026-08-27 10:59:47.001842536 +0000
+@@ -48,7 +48,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r3 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/package-release.sh smp3-multipath-kit-alpha2.3/package-release.sh
+--- r2-snapshot/package-release.sh	2026-08-27 07:23:38.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/package-release.sh	2026-08-27 11:03:20.995499135 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-NAME="smp3-multipath-kit-alpha2.3"
++NAME="smp3-multipath-kit-alpha2.3-r3"
+ STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
+ STAGE="$STAGE_ROOT/$NAME"
+ OUT_ZIP="${1:-$ROOT/$NAME.zip}"
+@@ -20,7 +20,7 @@
+   [ -f "$ROOT/$f" ] && cp -a "$ROOT/$f" "$STAGE/$f"
+ done
+ cp -a "$ROOT/config/." "$STAGE/config/"
+-cp -a "$ROOT/patches/alpha2.2-to-alpha2.3.diff" "$STAGE/patches/"
++cp -a "$ROOT/patches/." "$STAGE/patches/"
+ cp -a "$ROOT/scripts/." "$STAGE/scripts/"
+ cp -a "$ROOT/src/." "$STAGE/src/"
+ cp -a "$LINUX_BIN" "$WINDOWS_BIN" "$STAGE/dist/"
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/scripts/apply_source.py smp3-multipath-kit-alpha2.3/scripts/apply_source.py
+--- r2-snapshot/scripts/apply_source.py	2026-08-27 11:11:48.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/scripts/apply_source.py	2026-08-27 10:59:47.001910693 +0000
+@@ -1,44 +1,44 @@
+-#!/usr/bin/env python3
+-from pathlib import Path
+-import shutil, sys
+-
+-root = Path(sys.argv[1]).resolve()
+-payload = Path(__file__).resolve().parents[1] / 'src'
+-
+-def edit(path, fn):
+-    p=root/path; s=p.read_text(); n=fn(s)
+-    if n==s: print(f'[=] {path}: already patched or no change')
+-    else: p.write_text(n); print(f'[+] patched {path}')
+-
+-def constant(s):
+-    if 'TypeMultipath' not in s:
+-        if '\tTypeBridge             = "bridge"\n' in s:
+-            s=s.replace('\tTypeBridge             = "bridge"\n','\tTypeBridge             = "bridge"\n\tTypeMultipath          = "multipath"\n',1)
+-        else:
+-            s=s.replace('\tTypeDirect             = "direct"\n','\tTypeDirect             = "direct"\n\tTypeMultipath          = "multipath"\n',1)
+-    if 'case TypeMultipath:' not in s:
+-        marker='\tcase TypeBridge:\n\t\treturn "Bridge"\n'
+-        if marker in s: s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
+-        else:
+-            marker='\tcase TypeDirect:\n\t\treturn "Direct"\n'
+-            s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
+-    return s
+-
+-def registry(s):
+-    if 'protocol/multipath' not in s:
+-        s=s.replace('\t"github.com/sagernet/sing-box/protocol/mixed"\n','\t"github.com/sagernet/sing-box/protocol/mixed"\n\t"github.com/sagernet/sing-box/protocol/multipath"\n',1)
+-    if 'multipath.RegisterInbound(registry)' not in s:
+-        s=s.replace('\tdirect.RegisterInbound(registry)\n','\tdirect.RegisterInbound(registry)\n\tmultipath.RegisterInbound(registry)\n',1)
+-    if 'multipath.RegisterOutbound(registry)' not in s:
+-        marker='\tbridge.RegisterOutbound(registry)\n'
+-        if marker in s: s=s.replace(marker, marker+'\tmultipath.RegisterOutbound(registry)\n',1)
+-        else: s=s.replace('\tdirect.RegisterOutbound(registry)\n','\tdirect.RegisterOutbound(registry)\n\tmultipath.RegisterOutbound(registry)\n',1)
+-    return s
+-
+-edit(Path('constant/proxy.go'), constant)
+-edit(Path('include/registry.go'), registry)
+-(root/'option').mkdir(exist_ok=True)
+-(root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+-shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+-for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.3 source installed')
++#!/usr/bin/env python3
++from pathlib import Path
++import shutil, sys
++
++root = Path(sys.argv[1]).resolve()
++payload = Path(__file__).resolve().parents[1] / 'src'
++
++def edit(path, fn):
++    p=root/path; s=p.read_text(); n=fn(s)
++    if n==s: print(f'[=] {path}: already patched or no change')
++    else: p.write_text(n); print(f'[+] patched {path}')
++
++def constant(s):
++    if 'TypeMultipath' not in s:
++        if '\tTypeBridge             = "bridge"\n' in s:
++            s=s.replace('\tTypeBridge             = "bridge"\n','\tTypeBridge             = "bridge"\n\tTypeMultipath          = "multipath"\n',1)
++        else:
++            s=s.replace('\tTypeDirect             = "direct"\n','\tTypeDirect             = "direct"\n\tTypeMultipath          = "multipath"\n',1)
++    if 'case TypeMultipath:' not in s:
++        marker='\tcase TypeBridge:\n\t\treturn "Bridge"\n'
++        if marker in s: s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
++        else:
++            marker='\tcase TypeDirect:\n\t\treturn "Direct"\n'
++            s=s.replace(marker, marker+'\tcase TypeMultipath:\n\t\treturn "Multipath"\n',1)
++    return s
++
++def registry(s):
++    if 'protocol/multipath' not in s:
++        s=s.replace('\t"github.com/sagernet/sing-box/protocol/mixed"\n','\t"github.com/sagernet/sing-box/protocol/mixed"\n\t"github.com/sagernet/sing-box/protocol/multipath"\n',1)
++    if 'multipath.RegisterInbound(registry)' not in s:
++        s=s.replace('\tdirect.RegisterInbound(registry)\n','\tdirect.RegisterInbound(registry)\n\tmultipath.RegisterInbound(registry)\n',1)
++    if 'multipath.RegisterOutbound(registry)' not in s:
++        marker='\tbridge.RegisterOutbound(registry)\n'
++        if marker in s: s=s.replace(marker, marker+'\tmultipath.RegisterOutbound(registry)\n',1)
++        else: s=s.replace('\tdirect.RegisterOutbound(registry)\n','\tdirect.RegisterOutbound(registry)\n\tmultipath.RegisterOutbound(registry)\n',1)
++    return s
++
++edit(Path('constant/proxy.go'), constant)
++edit(Path('include/registry.go'), registry)
++(root/'option').mkdir(exist_ok=True)
++(root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
++shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
++for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
++print('[+] SMP3 multipath alpha2.3-r3 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/src/protocol/multipath/adaptive.go smp3-multipath-kit-alpha2.3/src/protocol/multipath/adaptive.go
+--- r2-snapshot/src/protocol/multipath/adaptive.go	2026-08-27 07:14:01.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/src/protocol/multipath/adaptive.go	2026-08-27 11:05:16.897266290 +0000
+@@ -1,6 +1,9 @@
+ package multipath
+ 
+ import (
++	"errors"
++	"io"
++	"strings"
+ 	"sync"
+ 	"time"
+ )
+@@ -140,17 +143,19 @@
+ 	ctrl      *adaptiveController
+ 	running   bool
+ 
+-	hy2FailureTimes     []time.Time
+-	hy2Established      bool
+-	healthyActiveFrom   time.Time
+-	recoveryReported    bool
+-	activeSuccessSeen   bool
+-	canaryUsefulBytes   uint64
+-	canaryActiveWindows int
+-	lastCanaryUsefulAt  time.Time
+-	activeUsefulBytes   uint64
+-	activeUsefulWindows int
+-	lastActiveUsefulAt  time.Time
++	hy2FailureTimes      []time.Time
++	healthyActiveFrom    time.Time
++	recoveryReported     bool
++	activeSuccessSeen    bool
++	canaryUsefulBytes    uint64
++	canaryActiveWindows  int
++	lastCanaryUsefulAt   time.Time
++	activeUsefulBytes    uint64
++	activeUsefulWindows  int
++	lastActiveUsefulAt   time.Time
++	legReadyRxUseful     uint64
++	legReadyTxUseful     uint64
++	ambiguousEOFFailures uint32
+ 
+ 	onSelected         func(leg1Carrier, bool)
+ 	onHealth           func(adaptiveDecision, coreStats)
+@@ -199,13 +204,6 @@
+ 	return carrier
+ }
+ 
+-func (s *adaptiveConn) hy2WasEstablished() bool {
+-	s.mu.Lock()
+-	established := s.hy2Established
+-	s.mu.Unlock()
+-	return established
+-}
+-
+ func ackProgressAge(stats coreStats) time.Duration {
+ 	if stats.LastAckProgress.IsZero() {
+ 		return stats.OldestOutstandingAge
+@@ -219,8 +217,13 @@
+ 
+ func (s *adaptiveConn) markLegReady() {
+ 	now := time.Now()
++	var stats coreStats
++	if s.core != nil {
++		stats = s.core.snapshotStats()
++	}
+ 	s.mu.Lock()
+-	s.hy2Established = s.carrier == carrierHy2
++	s.legReadyRxUseful = stats.RxUniqueBytesByLeg[1]
++	s.legReadyTxUseful = stats.TxAckedUsefulByLeg[1]
+ 	if !s.enabled || s.carrier != carrierHy2 || s.ctrl != nil {
+ 		s.mu.Unlock()
+ 		return
+@@ -246,12 +249,80 @@
+ 	go s.healthLoop(core)
+ }
+ 
+-func (s *adaptiveConn) markHy2DialSucceeded() {
++func isEOFLikeCarrierError(err error) bool {
++	if err == nil {
++		return false
++	}
++	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
++		return true
++	}
++	message := strings.ToLower(err.Error())
++	return strings.Contains(message, "eof")
++}
++
++// shouldRecordCarrierFailure distinguishes an actual Hy2 carrier failure from
++// the common secondary-leg teardown race at the end of a short logical TCP
++// session. SMP3 v4 has no explicit server-side JOIN acknowledgement, so a local
++// writeHello/addLeg success only proves that the carrier accepted bytes; the
++// server may legitimately close the secondary because the logical session
++// finished just before that hello was processed.
++//
++// An EOF with zero useful leg1 contribution is therefore treated as ambiguous
++// while leg0 is healthy and the logical stream is unpressured. The first such
++// EOF does not poison global health. If useful demand persists, the health loop
++// repairs leg1; repeated zero-useful EOFs on that same logical session are then
++// strong evidence of a real carrier problem. Useful Hy2 contribution, logical
++// pressure, or simultaneous leg0 loss make an EOF immediately actionable.
++func (s *adaptiveConn) shouldRecordCarrierFailure(err error, stats coreStats, legWasReady bool) bool {
++	if !isEOFLikeCarrierError(err) {
++		return true
++	}
+ 	s.mu.Lock()
+-	if s.enabled && s.carrier == carrierHy2 {
+-		s.hy2Established = true
++	settings := s.settings
++	readyRx := s.legReadyRxUseful
++	readyTx := s.legReadyTxUseful
++	s.mu.Unlock()
++
++	if legWasReady {
++		leg1Useful := counterDelta(stats.RxUniqueBytesByLeg[1], readyRx) + counterDelta(stats.TxAckedUsefulByLeg[1], readyTx)
++		if leg1Useful > 0 {
++			return true
++		}
+ 	}
++	if !stats.LegUp[0] {
++		return true
++	}
++	rxPressure := stats.RxPendingFrames >= settings.MinRxReorder && stats.RxGapAge >= settings.RxGapStall
++	txPressure := stats.OutstandingFrames >= settings.MinTxOutstanding && ackProgressAge(stats) >= settings.TxAckStall
++	if rxPressure || txPressure {
++		return true
++	}
++	return false
++}
++
++// noteAmbiguousCarrierEOF tracks zero-useful EOFs only within one logical
++// session. A second occurrence is meaningful because ambiguous EOFs do not
++// trigger immediate repair: another attempt only happens after the health loop
++// observes continuing useful demand. This prevents a burst of unrelated short
++// HTTP/TLS sessions from poisoning global Hy2 health while still detecting a
++// carrier that repeatedly accepts and drops a live long-running session.
++func (s *adaptiveConn) noteAmbiguousCarrierEOF() bool {
++	s.mu.Lock()
++	if !s.enabled || s.carrier != carrierHy2 {
++		s.mu.Unlock()
++		return false
++	}
++	s.ambiguousEOFFailures++
++	count := s.ambiguousEOFFailures
++	threshold := s.settings.HardFailureThreshold
+ 	s.mu.Unlock()
++	if threshold == 0 {
++		threshold = 2
++	}
++	if count >= threshold {
++		return s.switchToSnell("repeated_zero_useful_eof", true)
++	}
++	return false
+ }
+ 
+ func (s *adaptiveConn) recordCarrierFailure(established bool) bool {
+@@ -303,6 +374,7 @@
+ 	s.probation = false
+ 	s.state = adaptiveFallback
+ 	s.ctrl = nil
++	s.ambiguousEOFFailures = 0
+ 	s.healthyActiveFrom = time.Time{}
+ 	onFallback := s.onFallback
+ 	s.mu.Unlock()
+@@ -425,7 +497,7 @@
+ 	}
+ 	// An abnormal logical-core death before useful canary traffic is a carrier
+ 	// failure. Ordinary logical close is marked closing and only releases owner.
+-	s.global.noteFallback(time.Now(), s.settings)
++	s.global.noteFallback(time.Now(), s.settings, true)
+ 	if onRelease != nil {
+ 		onRelease()
+ 	}
+@@ -555,9 +627,17 @@
+ 	h.mu.Unlock()
+ }
+ 
+-func (h *hy2GlobalHealth) noteFallback(now time.Time, settings adaptiveSettings) time.Duration {
++func (h *hy2GlobalHealth) noteFallback(now time.Time, settings adaptiveSettings, probation bool) time.Duration {
+ 	h.mu.Lock()
+ 	defer h.mu.Unlock()
++	// Multiple logical connections can observe the same physical Hy2 outage at
++	// nearly the same time. Once the first one opens a live cooldown, residual
++	// failures from that burst must share the existing penalty instead of
++	// multiplying 90s -> 180s -> 300s. Only a later probation failure is allowed
++	// to advance the exponential backoff.
++	if h.state == hy2Cooldown && now.Before(h.cooldownUntil) && !probation {
++		return h.cooldownPenalty
++	}
+ 	return h.noteFallbackLocked(now, settings)
+ }
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/src/protocol/multipath/adaptive_test.go smp3-multipath-kit-alpha2.3/src/protocol/multipath/adaptive_test.go
+--- r2-snapshot/src/protocol/multipath/adaptive_test.go	2026-08-27 07:14:39.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/src/protocol/multipath/adaptive_test.go	2026-08-27 11:05:48.023998276 +0000
+@@ -261,7 +261,7 @@
+ 	t.Helper()
+ 	settings := defaultAdaptiveSettings()
+ 	health := &hy2GlobalHealth{}
+-	health.noteFallback(start, settings)
++	health.noteFallback(start, settings, false)
+ 	selection := health.selectCarrier(start.Add(settings.Cooldown))
+ 	if selection.carrier != carrierHy2 || !selection.probation {
+ 		t.Fatalf("expected Hy2 probation selection, got %+v", selection)
+@@ -270,7 +270,6 @@
+ 	conn.selected = true
+ 	conn.carrier = carrierHy2
+ 	conn.probation = true
+-	conn.hy2Established = true
+ 	return conn, health, settings
+ }
+ 
+@@ -332,7 +331,7 @@
+ 	settings := defaultAdaptiveSettings()
+ 	start := time.Unix(7000, 0)
+ 	health := hy2GlobalHealth{}
+-	health.noteFallback(start, settings)
++	health.noteFallback(start, settings, false)
+ 	var wg sync.WaitGroup
+ 	results := make(chan adaptiveSelection, 100)
+ 	for i := 0; i < 100; i++ {
+@@ -361,7 +360,7 @@
+ 	settings := defaultAdaptiveSettings()
+ 	start := time.Unix(8000, 0)
+ 	health := hy2GlobalHealth{}
+-	health.noteFallback(start, settings)
++	health.noteFallback(start, settings, false)
+ 	canary := health.selectCarrier(start.Add(settings.Cooldown))
+ 	if canary.carrier != carrierHy2 || !canary.probation {
+ 		t.Fatalf("expected probation canary, got %+v", canary)
+@@ -370,7 +369,7 @@
+ 	if next := health.selectCarrier(start.Add(settings.Cooldown)); next.carrier != carrierHy2 || !next.probation {
+ 		t.Fatalf("normal close did not release canary owner: %+v", next)
+ 	}
+-	health.noteFallback(start.Add(settings.Cooldown), settings)
++	health.noteFallback(start.Add(settings.Cooldown), settings, true)
+ 	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierSnell {
+ 		t.Fatalf("probation failure did not re-enter cooldown: %+v", next)
+ 	}
+@@ -405,7 +404,6 @@
+ 	adaptive := newAdaptiveConn(true, settings, health, leftCore)
+ 	adaptive.selected = true
+ 	adaptive.carrier = carrierHy2
+-	adaptive.hy2Established = true
+ 	var fallbacks atomic.Int32
+ 	adaptive.onFallback = func(string, bool, bool) {
+ 		fallbacks.Add(1)
+@@ -458,13 +456,13 @@
+ 	settings := defaultAdaptiveSettings()
+ 	health := hy2GlobalHealth{}
+ 	start := time.Unix(9000, 0)
+-	if got := health.noteFallback(start, settings); got != 90*time.Second {
++	if got := health.noteFallback(start, settings, false); got != 90*time.Second {
+ 		t.Fatalf("first cooldown=%s, want 90s", got)
+ 	}
+ 	if got := health.selectCarrier(start.Add(time.Second)).carrier; got != carrierSnell {
+ 		t.Fatalf("cooldown selected %s, want snell", got)
+ 	}
+-	if got := health.noteFallback(start.Add(90*time.Second), settings); got != 180*time.Second {
++	if got := health.noteFallback(start.Add(90*time.Second), settings, true); got != 180*time.Second {
+ 		t.Fatalf("second cooldown=%s, want 180s", got)
+ 	}
+ 	health.noteRecovery()
+@@ -593,3 +591,151 @@
+ 		t.Fatal("continuous real Hy2 contribution did not record active success")
+ 	}
+ }
++
++func TestShortSessionEOFWithoutHy2ContributionIsNotCarrierFailure(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++	conn.legReadyRxUseful = 0
++	conn.legReadyTxUseful = 0
++	stats := coreStats{
++		LegUp:             [2]bool{true, false},
++		RxDeliveredBytes:  settings.MinCanaryUsefulBytes / 4,
++		LastAckProgress:   time.Now(),
++		RxPendingFrames:   0,
++		OutstandingFrames: 0,
++	}
++	if conn.shouldRecordCarrierFailure(errors.New("snell: server error 101: Remote EOF"), stats, true) {
++		t.Fatal("small healthy logical session EOF was misclassified as Hy2 carrier failure")
++	}
++}
++
++func TestLargeUnpressuredZeroUsefulEOFFirstOccurrenceIsAmbiguous(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++	stats := coreStats{
++		LegUp:            [2]bool{true, false},
++		RxDeliveredBytes: 64 * settings.MinCanaryUsefulBytes,
++		LastAckProgress:  time.Now(),
++	}
++	if conn.shouldRecordCarrierFailure(io.EOF, stats, true) {
++		t.Fatal("first zero-useful EOF on healthy unpressured leg0 should remain ambiguous even on a large logical session")
++	}
++}
++
++func TestRepeatedAmbiguousEOFOnSameLiveSessionFallsBack(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	health := &hy2GlobalHealth{}
++	conn := newAdaptiveConn(true, settings, health, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++	var fallbackReason string
++	conn.onFallback = func(reason string, cooldown bool, probation bool) {
++		fallbackReason = reason
++		if cooldown {
++			health.noteFallback(time.Unix(12500, 0), settings, probation)
++		}
++	}
++	if conn.noteAmbiguousCarrierEOF() {
++		t.Fatal("first ambiguous EOF should not fallback")
++	}
++	if !conn.noteAmbiguousCarrierEOF() {
++		t.Fatal("repeated ambiguous EOF on same live session did not fallback")
++	}
++	if fallbackReason != "repeated_zero_useful_eof" {
++		t.Fatalf("unexpected fallback reason: %q", fallbackReason)
++	}
++	if health.cooldownPenalty != settings.Cooldown {
++		t.Fatalf("repeated ambiguous EOF did not open base cooldown: %s", health.cooldownPenalty)
++	}
++}
++
++func TestEOFWithUsefulHy2ContributionCountsAsCarrierFailure(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++	conn.legReadyRxUseful = 100
++	conn.legReadyTxUseful = 200
++	stats := coreStats{
++		LegUp:              [2]bool{true, false},
++		RxUniqueBytesByLeg: [2]uint64{0, 101},
++		TxAckedUsefulByLeg: [2]uint64{0, 200},
++		LastAckProgress:    time.Now(),
++		RxDeliveredBytes:   101,
++		OutstandingFrames:  0,
++		RxPendingFrames:    0,
++	}
++	if !conn.shouldRecordCarrierFailure(io.EOF, stats, true) {
++		t.Fatal("EOF after real Hy2 useful contribution was ignored")
++	}
++}
++
++func TestEOFUnderLogicalPressureCountsAsCarrierFailure(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
++	conn.selected = true
++	conn.carrier = carrierHy2
++	now := time.Now()
++	stats := coreStats{
++		LegUp:             [2]bool{true, false},
++		OutstandingFrames: settings.MinTxOutstanding,
++		LastAckProgress:   now.Add(-settings.TxAckStall - time.Second),
++	}
++	if !conn.shouldRecordCarrierFailure(io.EOF, stats, true) {
++		t.Fatal("EOF during logical TX pressure was ignored")
++	}
++}
++
++func TestConcurrentEstablishedFallbackBurstKeepsSingleCooldownPenalty(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	start := time.Unix(13000, 0)
++	health := hy2GlobalHealth{}
++	if got := health.noteFallback(start, settings, false); got != settings.Cooldown {
++		t.Fatalf("first established failure cooldown=%s want=%s", got, settings.Cooldown)
++	}
++	firstUntil := health.cooldownUntil
++	for i := 1; i <= 20; i++ {
++		if got := health.noteFallback(start.Add(time.Duration(i)*time.Millisecond), settings, false); got != settings.Cooldown {
++			t.Fatalf("concurrent failure %d multiplied cooldown: %s", i, got)
++		}
++	}
++	if health.cooldownPenalty != settings.Cooldown {
++		t.Fatalf("concurrent established burst penalty=%s want=%s", health.cooldownPenalty, settings.Cooldown)
++	}
++	if !health.cooldownUntil.Equal(firstUntil) {
++		t.Fatalf("concurrent established burst extended cooldown: first=%s final=%s", firstUntil, health.cooldownUntil)
++	}
++
++	selection := health.selectCarrier(firstUntil)
++	if selection.carrier != carrierHy2 || !selection.probation {
++		t.Fatalf("expected single probation canary after cooldown, got %+v", selection)
++	}
++	if got := health.noteFallback(firstUntil.Add(time.Second), settings, true); got != 2*settings.Cooldown {
++		t.Fatalf("probation failure did not advance backoff: got=%s", got)
++	}
++}
++
++func TestHundredShortSessionEOFsDoNotPoisonGlobalHy2Health(t *testing.T) {
++	settings := defaultAdaptiveSettings()
++	health := &hy2GlobalHealth{}
++	for i := 0; i < 100; i++ {
++		conn := newAdaptiveConn(true, settings, health, nil)
++		conn.selected = true
++		conn.carrier = carrierHy2
++		stats := coreStats{
++			LegUp:            [2]bool{true, false},
++			RxDeliveredBytes: uint64(i+1) * 1024,
++			LastAckProgress:  time.Now(),
++		}
++		if conn.shouldRecordCarrierFailure(io.EOF, stats, true) {
++			t.Fatalf("short session %d was misclassified as carrier failure", i)
++		}
++	}
++	if health.state != hy2Available || health.cooldownPenalty != 0 || len(health.initialFailures) != 0 {
++		t.Fatalf("short-session EOF burst poisoned global Hy2 health: state=%v penalty=%s failures=%d", health.state, health.cooldownPenalty, len(health.initialFailures))
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=TEST_RESULTS.txt' '--exclude=BUILD_STATUS.md' '--exclude=BUILD_REQUIRED.md' '--exclude=__pycache__' '--exclude=alpha2.3-r2-to-r3.diff' r2-snapshot/src/protocol/multipath/outbound.go smp3-multipath-kit-alpha2.3/src/protocol/multipath/outbound.go
+--- r2-snapshot/src/protocol/multipath/outbound.go	2026-08-27 14:25:20.000000000 +0000
++++ smp3-multipath-kit-alpha2.3/src/protocol/multipath/outbound.go	2026-08-27 11:05:28.507952946 +0000
+@@ -223,6 +223,8 @@
+ 	var dialMu sync.Mutex
+ 	joining := [2]bool{}
+ 	scheduled := [2]bool{}
++	deferredRepair := [2]bool{}
++	deferredDelay := [2]time.Duration{}
+ 	var ensureLeg func(uint8)
+ 	var scheduleLeg func(uint8, time.Duration)
+ 	adaptive.onSelected = func(carrier leg1Carrier, probation bool) {
+@@ -232,6 +234,15 @@
+ 		o.logger.InfoContext(ctx, "multipath leg1 carrier selected: ", carrier.String(), " probation=", probation)
+ 	}
+ 	adaptive.onHealth = func(decision adaptiveDecision, stats coreStats) {
++		// A zero-useful EOF on a just-added Hy2 leg can be the normal short-session
++		// JOIN race rather than a carrier outage. In that case OnLegDown deliberately
++		// avoids an immediate reconnect. If the logical stream remains active and
++		// useful demand continues, the health loop requests a demand-driven repair.
++		if core != nil && o.adaptiveEnabled && adaptive.currentCarrier() == carrierHy2 &&
++			!core.closing.Load() && !core.finalizing.Load() && core.active.Load() &&
++			!stats.LegUp[1] && decision.Demand {
++			scheduleLeg(1, o.redialInterval)
++		}
+ 		if decision.StateChanged && decision.State == adaptiveSuspect {
+ 			o.logger.InfoContext(ctx, "multipath leg1 carrier suspect: reason=", decision.Reason,
+ 				" pending=", stats.RxPendingFrames, " gap_age=", stats.RxGapAge)
+@@ -262,7 +273,7 @@
+ 		}
+ 		o.logger.InfoContext(ctx, "multipath leg1 carrier fallback: hysteria2 -> snell reason=", reason)
+ 		if cooldown || probation {
+-			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive)
++			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
+ 			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration)
+ 		}
+ 		if !core.replaceLeg(1, errors.New("multipath adaptive carrier replacement: "+reason)) {
+@@ -292,7 +303,18 @@
+ 			return
+ 		}
+ 		dialMu.Lock()
+-		if joining[id] || scheduled[id] {
++		if joining[id] {
++			// Remember a repair request that races with the just-completed addLeg.
++			// This replaces the old unconditional defer-repair, allowing benign
++			// short-session EOFs to intentionally suppress immediate reconnect.
++			if !deferredRepair[id] || deferredDelay[id] <= 0 || delay < deferredDelay[id] {
++				deferredDelay[id] = delay
++			}
++			deferredRepair[id] = true
++			dialMu.Unlock()
++			return
++		}
++		if scheduled[id] {
+ 			dialMu.Unlock()
+ 			return
+ 		}
+@@ -335,17 +357,23 @@
+ 			defer func() {
+ 				dialMu.Lock()
+ 				joining[id] = false
++				repair := deferredRepair[id]
++				delay := deferredDelay[id]
++				deferredRepair[id] = false
++				deferredDelay[id] = 0
+ 				dialMu.Unlock()
+ 				select {
+ 				case <-core.Done():
+ 					return
+ 				default:
+ 				}
+-				// Close the tiny race where a just-added leg can fail before this
+-				// dial goroutine clears its joining flag and OnLegDown therefore
+-				// cannot schedule the next repair itself.
+-				if !core.hasLeg(id) && (id == 0 || core.active.Load()) {
+-					scheduleLeg(id, o.redialInterval)
++				// If OnLegDown requested repair while joining was still true, honor
++				// it now. A benign EOF deliberately makes no such request.
++				if repair && !core.hasLeg(id) && (id == 0 || core.active.Load()) {
++					if delay <= 0 {
++						delay = o.redialInterval
++					}
++					scheduleLeg(id, delay)
+ 				}
+ 			}()
+ 			for {
+@@ -379,9 +407,6 @@
+ 					_ = conn.Close()
+ 					return
+ 				}
+-				if dialErr == nil && id == 1 {
+-					adaptive.markHy2DialSucceeded()
+-				}
+ 				if dialErr == nil {
+ 					dialErr = core.addLeg(id, conn, nil)
+ 				}
+@@ -403,8 +428,17 @@
+ 				if errors.Is(dialErr, errCoreClosed) {
+ 					return
+ 				}
+-				if id == 1 && o.adaptiveEnabled && !core.closing.Load() && !core.finalizing.Load() && adaptive.currentCarrier() == carrierHy2 && adaptive.recordCarrierFailure(adaptive.hy2WasEstablished()) {
+-					continue
++				if id == 1 && o.adaptiveEnabled && !core.closing.Load() && !core.finalizing.Load() && adaptive.currentCarrier() == carrierHy2 {
++					stats := core.snapshotStats()
++					if adaptive.shouldRecordCarrierFailure(dialErr, stats, false) {
++						// This attempt never became an installed SMP3 leg. Treat it as an
++						// initial carrier failure even if an older attempt had been ready.
++						if adaptive.recordCarrierFailure(false) {
++							continue
++						}
++					} else {
++						o.logger.DebugContext(ctx, "multipath ignored ambiguous short-session leg1 EOF before join for ", destination, ": ", dialErr)
++					}
+ 				}
+ 				o.logger.WarnContext(ctx, "multipath leg ", id, " redial failed via ", carrierTag, ": ", dialErr)
+ 				timer := time.NewTimer(o.redialInterval)
+@@ -434,17 +468,30 @@
+ 		if core.finalizing.Load() {
+ 			return
+ 		}
+-		if id == 1 && o.adaptiveEnabled && !core.closing.Load() && adaptive.currentCarrier() == carrierHy2 {
+-			adaptive.recordCarrierFailure(adaptive.hy2WasEstablished())
++		benignSecondaryEOF := false
++		if id == 1 && o.adaptiveEnabled && !core.closing.Load() && !core.finalizing.Load() && adaptive.currentCarrier() == carrierHy2 {
++			stats := core.snapshotStats()
++			if adaptive.shouldRecordCarrierFailure(legErr, stats, true) {
++				adaptive.recordCarrierFailure(true)
++			} else {
++				benignSecondaryEOF = true
++				if !adaptive.noteAmbiguousCarrierEOF() {
++					o.logger.DebugContext(ctx, "multipath ignored first ambiguous zero-useful leg1 EOF for ", destination, ": ", legErr)
++				}
++			}
+ 		}
+ 		carrierTag := o.tags[id]
+ 		if id == 1 && o.adaptiveEnabled && adaptive.currentCarrier() == carrierSnell {
+ 			carrierTag = o.leg1FallbackTag
+ 		}
+ 		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", carrierTag, ": ", legErr)
+-		// Repair the failed leg no faster than redial_interval, even if the
+-		// previous carrier completed the handshake before failing immediately.
+-		scheduleLeg(id, o.redialInterval)
++		// Repair the failed leg no faster than redial_interval. For an ambiguous
++		// zero-useful Hy2 EOF we intentionally do not reconnect immediately; the
++		// adaptive health loop will request repair if useful demand persists. This
++		// prevents short HTTP/TLS sessions from creating a connect/JOIN/EOF storm.
++		if !benignSecondaryEOF {
++			scheduleLeg(id, o.redialInterval)
++		}
+ 		if id == 0 {
+ 			// Primary loss is special: bring the already-authorized booster up now
+ 			// so the logical connection is not forced to wait for the repair delay.
