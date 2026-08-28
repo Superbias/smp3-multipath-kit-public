@@ -1,3 +1,4 @@
+[English](README.md) | [简体中文](README.zh-CN.md)
 # SMP3 Multipath Kit alpha2.3-r10
 
 > Experimental application-layer multipath transport for a fixed sing-box base.
