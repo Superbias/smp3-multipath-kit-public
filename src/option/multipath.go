@@ -32,13 +32,30 @@ type MultipathAdaptiveOptions struct {
 	InitialFailureWindow    badoption.Duration `json:"initial_failure_window,omitempty"`
 }
 
-// MultipathOutboundOptions combines exactly two existing reliable outbounds
-// into one logical, ordered TCP byte stream. UDP is intentionally not
-// aggregated and is delegated to UDPOutbound (or Preferred / first child).
+// MultipathUDPOptions enables the SMP3 datagram data plane. Datagram mode is
+// intentionally independent from the ordered TCP core: UDP packets keep
+// message boundaries, are never globally reordered, and are deduplicated by
+// datagram id when duplicate/adaptive replication is used.
+type MultipathUDPOptions struct {
+	Enabled                    bool               `json:"enabled,omitempty"`
+	Mode                       string             `json:"mode,omitempty"` // stripe, duplicate, adaptive
+	QueueFrames                uint32             `json:"queue_frames,omitempty"`
+	MaxDatagramSize            uint32             `json:"max_datagram_size,omitempty"`
+	DedupWindow                uint32             `json:"dedup_window,omitempty"`
+	IdleTimeout                badoption.Duration `json:"idle_timeout,omitempty"`
+	AdaptiveQueueDelay         badoption.Duration `json:"adaptive_queue_delay,omitempty"`
+	AdaptiveDuplicateThreshold uint32             `json:"adaptive_duplicate_threshold,omitempty"`
+}
+
+// MultipathOutboundOptions combines exactly two existing reliable outbounds.
+// TCP uses the ordered SMP3 stream core. When UDPMultipath is enabled, UDP
+// uses the independent SMP3 datagram core; otherwise UDP keeps the legacy
+// single-outbound passthrough behavior.
 type MultipathOutboundOptions struct {
-	Outbounds   []string `json:"outbounds" reference:"outbound"`
-	Preferred   string   `json:"preferred,omitempty" reference:"outbound"`
-	UDPOutbound string   `json:"udp_outbound,omitempty" reference:"outbound"`
+	Outbounds    []string             `json:"outbounds" reference:"outbound"`
+	Preferred    string               `json:"preferred,omitempty" reference:"outbound"`
+	UDPOutbound  string               `json:"udp_outbound,omitempty" reference:"outbound"`
+	UDPMultipath *MultipathUDPOptions `json:"udp_multipath,omitempty"`
 	// Endpoints optionally supplies a distinct aggregation address for each child path.
 	// When omitted, Server/ServerPort is used for both paths for compatibility.
 	Endpoints               []MultipathEndpointOptions `json:"endpoints,omitempty"`
@@ -47,6 +64,8 @@ type MultipathOutboundOptions struct {
 	Password                string                     `json:"password"`
 	Leg1Fallback            string                     `json:"leg1_fallback,omitempty" reference:"outbound"`
 	Leg1Adaptive            *MultipathAdaptiveOptions  `json:"leg1_adaptive,omitempty"`
+	SchedulerMode           string                     `json:"scheduler_mode,omitempty"` // static, adaptive
+	BootstrapFallbackDelay  badoption.Duration         `json:"bootstrap_fallback_delay,omitempty"`
 	ActivationThresholdMbps uint32                     `json:"activation_threshold_mbps,omitempty"`
 	ActivationWindow        badoption.Duration         `json:"activation_window,omitempty"`
 	ChunkSize               uint32                     `json:"chunk_size,omitempty"`
@@ -62,15 +81,17 @@ type MultipathOutboundOptions struct {
 
 type MultipathInboundOptions struct {
 	ListenOptions
-	Password                string             `json:"password"`
-	ActivationThresholdMbps uint32             `json:"activation_threshold_mbps,omitempty"`
-	ActivationWindow        badoption.Duration `json:"activation_window,omitempty"`
-	ChunkSize               uint32             `json:"chunk_size,omitempty"`
-	QueueFrames             uint32             `json:"queue_frames,omitempty"`
-	BandwidthMbps           []uint32           `json:"bandwidth_mbps,omitempty"`
-	MaxReorderFrames        uint32             `json:"max_reorder_frames,omitempty"`
-	MaxInflightFrames       uint32             `json:"max_inflight_frames,omitempty"`
-	AckInterval             badoption.Duration `json:"ack_interval,omitempty"`
-	RetransmitTimeout       badoption.Duration `json:"retransmit_timeout,omitempty"`
-	RecoveryTimeout         badoption.Duration `json:"recovery_timeout,omitempty"`
+	Password                string               `json:"password"`
+	UDPMultipath            *MultipathUDPOptions `json:"udp_multipath,omitempty"`
+	SchedulerMode           string               `json:"scheduler_mode,omitempty"`
+	ActivationThresholdMbps uint32               `json:"activation_threshold_mbps,omitempty"`
+	ActivationWindow        badoption.Duration   `json:"activation_window,omitempty"`
+	ChunkSize               uint32               `json:"chunk_size,omitempty"`
+	QueueFrames             uint32               `json:"queue_frames,omitempty"`
+	BandwidthMbps           []uint32             `json:"bandwidth_mbps,omitempty"`
+	MaxReorderFrames        uint32               `json:"max_reorder_frames,omitempty"`
+	MaxInflightFrames       uint32               `json:"max_inflight_frames,omitempty"`
+	AckInterval             badoption.Duration   `json:"ack_interval,omitempty"`
+	RetransmitTimeout       badoption.Duration   `json:"retransmit_timeout,omitempty"`
+	RecoveryTimeout         badoption.Duration   `json:"recovery_timeout,omitempty"`
 }

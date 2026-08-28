@@ -1,0 +1,510 @@
+diff --git a/alpha2/BUILD_STATUS.md b/alpha2.1/BUILD_STATUS.md
+index 0f360e7..a07bea4 100644
+--- a/alpha2/BUILD_STATUS.md
++++ b/alpha2.1/BUILD_STATUS.md
+@@ -1,19 +1,28 @@
+-# Alpha2 verification status
++# Alpha2.1 verification status
+ 
+ Verified in the artifact build environment on 2026-08-26:
+ 
+ - JSON syntax for both example configs.
+ - Python source injector syntax.
+ - Bash syntax for build/server/validation scripts.
+-- SMP3 transport core tests with the Go race detector.
+-- Repeated test runs for hard leg failure, ACK-timeout replay, one-way control black-hole, silent-stall activation, recovery-timer reset, and final-frame drain.
++- SMP3 standalone transport-core tests.
++- SMP3 standalone transport-core tests with the Go race detector.
+ - `go vet` on the standalone SMP3 core and tests.
++- Regression tests for future/impossible ACK handling: the ACK is ignored without retiring outstanding payload and without dropping the transport leg.
++- Existing hard leg failure, ACK-timeout replay, one-way control black-hole, silent-stall activation, recovery-timer reset, and final-frame drain tests continue to pass.
+ 
+-Not executed in this environment:
++Observed in the preceding alpha2 live test before this hotfix:
+ 
+-- A complete checkout + full `go build` of the pinned upstream sing-box revision, because the execution sandbox cannot resolve/download GitHub and Go modules directly.
+-- A two-host live network interoperability test between Windows and the landing server.
++- Preferred dedicated-line transport carried a long download.
++- The public booster activated and repeatedly rejoined the same logical session.
++- The server then rejected the rejoined leg with `invalid multipath ACK beyond transmitted sequence`, while the client entered repeated `ready -> Remote EOF -> rejoin` cycles.
++- alpha2.1 changes that ACK anomaly to a non-destructive ignore and rate-limits post-drop reconnects.
+ 
+-`build.sh` therefore performs the missing integration checks on the deployment machine: it checks out the exact pinned revision, injects the sources, runs `go test ./protocol/multipath`, and only then builds the Linux/Windows binaries.
++Not executed in this artifact environment:
+ 
+-Treat alpha2 as experimental until that full build and an end-to-end failover/throughput test pass in your environment.
++- A complete checkout + full `go build` of the pinned upstream sing-box revision, because this execution environment cannot resolve/download GitHub and Go modules directly.
++- A two-host live alpha2.1 interoperability/throughput test.
++
++`build.sh` performs the missing integration checks on the deployment machine: it checks out the exact pinned revision, injects the alpha2.1 sources, runs `go test ./protocol/multipath`, and only then builds the Linux/Windows binaries.
++
++Treat alpha2.1 as experimental until the full integrated build and the same long-download test pass on both Windows and the landing server.
+diff --git a/alpha2/CHANGELOG.md b/alpha2.1/CHANGELOG.md
+index 59e301f..10d8122 100644
+--- a/alpha2/CHANGELOG.md
++++ b/alpha2.1/CHANGELOG.md
+@@ -1,5 +1,15 @@
+ # Changelog
+ 
++## alpha2.1 — SMP3 hotfix
++
++- Changed impossible/future cumulative ACK handling from fatal leg teardown to non-destructive ignore; TX acknowledgement state is never advanced by such an ACK, and rate-limited anomaly logging remains enabled.
++- Added regression coverage proving a future ACK neither retires outstanding payload nor kills the transport leg.
++- Added per-leg delayed/coalesced reconnect scheduling so a carrier that accepts then immediately EOFs cannot bypass `redial_interval`.
++- Suppressed recovery callbacks during normal logical-core teardown.
++- Cancel reconnect dial contexts when the logical connection closes.
++- Included the `net.Buffers` addressability build fix directly in `protocol.go`.
++- Wire protocol remains SMP3; no config schema change is required from alpha2.
++
+ ## alpha2 — SMP3
+ 
+ - Wire protocol magic/version bumped from SMP2 to SMP3.
+diff --git a/alpha2/README.md b/alpha2.1/README.md
+index 1e6e1f0..139a822 100644
+--- a/alpha2/README.md
++++ b/alpha2.1/README.md
+@@ -1,4 +1,4 @@
+-# SMP3 Multipath Kit — experimental alpha2
++# SMP3 Multipath Kit — experimental alpha2.1
+ 
+ Pinned base: **sing-box v1.14.0-beta.14**, revision `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`.
+ 
+@@ -38,6 +38,19 @@ leg 1: local SMP3 proxy -> public Snell on landing -> landing private address:24
+ 
+ In that layout the custom SMP3 protocol is never exposed directly to the public Internet. The public path is still the normal public route to the same landing server; only its transport wrapper is Snell/SS/etc.
+ 
++## alpha2.1 hotfixes
++
++alpha2.1 keeps the **SMP3 wire format unchanged**. Alpha2 and alpha2.1 are wire-compatible, but both endpoints should be upgraded because either alpha2 endpoint can still apply the old fatal ACK behavior. It addresses two failures found during a live long-download test of alpha2:
++
++- A future/impossible cumulative ACK observed around a transport rejoin is now **ignored without advancing TX state** instead of tearing down the leg. This is deliberately fail-safe: the sender never treats that ACK as proof that unsent/unconfirmed payload was delivered. The anomaly is rate-limited in logs (counts 1, 2, 4, 8, ...) so the underlying condition remains visible during testing.
++- Reconnect requests are coalesced per leg and a leg that drops immediately after a successful rejoin must wait at least `redial_interval` before repair. This prevents a rapid join/EOF/rejoin storm.
++- Normal logical shutdown no longer schedules transport recovery from leg read/write goroutines racing with `Close`.
++- Client reconnect dials are canceled when the logical core closes.
++- The bundled source now includes the `net.Buffers` addressability fix in `writeHello`, so rebuilding from the kit does not require a manual edit.
++- Two regression tests cover non-destructive handling of future ACKs.
++
++The alpha2 reliability design below still applies.
++
+ ## alpha2 changes
+ 
+ alpha2 changes the wire protocol from `SMP2` to **`SMP3`** and adds reliability semantics that alpha1 intentionally lacked.
+@@ -138,7 +151,7 @@ Do not expose a raw `direct -> public SMP3 inbound` unless you explicitly accept
+ 
+ - TCP only. UDP is delegated to `udp_outbound`; it is not multipath-aggregated.
+ - If the **whole client process**, **whole server process**, or landing server dies, the logical connection dies. ACK/retransmission protects transport-leg loss, not process crash/state replication.
+-- Large RTT differences can still cause head-of-line blocking in the ordered reassembly buffer. alpha2 keeps the simple weighted work-conserving scheduler; RTT/reorder-pressure-aware scheduling is a later optimization.
++- Large RTT differences can still cause head-of-line blocking in the ordered reassembly buffer. alpha2.1 keeps the simple weighted work-conserving scheduler; RTT/reorder-pressure-aware scheduling is a later optimization.
+ - If both legs disappear for longer than `recovery_timeout`, the logical connection is closed.
+ - `max_inflight_frames * chunk_size` is the approximate worst-case retained TX payload memory per busy logical direction. With the defaults (`1024 * 64KiB`) the upper bound is roughly 64 MiB for a connection that completely stops ACKing; normal usage is much lower.
+ 
+diff --git a/alpha2.1/UPGRADE-alpha2-to-alpha2.1.md b/alpha2.1/UPGRADE-alpha2-to-alpha2.1.md
+new file mode 100644
+index 0000000..13aa92b
+--- /dev/null
++++ b/alpha2.1/UPGRADE-alpha2-to-alpha2.1.md
+@@ -0,0 +1,30 @@
++# Upgrade alpha2 -> alpha2.1
++
++No configuration schema or SMP3 password change is required. Both client and server binaries should be rebuilt/replaced together.
++
++Recommended flow:
++
++```bash
++# WSL/Linux build machine
++cd smp3-multipath-kit-alpha2.1
++./validate-kit.sh
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
++```
++
++Then replace the landing binary and Windows binary with the newly built alpha2.1 outputs. Keep the existing `config.json` files.
++
++Before replacement, stop the foreground test instances. After replacement:
++
++```bash
++# landing
++/opt/smp3/smp3-proxy check -c /opt/smp3/config.json
++/opt/smp3/smp3-proxy run -c /opt/smp3/config.json
++```
++
++```powershell
++# Windows
++.\smp3-proxy.exe check -c .\config.json
++.\smp3-proxy.exe run -c .\config.json
++```
++
++For the first retest, keep `activation_threshold_mbps` low (for example 5 Mbps), repeat the landing-local HTTP download, and verify that leg 1 remains up instead of cycling through `Remote EOF`.
+diff --git a/alpha2/VERSION b/alpha2.1/VERSION
+index e408cb4..7ec39e7 100644
+--- a/alpha2/VERSION
++++ b/alpha2.1/VERSION
+@@ -1,5 +1,5 @@
+-kit_version=alpha2
+-kit_revision=alpha2-r2
++kit_version=alpha2.1
++kit_revision=alpha2.1-r1
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff --git a/alpha2/build.sh b/alpha2.1/build.sh
+index 2f2a887..c4a09f5 100755
+--- a/alpha2/build.sh
++++ b/alpha2.1/build.sh
+@@ -45,7 +45,7 @@ gofmt -w constant/proxy.go include/registry.go option/multipath.go protocol/mult
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.1 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff --git a/alpha2/install-server.sh b/alpha2.1/install-server.sh
+index b8d3378..243ea2c 100755
+--- a/alpha2/install-server.sh
++++ b/alpha2.1/install-server.sh
+@@ -25,7 +25,7 @@ chmod 0640 /etc/smp3-proxy/config.json
+ 
+ cat >/etc/systemd/system/smp3-proxy.service <<'UNIT'
+ [Unit]
+-Description=SMP3 Multipath proxy alpha2
++Description=SMP3 Multipath proxy alpha2.1
+ After=network-online.target
+ Wants=network-online.target
+ 
+diff --git a/alpha2/scripts/apply_source.py b/alpha2.1/scripts/apply_source.py
+index 19f0cf3..679a7d7 100755
+--- a/alpha2/scripts/apply_source.py
++++ b/alpha2.1/scripts/apply_source.py
+@@ -41,4 +41,4 @@ edit(Path('include/registry.go'), registry)
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2 source installed')
++print('[+] SMP3 multipath alpha2.1 source installed')
+diff --git a/alpha2/src/protocol/multipath/core.go b/alpha2.1/src/protocol/multipath/core.go
+index dba1e55..0228e2a 100644
+--- a/alpha2/src/protocol/multipath/core.go
++++ b/alpha2.1/src/protocol/multipath/core.go
+@@ -33,6 +33,7 @@ type coreConfig struct {
+ 	RecoveryTimeout      time.Duration
+ 	OnActivate           func()
+ 	OnLegDown            func(uint8, error)
++	OnFutureAck          func(next, max, count uint64)
+ 	NotifyPeerOnActivate bool
+ }
+ 
+@@ -92,7 +93,8 @@ type mpCore struct {
+ 	closeErr atomic.Value
+ 	closeOne sync.Once
+ 
+-	txSeq atomic.Uint64
++	txSeq          atomic.Uint64
++	futureAckCount atomic.Uint64
+ 
+ 	txMu        sync.Mutex
+ 	outstanding map[uint64]*txRecord
+@@ -615,6 +617,15 @@ func (c *mpCore) handleLegFailure(leg *mpLeg, err error) {
+ 	}
+ 	c.txMu.Unlock()
+ 
++	// If the logical core is already closing, this is ordinary transport
++	// teardown. Do not re-activate, emit leg-down callbacks, or start recovery
++	// timers from the read/write goroutines racing with Close/fail.
++	select {
++	case <-c.done:
++		return
++	default:
++	}
++
+ 	// Primary loss before the threshold is an emergency activation: leg 1 is
+ 	// allowed to come up immediately so the logical stream has a chance to live.
+ 	if leg.id == 0 && !c.active.Load() {
+@@ -759,7 +770,16 @@ func (c *mpCore) scheduleRetries() {
+ func (c *mpCore) handleAck(next uint64) error {
+ 	max := c.txSeq.Load()
+ 	if next > max {
+-		return errors.New("invalid multipath ACK beyond transmitted sequence")
++		// This ACK cannot safely prove delivery of any local payload. A live
++		// alpha2 test observed such an anomaly around transport rejoin; treating
++		// it as fatal caused an otherwise recoverable leg to enter a reconnect
++		// storm. Ignore it without advancing TX state and let valid cumulative
++		// ACKs/retransmission drive progress.
++		count := c.futureAckCount.Add(1)
++		if c.cfg.OnFutureAck != nil && (count == 1 || count&(count-1) == 0) {
++			c.cfg.OnFutureAck(next, max, count)
++		}
++		return nil
+ 	}
+ 	c.txMu.Lock()
+ 	if next <= c.ackedNext {
+diff --git a/alpha2/src/protocol/multipath/core_test.go b/alpha2.1/src/protocol/multipath/core_test.go
+index 4b3f65c..73a5aef 100644
+--- a/alpha2/src/protocol/multipath/core_test.go
++++ b/alpha2.1/src/protocol/multipath/core_test.go
+@@ -2,6 +2,7 @@ package multipath
+ 
+ import (
+ 	"bytes"
++	"encoding/binary"
+ 	"errors"
+ 	"io"
+ 	"net"
+@@ -392,3 +393,85 @@ func TestRecoveryTimeoutResetsAfterTemporaryRecovery(t *testing.T) {
+ 		t.Fatal("second outage did not expire after its own recovery timeout")
+ 	}
+ }
++
++func TestCoreFutureAckIsIgnoredWithoutRetiringData(t *testing.T) {
++	cfg := testCoreConfig()
++	var anomalyCount uint64
++	cfg.OnFutureAck = func(next, max, count uint64) {
++		if next != 99 || max != 1 {
++			t.Errorf("unexpected future ACK callback: next=%d max=%d", next, max)
++		}
++		anomalyCount = count
++	}
++	core, _ := newCore(cfg)
++	defer core.Close()
++
++	record := &txRecord{seq: 0, data: []byte("pending"), lastLeg: 0}
++	core.txSeq.Store(1)
++	core.txMu.Lock()
++	core.outstanding[0] = record
++	core.txMu.Unlock()
++	core.inflight <- struct{}{}
++
++	if err := core.handleAck(99); err != nil {
++		t.Fatalf("future ACK should be ignored, got %v", err)
++	}
++	core.txMu.Lock()
++	_, stillOutstanding := core.outstanding[0]
++	ackedNext := core.ackedNext
++	core.txMu.Unlock()
++	if !stillOutstanding || ackedNext != 0 {
++		t.Fatalf("future ACK mutated TX state: outstanding=%v ackedNext=%d", stillOutstanding, ackedNext)
++	}
++	if anomalyCount != 1 {
++		t.Fatalf("future ACK anomaly callback count=%d, want 1", anomalyCount)
++	}
++
++	if err := core.handleAck(1); err != nil {
++		t.Fatalf("valid ACK failed: %v", err)
++	}
++	core.txMu.Lock()
++	_, stillOutstanding = core.outstanding[0]
++	ackedNext = core.ackedNext
++	core.txMu.Unlock()
++	if stillOutstanding || ackedNext != 1 {
++		t.Fatalf("valid ACK did not retire TX state: outstanding=%v ackedNext=%d", stillOutstanding, ackedNext)
++	}
++}
++
++func TestCoreFutureAckDoesNotKillTransportLeg(t *testing.T) {
++	cfg := testCoreConfig()
++	core, app := newCore(cfg)
++	defer core.Close()
++
++	a, b := net.Pipe()
++	defer b.Close()
++	if err := core.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	var ack [frameHeaderSize]byte
++	ack[0] = frameTypeAck
++	binary.BigEndian.PutUint64(ack[1:9], 12345)
++	if _, err := b.Write(ack[:]); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := []byte("still-alive-after-future-ack")
++	if err := writeDataFrame(b, dataFrame{seq: 0, data: payload}); err != nil {
++		t.Fatal(err)
++	}
++	got := make([]byte, len(payload))
++	if err := app.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := io.ReadFull(app, got); err != nil {
++		t.Fatalf("leg stopped carrying data after future ACK: %v", err)
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatalf("payload mismatch: %q", got)
++	}
++	if !core.hasLeg(0) {
++		t.Fatal("future ACK incorrectly removed the transport leg")
++	}
++}
+diff --git a/alpha2/src/protocol/multipath/inbound.go b/alpha2.1/src/protocol/multipath/inbound.go
+index a07b826..eacdf46 100644
+--- a/alpha2/src/protocol/multipath/inbound.go
++++ b/alpha2.1/src/protocol/multipath/inbound.go
+@@ -157,6 +157,9 @@ func (i *Inbound) NewConnection(ctx context.Context, conn net.Conn, metadata ada
+ 	}
+ 
+ 	cfg := i.cfg
++	cfg.OnFutureAck = func(next, max, count uint64) {
++		i.logger.WarnContext(ctx, "multipath server ignored future ACK for ", destination, ": next=", next, " tx_seq=", max, " count=", count)
++	}
+ 	cfg.OnActivate = func() {
+ 		i.logger.InfoContext(ctx, "multipath server booster activated for ", destination)
+ 	}
+diff --git a/alpha2/src/protocol/multipath/outbound.go b/alpha2.1/src/protocol/multipath/outbound.go
+index d03c046..a8e53b6 100644
+--- a/alpha2/src/protocol/multipath/outbound.go
++++ b/alpha2.1/src/protocol/multipath/outbound.go
+@@ -2,6 +2,7 @@ package multipath
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"net"
+ 	"slices"
+ 	"sync"
+@@ -179,11 +180,47 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination
+ 	}
+ 
+ 	cfg := o.cfg
+-	sessionCtx := context.WithoutCancel(ctx)
++	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
+ 	var core *mpCore
+ 	var dialMu sync.Mutex
+ 	joining := [2]bool{}
++	scheduled := [2]bool{}
+ 	var ensureLeg func(uint8)
++	var scheduleLeg func(uint8, time.Duration)
++
++	// scheduleLeg coalesces delayed reconnect requests for a leg. This prevents
++	// a carrier that accepts and then immediately drops a connection from causing
++	// a tight connect/join/EOF loop that bypasses redial_interval.
++	scheduleLeg = func(id uint8, delay time.Duration) {
++		if id > 1 || core == nil {
++			return
++		}
++		select {
++		case <-core.Done():
++			return
++		default:
++		}
++		if id == 1 && !core.active.Load() {
++			return
++		}
++		if core.hasLeg(id) {
++			return
++		}
++		dialMu.Lock()
++		if joining[id] || scheduled[id] {
++			dialMu.Unlock()
++			return
++		}
++		scheduled[id] = true
++		dialMu.Unlock()
++		time.AfterFunc(delay, func() {
++			dialMu.Lock()
++			scheduled[id] = false
++			dialMu.Unlock()
++			ensureLeg(id)
++		})
++	}
++
+ 	ensureLeg = func(id uint8) {
+ 		if id > 1 || core == nil {
+ 			return
+@@ -217,10 +254,10 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination
+ 				default:
+ 				}
+ 				// Close the tiny race where a just-added leg can fail before this
+-				// dial goroutine clears its joining flag and the OnLegDown callback
+-				// therefore observes "already joining".
++				// dial goroutine clears its joining flag and OnLegDown therefore
++				// cannot schedule the next repair itself.
+ 				if !core.hasLeg(id) && (id == 0 || core.active.Load()) {
+-					time.AfterFunc(o.redialInterval, func() { ensureLeg(id) })
++					scheduleLeg(id, o.redialInterval)
+ 				}
+ 			}()
+ 			for {
+@@ -249,28 +286,54 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination
+ 				if conn != nil {
+ 					conn.Close()
+ 				}
++				select {
++				case <-core.Done():
++					return
++				default:
++				}
++				if errors.Is(dialErr, errCoreClosed) {
++					return
++				}
+ 				o.logger.WarnContext(ctx, "multipath leg ", id, " redial failed via ", o.tags[id], ": ", dialErr)
++				timer := time.NewTimer(o.redialInterval)
+ 				select {
+ 				case <-core.Done():
++					timer.Stop()
+ 					return
+-				case <-time.After(o.redialInterval):
++				case <-timer.C:
+ 				}
+ 			}
+ 		}()
+ 	}
+ 
++	cfg.OnFutureAck = func(next, max, count uint64) {
++		o.logger.WarnContext(ctx, "multipath ignored future ACK for ", destination, ": next=", next, " tx_seq=", max, " count=", count)
++	}
+ 	cfg.OnActivate = func() {
+ 		o.logger.InfoContext(ctx, "multipath booster activated for ", destination)
+ 		ensureLeg(1)
+ 	}
+ 	cfg.OnLegDown = func(id uint8, legErr error) {
++		select {
++		case <-core.Done():
++			return
++		default:
++		}
+ 		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", o.tags[id], ": ", legErr)
+-		ensureLeg(id)
++		// Repair the failed leg no faster than redial_interval, even if the
++		// previous carrier completed the handshake before failing immediately.
++		scheduleLeg(id, o.redialInterval)
+ 		if id == 0 {
++			// Primary loss is special: bring the already-authorized booster up now
++			// so the logical connection is not forced to wait for the repair delay.
+ 			ensureLeg(1)
+ 		}
+ 	}
+ 	core, appConn := newCore(cfg)
++	go func() {
++		<-core.Done()
++		cancelSession()
++	}()
+ 	if err = core.addLeg(0, primaryConn, nil); err != nil {
+ 		appConn.Close()
+ 		return nil, err
+diff --git a/alpha2/src/protocol/multipath/protocol.go b/alpha2.1/src/protocol/multipath/protocol.go
+index 6b0cdd6..12d4e1d 100644
+--- a/alpha2/src/protocol/multipath/protocol.go
++++ b/alpha2.1/src/protocol/multipath/protocol.go
+@@ -49,7 +49,8 @@ func writeHello(conn net.Conn, message helloMessage, password string) error {
+ 	mac.Write(header)
+ 	mac.Write(dest)
+ 	sum := mac.Sum(nil)
+-	_, err := net.Buffers{header, dest, sum}.WriteTo(conn)
++	buffers := net.Buffers{header, dest, sum}
++	_, err := buffers.WriteTo(conn)
+ 	return err
+ }
+ 
+diff --git a/alpha2/validate-kit.sh b/alpha2.1/validate-kit.sh
+index 0b4e47e..0f59744 100755
+--- a/alpha2/validate-kit.sh
++++ b/alpha2.1/validate-kit.sh
+@@ -12,6 +12,7 @@ echo '[+] standalone SMP3 reliability tests'
+ (
+   cd "$ROOT/src/protocol/multipath"
+   go test core.go core_test.go -race -count=5
++  go vet core.go core_test.go
+ )
+ 
+ echo '[+] source injector syntax'

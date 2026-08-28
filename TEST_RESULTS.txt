@@ -1,77 +1,185 @@
-SMP3 alpha2.3-r10 verification
-===============================
+SMP3 alpha2.3-r11 final release closeout verification
+=====================================================
 
-Source / standalone scope
--------------------------
-Files exercised include the standalone multipath core, protocol and adaptive logic plus corresponding tests.
+Standalone multipath Test* count: 101
+Injected multipath Test* count: 101
+Generated full sing-box source-tree Test* count: 441
+Superseded r11 candidate baseline: 86 standalone / 97 total
 
-Result:
-  tests discovered: 65
-  go test: PASS
-  go test -race -count=5: PASS
-  go vet: PASS
-  gofmt: PASS
-  example JSON syntax: PASS
-  Python/shell syntax: PASS
+PASS validation gate:
+  ./validate-kit.sh
+  go test core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go -count=20 -timeout=5m (PASS)
+  go test core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go -race -count=5 -timeout=90s
+  go vet core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go
+  gofmt
 
-R10-specific coverage
----------------------
-  - ACK progress wakes newly exposed overdue cumulative frontier
-  - ACK fast path uses dedicated O(1) frontier check
-  - healthy/non-overdue frontier fast path avoids transport snapshot allocation
-  - rescue remains single-seq and never speculatively bursts beyond ackedNext
-  - failed/full rescue enqueue does not consume retransmit cooldown
-  - same-ID leg failure invalidates retired-generation lastSentLeg ownership
-  - dead-leg replay is ordered from cumulative ACK frontier forward
+Additional focused stress completed during r11 development/review:
+  TCP core/protocol race stress: -race -count=20 PASS
+  adaptive-controller race stress: -race -count=20 PASS
+  Datagram race stress: -race -count=100 PASS
+  TCP primary-queue activation regression: -race -count=50 PASS
+  UDP carrier adaptive/probation focused regressions: high-repeat PASS
 
-Retained R9/R8 coverage
------------------------
-  - blocked inTransit ACK frontier can be rescued on alternate leg
-  - rescue lane bypasses ordinary DATA queue pressure
-  - concurrent frontier attempts are marked multipath
-  - stale older write completion cannot override newer attempt attribution
-  - multipath frontier ownership does not blame Hy2
-  - one-sample leg1 frontier ownership does not enter SUSPECT
-  - persistent exclusive leg1 TX stall still reaches SUSPECT/FALLBACK
+R11-specific coverage includes:
+  TCP adaptive scheduler and static configured-weight behavior
+  preferred-queue saturation immediately activating booster
+  TCP HELLO v4 compatibility retained
+  delayed parallel bootstrap and preferred-leg fallback source paths
+  bootstrap leg1 Hy2 failure immediately retrying Snell
+  graceful drain driven by observed ACK progress
+  UDP Datagram HELLO v5 and frame round trips
+  duplicate-mode exactly-once delivery
+  stale replicated duplicates rejected outside the dedup window
+  very-late unique stripe Datagram accepted outside the dedup window
+  adaptive stale rule applied only to packets eligible for duplication
+  no global Datagram ordering/HOL wait
+  adaptive Datagram slow-leg avoidance
+  byte-aware UDP queue pressure
+  adaptive small-packet duplication threshold
+  same-ID Datagram transport rejoin
+  UDP hard Hy2 failures entering local/global Snell fallback
+  UDP probation requiring real useful traffic and releasing unused canary slots
+  intentional Datagram close not reported as carrier failure
+  routed address / Datagram allocation bounds
 
-Live acceptance
+Retained r10 coverage includes ACK-paced frontier rescue, failed rescue cooldown rollback,
+same-ID stream generation replacement, dead-leg replay ordering, graceful close/drain,
+tombstones, control-plane isolation and adaptive carrier regressions.
+
+R11 UDP routing integration:
+  native sing N.PacketConn adapter added for RoutePacketConnectionEx
+  per-datagram M.Socksaddr is preserved directly
+  max routed Datagram size is capped at 16384 bytes
+  routed address metadata is bounded before payload allocation
+
+Full pinned sing-box injection/build: PASS.
+Linux/Windows r11 binaries: PASS.
+Live r11 TCP/UDP acceptance: PASS; see the final matrix below.
+
+Full generated-tree `go test ./...` was attempted. The only failures were
+external to SMP3: `common/netns` cannot execute `/proc/self/exe` under the
+current namespace permissions; `experimental/boxdd` and `experimental/libbox`
+hit the current-Go `runtime/pprof.parseProcSelfMaps` linkname incompatibility;
+and the internet-dependent `common/tlsfragment` tests timed out to
+an external public TLS endpoint on port 443. The injected `protocol/multipath` package passes.
+
+Expected binary version:
+  1.14.0-beta.14-smp3-alpha2.3-r11
+
+FINAL CONFIGURATION / ENVIRONMENT
+=================================
+
+Client and server: `mode=adaptive`, `idle_timeout=2m`,
+`max_datagram_size=16384`. No temporary DROP/REJECT/NAT test rules or UDP
+echo/H3 fixture listeners remain. The remote SMP3 service is active.
+
+FINAL ACCEPTANCE MATRIX
+=======================
+
+TCP
+---
+
+Case                                      Result       Evidence
+Normal 500 MiB upload                     PASS         HTTP=200; uploaded=524288000; 28.838793 s; 18180030 B/s
+Adaptive scheduling                       PASS         Dual-leg adaptive session established
+Leg0 failure/rejoin                       PASS*        Historical r11 live same-ID evidence: leg0 down -> ready; server joined/rejoined; exact transfer completed
+Bootstrap leg0 failure                    PASS         Prior live r11 acceptance
+Hy2 initial failure -> Snell              PASS         Prior live r11 acceptance
+Cooldown/probation/recovery               PASS         Prior live r11 acceptance
+
+*The final closeout's inner `ss -K` attempt completed exact 500 MiB without
+creating a new observable down/rejoin callback; it is not counted as new
+failure evidence. The PASS is carried by the already-validated r11 live
+same-ID run, and the TCP source path was unchanged by the r11 UDP buffer fix.
+
+MP-UDP adaptive
 ---------------
-Payload: 524288000 bytes (500 MiB)
 
-  R9 reference baseline:
-    HTTP=200, exact payload
-    456.219367 s
-    1,149,201 B/s
+Case                                      Result       Evidence
+Basic DNS                                 PASS         RESULT=10/10
+Sustained 1200-byte burst                 PASS         SENT=20000; RECEIVED=19992; LOST=8; loss=0.040%; BAD=0; DUPLICATE=0; REORDERED=14325
+Dual-leg DATA                             PASS         Prior live acceptance; both carriers carried DATA
+Leg0 failure/rejoin                       PASS         Prior live acceptance; BAD=0; DUPLICATE=0
+UDP-only Hy2 -> Snell                     PASS         Prior live acceptance
+Cooldown/probation/recovery               PASS         Prior live acceptance
 
-  R10 normal multipath:
-    HTTP=200, exact payload
-    37.503315 s
-    13,979,829 B/s
-
-  R10 controlled +300 ms preferred-path delay:
-    HTTP=200, exact payload
-    119.762398 s
-    4,377,740 B/s
-
-  R10 forced preferred-leg TCP destruction + same-ID rejoin:
-    HTTP=200, exact payload
-    22.664969 s
-    23,132,211 B/s
-    old preferred-leg TCP was destroyed while outstanding DATA remained
-    replacement used a new TCP connection
-    server logged leg 0 joined/rejoined into the existing logical session
-    client returned to leg 0 ready and resumed participation
-
-No accepted r10 run showed an actual tx_ack_stall or false adaptive fallback.
-Benchmark speeds are environment-specific and are not throughput guarantees.
-
-Compatibility
+MP-UDP stripe
 -------------
-  wire hello version: 4 (unchanged)
-  configuration schema: unchanged
-  adaptive thresholds: unchanged
-  rescue queue size: unchanged
 
-Expected built binary version
------------------------------
-  1.14.0-beta.14-smp3-alpha2.3-r10
+Basic                                     PASS         BAD=0; DUPLICATE=0
+Leg0 failure/rejoin                       PASS         BAD=0; DUPLICATE=0; same-ID rejoin
+Leg1 failure/rejoin                       PASS         BAD=0; DUPLICATE=0; same-ID rejoin
+
+MP-UDP duplicate
+----------------
+
+Basic dedup                               PASS         Both legs carried DATA; application DUPLICATE=0; BAD=0
+Leg0 failure/rejoin                       PASS         Business continued; same-ID rejoin; DUPLICATE=0; BAD=0
+Leg1 failure/rejoin                       PASS         Business continued; same-ID rejoin; DUPLICATE=0; BAD=0
+
+Boundary
+--------
+
+16383-byte datagrams                      PASS         100/100; BAD=0; DUPLICATE=0
+16384-byte datagrams                      PASS         100/100; BAD=0; DUPLICATE=0
+16385-byte datagrams                      PASS         Safe packet-level drop; forwarded=0
+20480-byte datagrams                      PASS         Safe packet-level drop; forwarded=0
+1200 -> 16384 -> 16385 -> 1200           PASS         Legal=3/3; OVERSIZE_FORWARDED=0; BAD=0; DUPLICATE=0; association stayed usable
+
+Lifecycle
+---------
+
+Idle cleanup                              PASS         10-second shortened test cleaned the old association; no hang; new association worked
+5-cycle association lifecycle             PASS         PASS
+2000 association churn                    PASS         2000/2000 creation/round-trip cycles; no linear FD/session growth
+FD/socket cleanup                         PASS         Server FD/socket counts returned to baseline; no linear resource leak
+
+HTTP/3 diagnostics
+------------------
+
+ALPN h3                                  PASS         Diagnostic handshake path
+20/20 diagnostic handshakes                PASS         PASS
+Same connection 100/100                   PASS         PASS
+100 MiB large download                    INCONCLUSIVE External harness/interoperability issue; same failure reproduces on direct official aioquic with no bridge, SOCKS5 or SMP3. Not an SMP3 release blocker and not marked PASS.
+
+AUTOMATED / STATIC GATES
+========================
+
+`validate-kit.sh`: PASS.
+Standalone normal `-count=20`: PASS.
+Standalone race `-race -count=5`: PASS.
+Injected multipath normal `-count=20`: PASS.
+Injected multipath race `-race -count=5`: PASS.
+Standalone/injected go vet: PASS.
+gofmt: PASS.
+Clean pinned source injection and Linux/Windows build: PASS.
+Release manifest/hash verification: PASS.
+Sensitive-information scan: PASS.
+Public IPv4 deployment scan: PASS (no public deployment address; public IPv4 references are absent from the release package).
+Forbidden-file/cache scan: PASS.
+Full generated-tree `go vet ./...`: EXTERNAL-UPSTREAM WARNINGS ONLY (`daemon/managed_service.go` and `experimental/libbox/debug.go` unsafe.Pointer diagnostics); no SMP3 multipath warning.
+Full generated-tree `go test ./...`: EXTERNAL-ENVIRONMENT FAILURES ONLY (listed above); no `protocol/multipath` failure.
+
+MAX_DATAGRAM_SIZE FIX REPRODUCIBILITY
+=====================================
+
+The fix is in the kit source, not GOPATH/pkg/mod, a temporary worktree, or
+only in a binary. It includes the SOCKS UDP first-packet buffer contract fix,
+ReaderMTU/packet headroom, packet-level oversize drop, buffer release, and
+regression tests. A clean pinned clone/injection rebuilt both targets with the
+same hashes as the prior clean build.
+
+FINAL ARTIFACT HASHES
+=====================
+
+Linux amd64:   bfaf19f92d82656f2cb938e15331014571148883d07e3433f792171ddb03f9a2
+Windows amd64: 2f31f3aa392d30268c45a2985ab9556804d262a21f90652255e261cb3bc9823a
+
+RELEASE RECOMMENDATION
+======================
+
+Keep release identity `1.14.0-beta.14-smp3-alpha2.3-r11`. Repository history
+has no formal r11 tag/release marker. Treat any circulated candidate hashes
+as obsolete and publish one canonical final hash set if publishing later.
+Production recommendation: GO WITH THE DOCUMENTED CAVEATS. Do not publish
+automatically from this task.

@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -13,6 +14,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -34,10 +36,13 @@ type Outbound struct {
 	leg1FallbackTag string
 	udpTag          string
 	udpOutbound     adapter.Outbound
+	udpMultipath    bool
+	udpCfg          datagramConfig
 	aggregations    []M.Socksaddr
 	cfg             coreConfig
 	password        string
 	redialInterval  time.Duration
+	bootstrapDelay  time.Duration
 	adaptive        adaptiveSettings
 	adaptiveEnabled bool
 	hy2Health       hy2GlobalHealth
@@ -124,6 +129,23 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	if err != nil {
 		return nil, err
 	}
+	scheduler, err := parseSchedulerMode(options.SchedulerMode)
+	if err != nil {
+		return nil, err
+	}
+	cfg.SchedulerMode = scheduler
+	bootstrapDelay := time.Duration(options.BootstrapFallbackDelay)
+	if bootstrapDelay <= 0 {
+		bootstrapDelay = 250 * time.Millisecond
+	}
+	if bootstrapDelay < 25*time.Millisecond || bootstrapDelay > 10*time.Second {
+		return nil, E.New("bootstrap_fallback_delay must be between 25ms and 10s")
+	}
+	udpEnabled := options.UDPMultipath != nil && options.UDPMultipath.Enabled
+	udpCfg, err := makeDatagramConfig(options.UDPMultipath, weights, cfg.RecoveryTimeout)
+	if err != nil {
+		return nil, err
+	}
 	redialInterval := time.Duration(options.RedialInterval)
 	if redialInterval <= 0 {
 		redialInterval = time.Second
@@ -133,7 +155,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 
 	dependencies := append([]string(nil), options.Outbounds...)
-	if !slices.Contains(dependencies, udpTag) {
+	if !udpEnabled && !slices.Contains(dependencies, udpTag) {
 		dependencies = append(dependencies, udpTag)
 	}
 	if adaptiveEnabled && !slices.Contains(dependencies, options.Leg1Fallback) {
@@ -146,10 +168,13 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		logger:          logger,
 		tags:            tags,
 		udpTag:          udpTag,
+		udpMultipath:    udpEnabled,
+		udpCfg:          udpCfg,
 		aggregations:    aggregations,
 		password:        options.Password,
 		cfg:             cfg,
 		redialInterval:  redialInterval,
+		bootstrapDelay:  bootstrapDelay,
 		adaptive:        adaptiveSettings,
 		adaptiveEnabled: adaptiveEnabled,
 		leg1FallbackTag: options.Leg1Fallback,
@@ -178,20 +203,29 @@ func (o *Outbound) Start() error {
 		}
 		o.leg1Fallback = fallback
 	}
-	udpOutbound, loaded := o.manager.Outbound(o.udpTag)
-	if !loaded {
-		return E.New("multipath UDP outbound not found: ", o.udpTag)
+	if !o.udpMultipath {
+		udpOutbound, loaded := o.manager.Outbound(o.udpTag)
+		if !loaded {
+			return E.New("multipath UDP outbound not found: ", o.udpTag)
+		}
+		if !slices.Contains(udpOutbound.Network(), N.NetworkUDP) {
+			return E.New("multipath UDP outbound does not support UDP: ", o.udpTag)
+		}
+		o.udpOutbound = udpOutbound
 	}
-	if !slices.Contains(udpOutbound.Network(), N.NetworkUDP) {
-		return E.New("multipath UDP outbound does not support UDP: ", o.udpTag)
-	}
-	o.udpOutbound = udpOutbound
 	return nil
 }
 
 func (o *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	switch N.NetworkName(network) {
 	case N.NetworkUDP:
+		if o.udpMultipath {
+			packetConn, err := o.ListenPacket(ctx, destination)
+			if err != nil {
+				return nil, err
+			}
+			return bufio.NewBindPacketConn(packetConn, destination), nil
+		}
 		return o.udpOutbound.DialContext(ctx, network, destination)
 	case N.NetworkTCP:
 	default:
@@ -206,20 +240,55 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 		return nil, E.Cause(err, "generate multipath session id")
 	}
 	destinationString := destination.String()
-	primaryConn, err := o.children[0].DialContext(ctx, N.NetworkTCP, o.aggregations[0])
-	if err != nil {
-		return nil, E.Cause(err, "dial multipath preferred leg ", o.tags[0])
-	}
-	if err = writeHello(primaryConn, helloMessage{Session: sessionID, LegID: 0, Destination: destinationString}, o.password); err != nil {
-		primaryConn.Close()
-		return nil, E.Cause(err, "write multipath preferred hello")
-	}
 
 	cfg := o.cfg
 	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
 	var core *mpCore
 	var appConn net.Conn
 	adaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.hy2Health, nil)
+	type bootstrapResult struct {
+		id         uint8
+		conn       net.Conn
+		carrierTag string
+		err        error
+	}
+	dialBootstrapLeg := func(id uint8) bootstrapResult {
+		dial := func(child adapter.Outbound, carrierTag string) bootstrapResult {
+			conn, dialErr := child.DialContext(sessionCtx, N.NetworkTCP, o.aggregations[id])
+			if dialErr == nil {
+				dialErr = writeHello(conn, helloMessage{Session: sessionID, LegID: id, Mode: helloModeStream, Destination: destinationString}, o.password)
+			}
+			if dialErr != nil && conn != nil {
+				_ = conn.Close()
+				conn = nil
+			}
+			return bootstrapResult{id: id, conn: conn, carrierTag: carrierTag, err: dialErr}
+		}
+
+		child := o.children[id]
+		carrierTag := o.tags[id]
+		carrier := carrierHy2
+		if id == 1 && o.adaptiveEnabled {
+			carrier = adaptive.carrierForLeg1(time.Now())
+			if carrier == carrierSnell {
+				child = o.leg1Fallback
+				carrierTag = o.leg1FallbackTag
+			}
+		}
+		result := dial(child, carrierTag)
+		if result.err == nil || id != 1 || !o.adaptiveEnabled || carrier != carrierHy2 || sessionCtx.Err() != nil {
+			return result
+		}
+
+		// A failed bootstrap Hy2 attempt is already actionable for this logical
+		// connection. Switch locally to Snell and retry it immediately, so a healthy
+		// fallback can still win bootstrap when leg0 is unavailable.
+		if adaptive.recordCarrierFailure(false) && adaptive.currentCarrier() == carrierSnell {
+			return dial(o.leg1Fallback, o.leg1FallbackTag)
+		}
+		return result
+	}
+
 	var dialMu sync.Mutex
 	joining := [2]bool{}
 	scheduled := [2]bool{}
@@ -285,13 +354,16 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 		o.hy2Health.noteActiveSuccess()
 	}
 	adaptive.onFallback = func(reason string, cooldown bool, probation bool) {
-		if core == nil || core.closing.Load() || core.finalizing.Load() {
-			return
-		}
+		// Global carrier health must be updated even during bootstrap, before a
+		// logical core exists. In particular, a failed probation dial must re-enter
+		// cooldown instead of leaving the single global canary slot stuck.
 		o.logger.InfoContext(ctx, "multipath leg1 carrier fallback: hysteria2 -> snell reason=", reason)
 		if cooldown || probation {
 			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
 			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration)
+		}
+		if core == nil || core.closing.Load() || core.finalizing.Load() {
+			return
 		}
 		if !core.replaceLeg(1, &adaptiveCarrierReplacementError{from: carrierHy2, reason: reason}) {
 			scheduleLeg(1, o.redialInterval)
@@ -529,25 +601,490 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			ensureLeg(1)
 		}
 	}
+	// Delayed parallel bootstrap. Leg0 gets a head start, but a slow initial
+	// handshake is not allowed to serialize logical-session establishment forever.
+	// A hard leg0 failure starts leg1 immediately; otherwise leg1 starts after the
+	// configured fallback delay. The first authenticated HELLO wins bootstrap.
+	bootstrapResults := make(chan bootstrapResult, 2)
+	bootstrapStarted := [2]bool{}
+	bootstrapCompleted := [2]bool{}
+	bootstrapErrors := [2]error{}
+	startBootstrap := func(id uint8) {
+		if bootstrapStarted[id] {
+			return
+		}
+		bootstrapStarted[id] = true
+		go func() { bootstrapResults <- dialBootstrapLeg(id) }()
+	}
+	startBootstrap(0)
+	bootstrapTimer := time.NewTimer(o.bootstrapDelay)
+	defer bootstrapTimer.Stop()
+	var first bootstrapResult
+bootstrapLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			cancelSession()
+			return nil, ctx.Err()
+		case <-bootstrapTimer.C:
+			startBootstrap(1)
+		case result := <-bootstrapResults:
+			bootstrapCompleted[result.id] = true
+			bootstrapErrors[result.id] = result.err
+			if result.err == nil {
+				first = result
+				break bootstrapLoop
+			}
+			if result.id == 0 {
+				startBootstrap(1)
+			}
+			if bootstrapStarted[0] && bootstrapStarted[1] && bootstrapCompleted[0] && bootstrapCompleted[1] {
+				cancelSession()
+				return nil, E.New("multipath bootstrap failed: leg0=", bootstrapErrors[0], " leg1=", bootstrapErrors[1])
+			}
+		}
+	}
+	if !bootstrapTimer.Stop() {
+		select {
+		case <-bootstrapTimer.C:
+		default:
+		}
+	}
+
 	core, appConn = newCore(cfg)
 	adaptive.core = core
 	go func() {
 		<-core.Done()
 		cancelSession()
 	}()
-	if err = core.addLeg(0, primaryConn, nil); err != nil {
-		appConn.Close()
+	if err = core.addLeg(first.id, first.conn, nil); err != nil {
+		_ = first.conn.Close()
+		_ = appConn.Close()
+		_ = core.Close()
 		return nil, err
 	}
-	o.logger.InfoContext(ctx, "multipath connection to ", destination, " via preferred ", o.tags[0])
+	if first.id == 1 {
+		adaptive.markLegReady()
+		// If the fallback path created the logical stream, it must be schedulable
+		// immediately and independently repairable even before throughput activation.
+		core.activate()
+	}
+	o.logger.InfoContext(ctx, "multipath connection to ", destination, " bootstrapped via leg ", first.id, " / ", first.carrierTag)
+
+	// If the delayed race already launched the other leg, do not discard that
+	// in-flight transport. Join a successful result into this same session; failed
+	// speculative leg1 attempts remain lazy, while a missing preferred leg0 is
+	// repaired because a leg1 bootstrap necessarily activated the core.
+	otherID := first.id ^ 1
+	if bootstrapStarted[otherID] {
+		if bootstrapCompleted[otherID] {
+			if first.id == 1 && bootstrapErrors[otherID] != nil {
+				scheduleLeg(otherID, o.redialInterval)
+			}
+		} else {
+			dialMu.Lock()
+			joining[otherID] = true
+			dialMu.Unlock()
+			go func(expected uint8) {
+				result := <-bootstrapResults
+				dialMu.Lock()
+				joining[expected] = false
+				dialMu.Unlock()
+				select {
+				case <-core.Done():
+					if result.conn != nil {
+						_ = result.conn.Close()
+					}
+					return
+				default:
+				}
+				if result.id != expected {
+					if result.conn != nil {
+						_ = result.conn.Close()
+					}
+					return
+				}
+				if result.err == nil {
+					result.err = core.addLeg(result.id, result.conn, nil)
+				}
+				if result.err == nil {
+					if result.id == 1 {
+						adaptive.markLegReady()
+						// A speculative leg1 that was slow enough to be launched is useful
+						// immediately; activate rather than keep an idle paid-for transport.
+						core.activate()
+					}
+					o.logger.InfoContext(ctx, "multipath bootstrap companion leg ", result.id, " ready via ", result.carrierTag, " for ", destination)
+					return
+				}
+				if result.conn != nil {
+					_ = result.conn.Close()
+				}
+				if expected == 0 || core.active.Load() {
+					scheduleLeg(expected, o.redialInterval)
+				}
+			}(otherID)
+		}
+	}
 	return appConn, nil
 }
 
 func (o *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
-	if o.udpOutbound == nil {
+	if !o.udpMultipath {
+		if o.udpOutbound == nil {
+			return nil, E.New("multipath outbound is not started")
+		}
+		return o.udpOutbound.ListenPacket(ctx, destination)
+	}
+	return o.newDatagramPacketConn(ctx, destination)
+}
+
+func (o *Outbound) newDatagramPacketConn(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if len(o.children) != 2 {
 		return nil, E.New("multipath outbound is not started")
 	}
-	return o.udpOutbound.ListenPacket(ctx, destination)
+	sessionID, err := newSessionID()
+	if err != nil {
+		return nil, E.Cause(err, "generate multipath UDP session id")
+	}
+	destinationString := destination.String()
+	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
+	udpAdaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.hy2Health, nil)
+	udpAdaptive.onSelected = func(carrier leg1Carrier, probation bool) {
+		if o.adaptiveEnabled {
+			o.logger.InfoContext(ctx, "multipath UDP leg1 carrier selected: ", carrier.String(), " probation=", probation)
+		}
+	}
+	udpAdaptive.onFallback = func(reason string, cooldown bool, probation bool) {
+		o.logger.InfoContext(ctx, "multipath UDP leg1 carrier fallback: hysteria2 -> snell reason=", reason)
+		if cooldown || probation {
+			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
+			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration, " source=udp")
+		}
+	}
+	udpAdaptive.onRecovery = func() {
+		o.hy2Health.noteRecovery()
+		o.logger.InfoContext(ctx, "multipath hysteria2 cooldown cleared after useful UDP probation traffic")
+	}
+	udpAdaptive.onProbationRelease = func() { o.hy2Health.releaseProbation() }
+
+	var udpHy2UsefulReported atomic.Bool
+	dialLeg := func(id uint8) (net.Conn, string, error) {
+		dial := func(child adapter.Outbound, carrierTag string) (net.Conn, string, error) {
+			conn, dialErr := child.DialContext(sessionCtx, N.NetworkTCP, o.aggregations[id])
+			if dialErr == nil {
+				dialErr = writeHello(conn, helloMessage{Session: sessionID, LegID: id, Mode: helloModeDatagram, Destination: destinationString}, o.password)
+			}
+			if dialErr != nil && conn != nil {
+				_ = conn.Close()
+				conn = nil
+			}
+			return conn, carrierTag, dialErr
+		}
+
+		child := o.children[id]
+		carrierTag := o.tags[id]
+		carrier := carrierHy2
+		if id == 1 && o.adaptiveEnabled {
+			carrier = udpAdaptive.carrierForLeg1(time.Now())
+			if carrier == carrierSnell {
+				child = o.leg1Fallback
+				carrierTag = o.leg1FallbackTag
+			}
+		}
+		conn, usedTag, dialErr := dial(child, carrierTag)
+		if dialErr == nil || id != 1 || !o.adaptiveEnabled || carrier != carrierHy2 || sessionCtx.Err() != nil {
+			return conn, usedTag, dialErr
+		}
+		if udpAdaptive.recordCarrierFailure(false) && udpAdaptive.currentCarrier() == carrierSnell {
+			return dial(o.leg1Fallback, o.leg1FallbackTag)
+		}
+		return conn, usedTag, dialErr
+	}
+
+	// Datagram bootstrap uses the same delayed race as the stream data plane.
+	// This avoids making every UDP flow wait behind a slow preferred carrier while
+	// still giving leg0 a configurable head start.
+	type udpBootstrapResult struct {
+		id         uint8
+		conn       net.Conn
+		carrierTag string
+		err        error
+	}
+	bootstrapResults := make(chan udpBootstrapResult, 2)
+	bootstrapStarted := [2]bool{}
+	bootstrapCompleted := [2]bool{}
+	bootstrapErrors := [2]error{}
+	startBootstrap := func(id uint8) {
+		if bootstrapStarted[id] {
+			return
+		}
+		bootstrapStarted[id] = true
+		go func() {
+			conn, carrierTag, dialErr := dialLeg(id)
+			bootstrapResults <- udpBootstrapResult{id: id, conn: conn, carrierTag: carrierTag, err: dialErr}
+		}()
+	}
+	startBootstrap(0)
+	timer := time.NewTimer(o.bootstrapDelay)
+	defer timer.Stop()
+	var first udpBootstrapResult
+udpBootstrapLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			cancelSession()
+			udpAdaptive.releaseUnusedProbation()
+			return nil, ctx.Err()
+		case <-timer.C:
+			startBootstrap(1)
+		case result := <-bootstrapResults:
+			bootstrapCompleted[result.id] = true
+			bootstrapErrors[result.id] = result.err
+			if result.err == nil {
+				first = result
+				break udpBootstrapLoop
+			}
+			if result.id == 0 {
+				startBootstrap(1)
+			}
+			if bootstrapStarted[0] && bootstrapStarted[1] && bootstrapCompleted[0] && bootstrapCompleted[1] {
+				cancelSession()
+				udpAdaptive.releaseUnusedProbation()
+				return nil, E.New("multipath UDP bootstrap failed: leg0=", bootstrapErrors[0], " leg1=", bootstrapErrors[1])
+			}
+		}
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+
+	cfg := o.udpCfg
+	var core *mpDatagramCore
+	var joiningMu sync.Mutex
+	joining := [2]bool{}
+	var ensureLeg func(uint8)
+	cfg.OnLegUseful = func(id uint8, _ int) {
+		if id != 1 || !o.adaptiveEnabled || udpAdaptive.currentCarrier() != carrierHy2 {
+			return
+		}
+		if !udpHy2UsefulReported.CompareAndSwap(false, true) {
+			return
+		}
+		// Unlike TCP, UDP has no cumulative ACK signal. A probation carrier is
+		// therefore promoted only after a real application datagram has actually
+		// traversed leg1 in either direction, not merely after HELLO/dial success.
+		if !udpAdaptive.completeProbationRecovery() {
+			o.hy2Health.noteActiveSuccess()
+		}
+	}
+	cfg.OnLegDown = func(id uint8, legErr error) {
+		select {
+		case <-core.Done():
+			return
+		default:
+		}
+		carrierAtFailure := carrierHy2
+		if id == 1 && o.adaptiveEnabled {
+			carrierAtFailure = udpAdaptive.currentCarrier()
+			if carrierAtFailure == carrierHy2 {
+				udpAdaptive.recordCarrierFailure(true)
+			}
+		}
+		carrierTag := o.tags[id]
+		if id == 1 && o.adaptiveEnabled && carrierAtFailure == carrierSnell {
+			carrierTag = o.leg1FallbackTag
+		}
+		o.logger.WarnContext(ctx, "multipath UDP leg ", id, " down via ", carrierTag, ": ", legErr)
+		time.AfterFunc(o.redialInterval, func() { ensureLeg(id) })
+	}
+	core, packetConn := newDatagramCore(cfg)
+
+	// Install the repair closure before addLeg starts read/write workers. An
+	// immediately-closing bootstrap transport can therefore never race OnLegDown
+	// against an uninitialized ensureLeg function.
+	ensureLeg = func(id uint8) {
+		if id > 1 || core == nil || core.hasLeg(id) {
+			return
+		}
+		select {
+		case <-core.Done():
+			return
+		default:
+		}
+		joiningMu.Lock()
+		if joining[id] {
+			joiningMu.Unlock()
+			return
+		}
+		joining[id] = true
+		joiningMu.Unlock()
+		go func() {
+			defer func() { joiningMu.Lock(); joining[id] = false; joiningMu.Unlock() }()
+			for {
+				select {
+				case <-core.Done():
+					return
+				default:
+				}
+				if core.hasLeg(id) {
+					return
+				}
+				conn, carrierTag, dialErr := dialLeg(id)
+				if dialErr == nil {
+					if id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierHy2 {
+						udpHy2UsefulReported.Store(false)
+					}
+					dialErr = core.addLeg(id, conn, nil)
+				}
+				if dialErr == nil {
+					o.logger.InfoContext(ctx, "multipath UDP leg ", id, " ready via ", carrierTag, " for ", destination)
+					return
+				}
+				if conn != nil {
+					_ = conn.Close()
+				}
+				o.logger.WarnContext(ctx, "multipath UDP leg ", id, " redial failed: ", dialErr)
+				timer := time.NewTimer(o.redialInterval)
+				select {
+				case <-core.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		}()
+	}
+
+	if first.id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierHy2 {
+		udpHy2UsefulReported.Store(false)
+	}
+	if err := core.addLeg(first.id, first.conn, nil); err != nil {
+		cancelSession()
+		udpAdaptive.releaseUnusedProbation()
+		_ = first.conn.Close()
+		_ = core.Close()
+		return nil, err
+	}
+	o.logger.InfoContext(ctx, "multipath UDP session to ", destination, " bootstrapped via leg ", first.id, " / ", first.carrierTag, " mode=", cfg.Mode.String())
+
+	go func() {
+		<-core.Done()
+		cancelSession()
+		udpAdaptive.releaseUnusedProbation()
+	}()
+
+	otherID := first.id ^ 1
+	if bootstrapStarted[otherID] && !bootstrapCompleted[otherID] {
+		joiningMu.Lock()
+		joining[otherID] = true
+		joiningMu.Unlock()
+		go func(expected uint8) {
+			result := <-bootstrapResults
+			joiningMu.Lock()
+			joining[expected] = false
+			joiningMu.Unlock()
+			select {
+			case <-core.Done():
+				if result.conn != nil {
+					_ = result.conn.Close()
+				}
+				return
+			default:
+			}
+			if result.id == expected && result.err == nil {
+				if result.id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierHy2 {
+					udpHy2UsefulReported.Store(false)
+				}
+				result.err = core.addLeg(result.id, result.conn, nil)
+			}
+			if result.err == nil {
+				o.logger.InfoContext(ctx, "multipath UDP bootstrap companion leg ", result.id, " ready via ", result.carrierTag, " for ", destination)
+				return
+			}
+			if result.conn != nil {
+				_ = result.conn.Close()
+			}
+			ensureLeg(expected)
+		}(otherID)
+	} else {
+		// Datagram mode intentionally wants both paths available for stripe,
+		// duplicate and adaptive decisions, so repair/join the companion even if
+		// its speculative bootstrap already failed or was never started.
+		ensureLeg(otherID)
+	}
+	return newSingDatagramPacketConn(packetConn), nil
+}
+
+func parseSchedulerMode(value string) (schedulerMode, error) {
+	switch value {
+	case "", "adaptive":
+		return schedulerAdaptive, nil
+	case "static":
+		return schedulerStatic, nil
+	default:
+		return schedulerStatic, E.New("scheduler_mode must be static or adaptive")
+	}
+}
+
+func makeDatagramConfig(options *option.MultipathUDPOptions, weights []uint32, recoveryTimeout time.Duration) (datagramConfig, error) {
+	cfg := datagramConfig{Mode: datagramModeAdaptive, BandwidthMbps: append([]uint32(nil), weights...), RecoveryTimeout: recoveryTimeout}
+	if options == nil || !options.Enabled {
+		return cfg, nil
+	}
+	switch options.Mode {
+	case "", "adaptive":
+		cfg.Mode = datagramModeAdaptive
+	case "stripe":
+		cfg.Mode = datagramModeStripe
+	case "duplicate":
+		cfg.Mode = datagramModeDuplicate
+	default:
+		return datagramConfig{}, E.New("udp_multipath.mode must be stripe, duplicate or adaptive")
+	}
+	cfg.QueueFrames = int(options.QueueFrames)
+	if cfg.QueueFrames == 0 {
+		cfg.QueueFrames = 256
+	}
+	if cfg.QueueFrames < 8 || cfg.QueueFrames > 4096 {
+		return datagramConfig{}, E.New("udp_multipath.queue_frames must be between 8 and 4096")
+	}
+	cfg.MaxDatagramSize = int(options.MaxDatagramSize)
+	if cfg.MaxDatagramSize == 0 {
+		cfg.MaxDatagramSize = maxRoutedDatagramSize
+	}
+	if cfg.MaxDatagramSize < 512 || cfg.MaxDatagramSize > maxRoutedDatagramSize {
+		return datagramConfig{}, E.New("udp_multipath.max_datagram_size must be between 512 and 16384")
+	}
+	cfg.DedupWindow = uint64(options.DedupWindow)
+	if cfg.DedupWindow == 0 {
+		cfg.DedupWindow = 4096
+	}
+	if cfg.DedupWindow < 64 || cfg.DedupWindow > 1<<20 {
+		return datagramConfig{}, E.New("udp_multipath.dedup_window must be between 64 and 1048576")
+	}
+	cfg.IdleTimeout = time.Duration(options.IdleTimeout)
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = 2 * time.Minute
+	}
+	if cfg.IdleTimeout < 5*time.Second || cfg.IdleTimeout > time.Hour {
+		return datagramConfig{}, E.New("udp_multipath.idle_timeout must be between 5s and 1h")
+	}
+	cfg.AdaptiveQueueDelay = time.Duration(options.AdaptiveQueueDelay)
+	if cfg.AdaptiveQueueDelay <= 0 {
+		cfg.AdaptiveQueueDelay = 120 * time.Millisecond
+	}
+	if cfg.AdaptiveQueueDelay < time.Millisecond || cfg.AdaptiveQueueDelay > 5*time.Second {
+		return datagramConfig{}, E.New("udp_multipath.adaptive_queue_delay must be between 1ms and 5s")
+	}
+	cfg.AdaptiveDuplicateThreshold = int(options.AdaptiveDuplicateThreshold)
+	if cfg.AdaptiveDuplicateThreshold < 0 || cfg.AdaptiveDuplicateThreshold > cfg.MaxDatagramSize {
+		return datagramConfig{}, E.New("invalid udp_multipath.adaptive_duplicate_threshold")
+	}
+	return cfg, nil
 }
 
 func makeCoreConfig(threshold uint32, window time.Duration, chunkSize, queueFrames int, weights []uint32, maxReorder, maxInflight int, ackInterval, retransmitTimeout, recoveryTimeout time.Duration) (coreConfig, error) {

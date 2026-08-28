@@ -42,6 +42,21 @@ func (c *failAfterConn) Write(p []byte) (int, error) {
 	return n, io.ErrClosedPipe
 }
 
+func waitForCounterAtLeast(t *testing.T, name string, load func() uint64, want uint64) uint64 {
+	t.Helper()
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		got := load()
+		if got >= want {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s=%d, want at least %d", name, got, want)
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+}
+
 func testCoreConfig() coreConfig {
 	return coreConfig{
 		ChunkSize:         4096,
@@ -354,7 +369,7 @@ func TestCoreAckProgressWakesNextOverdueFrontierRescueBeforeTicker(t *testing.T)
 	case <-time.After(150 * time.Millisecond):
 		t.Fatal("new overdue ACK frontier waited for periodic retransmit ticker")
 	}
-	if got := core.frontierRescueAttempts.Load(); got != 1 {
+	if got := waitForCounterAtLeast(t, "frontier rescue attempts", core.frontierRescueAttempts.Load, 1); got != 1 {
 		t.Fatalf("frontier rescue attempts=%d, want 1", got)
 	}
 }
@@ -462,7 +477,7 @@ func TestCoreFailedRescueEnqueueDoesNotConsumeCooldown(t *testing.T) {
 	default:
 		t.Fatal("frontier remained throttled after failed rescue enqueue")
 	}
-	if got := core.frontierRescueAttempts.Load(); got != 1 {
+	if got := waitForCounterAtLeast(t, "successful rescue attempts", core.frontierRescueAttempts.Load, 1); got != 1 {
 		t.Fatalf("successful rescue attempts=%d, want 1", got)
 	}
 	if head.lastRescueAt.IsZero() {
@@ -1531,5 +1546,118 @@ func TestSnapshotStatsTracksCumulativeAckFrontierLeg(t *testing.T) {
 	}
 	if stats.OutstandingFramesByLeg != [2]int{1, 1} {
 		t.Fatalf("outstanding by leg=%v, want [1 1]", stats.OutstandingFramesByLeg)
+	}
+}
+
+func TestCoreAdaptiveSchedulerPrefersUsefulLowLatencyLeg(t *testing.T) {
+	cfg := testCoreConfig()
+	cfg.SchedulerMode = schedulerAdaptive
+	cfg.BandwidthMbps = []uint32{100, 100}
+	core, appConn := newCore(cfg)
+	defer core.Close()
+	defer appConn.Close()
+
+	a0, b0 := net.Pipe()
+	a1, b1 := net.Pipe()
+	defer b0.Close()
+	defer b1.Close()
+	if err := core.addLeg(0, a0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.addLeg(1, a1, nil); err != nil {
+		t.Fatal(err)
+	}
+	leg0 := core.getLeg(0)
+	leg1 := core.getLeg(1)
+	leg0.perf.mu.Lock()
+	leg0.perf.ackedBPS = 20 * 1e6
+	leg0.perf.writeBPS = 20 * 1e6
+	leg0.perf.writeLatency = 180 * time.Millisecond
+	leg0.perf.mu.Unlock()
+	leg1.perf.mu.Lock()
+	leg1.perf.ackedBPS = 20 * 1e6
+	leg1.perf.writeBPS = 20 * 1e6
+	leg1.perf.writeLatency = 2 * time.Millisecond
+	leg1.perf.mu.Unlock()
+
+	if chosen := core.chooseLeg(true, -1); chosen == nil || chosen.id != 1 {
+		t.Fatalf("adaptive scheduler chose high-latency leg: %#v", chosen)
+	}
+}
+
+func TestCoreStaticSchedulerIgnoresDynamicLatency(t *testing.T) {
+	cfg := testCoreConfig()
+	cfg.SchedulerMode = schedulerStatic
+	cfg.BandwidthMbps = []uint32{400, 100}
+	core, appConn := newCore(cfg)
+	defer core.Close()
+	defer appConn.Close()
+
+	a0, b0 := net.Pipe()
+	a1, b1 := net.Pipe()
+	defer b0.Close()
+	defer b1.Close()
+	if err := core.addLeg(0, a0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.addLeg(1, a1, nil); err != nil {
+		t.Fatal(err)
+	}
+	leg0 := core.getLeg(0)
+	leg0.perf.mu.Lock()
+	leg0.perf.writeLatency = time.Second
+	leg0.perf.mu.Unlock()
+	if chosen := core.chooseLeg(true, -1); chosen == nil || chosen.id != 0 {
+		t.Fatalf("static scheduler no longer honors configured weight: %#v", chosen)
+	}
+}
+
+func TestCorePrimaryQueueSaturationImmediatelyActivatesBooster(t *testing.T) {
+	cfg := testCoreConfig()
+	cfg.QueueFrames = 1
+	cfg.ChunkSize = 1024
+	cfg.MaxInflightFrames = 16
+	cfg.ActivationWindow = 5 * time.Second
+	cfg.ThresholdBytesPS = 1 << 60
+	activated := make(chan struct{}, 1)
+	cfg.OnActivate = func() {
+		select {
+		case activated <- struct{}{}:
+		default:
+		}
+	}
+	core, app := newCore(cfg)
+	defer core.Close()
+	a, b := net.Pipe()
+	defer b.Close()
+	go func() { _, _ = io.Copy(io.Discard, b) }()
+	release := make(chan struct{})
+	slow := &gatedWriteConn{Conn: a, started: make(chan struct{}), release: release}
+	if err := core.addLeg(0, slow, nil); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := app.Write(bytes.Repeat([]byte("q"), 8*cfg.ChunkSize))
+		writeDone <- err
+	}()
+	select {
+	case <-slow.started:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("primary writer never blocked")
+	}
+	select {
+	case <-activated:
+	case <-time.After(500 * time.Millisecond):
+		close(release)
+		t.Fatal("full preferred queue did not immediately activate booster")
+	}
+	close(release)
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("logical writer did not unblock after releasing primary")
 	}
 }

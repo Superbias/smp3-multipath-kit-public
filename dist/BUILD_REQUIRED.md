@@ -1,15 +1,15 @@
 # Build required
 
-This alpha2.3-r10 artifact is a clean source release; no prebuilt binary is bundled.
+This alpha2.3-r11 artifact is a source candidate; no prebuilt r11 binary is bundled.
 
-Run `./build.sh` in WSL/Linux with network access for:
+Run `./build.sh` in network-enabled WSL/Linux. It requires:
 
-- the pinned sing-box revision;
-- the pinned Go 1.25.5 toolchain when not already cached;
-- the upstream Go module dependency graph.
+- pinned sing-box `v1.14.0-beta.14` commit `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`;
+- Go `1.25.5` for the injected/full build;
+- upstream Go module dependencies.
 
 Expected binary version:
 
-`1.14.0-beta.14-smp3-alpha2.3-r10`
+`1.14.0-beta.14-smp3-alpha2.3-r11`
 
-For deterministic support and testing, rebuild/replace both the landing-server and client binaries from the same r10 source release.
+Build both client and landing-server binaries from this same r11 candidate, then run the matrix in `R11_ACCEPTANCE.md`.

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-NAME="smp3-multipath-kit-alpha2.3-r10"
+NAME="smp3-multipath-kit-alpha2.3-r11"
 STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
 STAGE="$STAGE_ROOT/$NAME"
-OUT_ZIP="${1:-$ROOT/$NAME-release.zip}"
+OUT_ZIP="${1:-$ROOT/$NAME-source.zip}"
 
 LINUX_BIN="$ROOT/dist/smp3-proxy-linux-amd64"
 WINDOWS_BIN="$ROOT/dist/smp3-proxy-windows-amd64.exe"
@@ -19,7 +19,7 @@ fi
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$STAGE/dist" "$STAGE/config" "$STAGE/patches" "$STAGE/scripts" "$STAGE/src"
 
-for f in README.md README-zh_CN.md RELEASE_NOTES.md CHANGELOG.md BUILD_STATUS.md TEST_RESULTS.txt \
+for f in README.md README-zh_CN.md RELEASE_NOTES.md CHANGELOG.md BUILD_STATUS.md TEST_RESULTS.txt R11_ACCEPTANCE.md \
          SECURITY.md NOTICE.md VERSION build.sh validate-kit.sh install-server.sh install-client.ps1 \
          package-release.sh UPGRADE-alpha2-to-alpha2.1.md UPGRADE-alpha2.1-to-alpha2.2.md; do
   [ -f "$ROOT/$f" ] && cp -a "$ROOT/$f" "$STAGE/$f"
@@ -112,15 +112,26 @@ if find "$STAGE" \( -name .git -o -name .work -o -name .release-stage -o -name _
 fi
 
 rm -f "$OUT_ZIP" "$OUT_ZIP.sha256"
-(
-  cd "$STAGE_ROOT"
-  zip -q -r "$OUT_ZIP" "$NAME"
-)
+if command -v zip >/dev/null 2>&1; then
+  (
+    cd "$STAGE_ROOT"
+    zip -q -r "$OUT_ZIP" "$NAME"
+  )
+elif command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+  # The closeout host may have Windows PowerShell but no WSL zip package.
+  # Preserve the same top-level release directory in the archive.
+  OUT_ZIP_WIN="$(wslpath -w "$OUT_ZIP")"
+  STAGE_WIN="$(wslpath -w "$STAGE")"
+  powershell.exe -NoProfile -Command "Compress-Archive -Path '$STAGE_WIN' -DestinationPath '$OUT_ZIP_WIN' -Force"
+else
+  echo 'missing zip (or Windows PowerShell fallback)' >&2
+  exit 1
+fi
 sha256sum "$OUT_ZIP" > "$OUT_ZIP.sha256"
 
 if [ "$HAVE_BINARIES" -eq 1 ]; then
   echo "[+] binary release: $OUT_ZIP"
 else
-  echo "[+] clean source release: $OUT_ZIP"
+  echo "[+] clean source candidate: $OUT_ZIP"
 fi
 echo "[+] sha256: $OUT_ZIP.sha256"

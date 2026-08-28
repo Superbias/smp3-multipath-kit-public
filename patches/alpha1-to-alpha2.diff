@@ -1,0 +1,2599 @@
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/BUILD_STATUS.md alpha2/BUILD_STATUS.md
+--- alpha1/BUILD_STATUS.md	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/BUILD_STATUS.md	2026-08-26 09:38:57.362845495 +0000
+@@ -0,0 +1,19 @@
++# Alpha2 verification status
++
++Verified in the artifact build environment on 2026-08-26:
++
++- JSON syntax for both example configs.
++- Python source injector syntax.
++- Bash syntax for build/server/validation scripts.
++- SMP3 transport core tests with the Go race detector.
++- Repeated test runs for hard leg failure, ACK-timeout replay, one-way control black-hole, silent-stall activation, recovery-timer reset, and final-frame drain.
++- `go vet` on the standalone SMP3 core and tests.
++
++Not executed in this environment:
++
++- A complete checkout + full `go build` of the pinned upstream sing-box revision, because the execution sandbox cannot resolve/download GitHub and Go modules directly.
++- A two-host live network interoperability test between Windows and the landing server.
++
++`build.sh` therefore performs the missing integration checks on the deployment machine: it checks out the exact pinned revision, injects the sources, runs `go test ./protocol/multipath`, and only then builds the Linux/Windows binaries.
++
++Treat alpha2 as experimental until that full build and an end-to-end failover/throughput test pass in your environment.
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/CHANGELOG.md alpha2/CHANGELOG.md
+--- alpha1/CHANGELOG.md	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/CHANGELOG.md	2026-08-26 09:37:58.483531003 +0000
+@@ -0,0 +1,28 @@
++# Changelog
++
++## alpha2 — SMP3
++
++- Wire protocol magic/version bumped from SMP2 to SMP3.
++- Added cumulative ACK control frames.
++- Added bounded outstanding TX window and ACK-driven release.
++- Added cross-leg retransmission of unacknowledged frames.
++- Added graceful single-leg removal instead of immediate core failure.
++- Added emergency secondary activation on preferred-leg loss.
++- Added client automatic re-dial/rejoin of either failed leg.
++- Added `recovery_timeout`, `retransmit_timeout`, `ack_interval`, `max_inflight_frames`, `redial_interval`.
++- Added per-child aggregation `endpoints` while preserving shared `server/server_port` compatibility.
++- Reject orphan secondary legs from creating new server sessions.
++- Added standalone reliability tests for hard failure and black-hole replay.
++- Added silent-stall activation when the preferred TCP stays ESTABLISHED but logical ACKs stop.
++- Fixed stale recovery timers so a later outage receives a fresh full recovery window.
++- Fixed the example Snell carrier pairing: sing-box outbound v4 to Snell server v5.
++- Build script now pins Go 1.25.5 through GOTOOLCHAIN and includes sing-box release/LDFLAGS.
++- Install scripts are safer for in-place upgrades.
++- Downstream executable/service renamed to `smp3-proxy` to avoid implying an official upstream build.
++
++## alpha1 — SMP2
++
++- HMAC-authenticated hello with timestamp and replay nonce.
++- Lazy secondary activation.
++- Bidirectional activation signalling.
++- Weighted two-leg striping and ordered reassembly.
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/NOTICE.md alpha2/NOTICE.md
+--- alpha1/NOTICE.md	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/NOTICE.md	2026-08-26 09:37:52.544366169 +0000
+@@ -0,0 +1,10 @@
++# Downstream / license notice
++
++This kit contains original experimental SMP3 multipath source and a source injector that modifies a fixed upstream sing-box source revision at build time.
++
++Upstream project: https://github.com/SagerNet/sing-box
++Pinned revision: 4902660f8424fef3c2a60dfcdce7aeadfe3f3b88 (v1.14.0-beta.14)
++
++This kit is not an official sing-box release and is not affiliated with or endorsed by SagerNet. The generated downstream executable is named `smp3-proxy` to avoid implying that it is an official upstream binary.
++
++When building, redistributing, or modifying the combined work, review and comply with the upstream repository's license terms at the pinned revision. Keep the corresponding source and modifications available as required by those terms.
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/README.md alpha2/README.md
+--- alpha1/README.md	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/README.md	2026-08-26 09:38:57.863016772 +0000
+@@ -1,43 +1,241 @@
+-# sing-box Multipath Kit (experimental alpha1)
++# SMP3 Multipath Kit — experimental alpha2
+ 
+ Pinned base: **sing-box v1.14.0-beta.14**, revision `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`.
+ 
+-This kit keeps Mihomo as the user-facing client. A patched sing-box process listens locally (default `127.0.0.1:2080`) and performs per-TCP-connection two-leg aggregation to a patched sing-box server.
++This is an **unofficial downstream experiment**, not an official sing-box release and not affiliated with SagerNet. The produced executable is deliberately named `smp3-proxy` rather than using the upstream project name. See `NOTICE.md`.
+ 
+-## Changes versus the supplied SMP1 PoC
++This kit keeps **Mihomo as the user-facing client**. A patched downstream proxy process based on the pinned sing-box source runs locally on Windows (default mixed/SOCKS port `127.0.0.1:2080`) and implements one logical TCP byte stream over two independently-routed child outbounds. A patched downstream proxy process based on the pinned sing-box source on the landing server reorders and reconstructs the stream before routing it to the real destination.
+ 
+-- `SMP1` -> `SMP2` authenticated hello using HMAC-SHA256, timestamp and nonce replay cache.
+-- Secondary leg is **not dialed at connection start**. It is created only after activation.
+-- Activation can be triggered by the client upload rate / primary queue pressure, or by the server download direction. The server sends an authenticated-session in-band ACTIVATE control frame to ask the client to create leg 1.
+-- Secondary dial failure retries without killing the primary connection.
+-- The original weighted work-conserving scheduler and reorder buffer are retained.
+-- UDP remains delegated to the configured `udp_outbound`; this PoC aggregates TCP only.
++This is **application-layer multipath**, not Linux kernel MPTCP. It does not use `MP_CAPABLE` / `MP_JOIN`, so a middlebox stripping MPTCP TCP options does not affect SMP3. See `BUILD_STATUS.md` for exactly what has and has not been verified.
+ 
+-## Important limitation
++## Intended topology
+ 
+-This alpha deliberately keeps the original fail-fast behavior after an already-active transport leg breaks. True seamless leg-loss failover requires application-layer ACK + retransmission (otherwise frames that TCP accepted locally but did not deliver remotely can be lost). Do **not** market/test abrupt leg loss as seamless failover yet. Normal "small flow -> one leg; sustained large flow -> two legs" is the target of alpha1.
++```text
++Windows apps
++    |
++  Mihomo
++    |
++SOCKS 127.0.0.1:2080
++    |
++local SMP3 proxy (patched downstream build)
++    |\
++    | \__ leg 1: ordinary public transport (created only after activation)
++    |
++    \____ leg 0: preferred dedicated-line transport
++             \\                         //
++              \\                       //
++               same landing server SMP3 inbound
++                           |
++                        Internet
++```
++
++A very useful deployment pattern is to keep the **SMP3 inbound private** and hide it behind the two existing encrypted child transports:
++
++```text
++leg 0: local SMP3 proxy -> line Snell -> landing private/WG address:24444
++leg 1: local SMP3 proxy -> public Snell on landing -> landing private address:24444
++```
++
++In that layout the custom SMP3 protocol is never exposed directly to the public Internet. The public path is still the normal public route to the same landing server; only its transport wrapper is Snell/SS/etc.
++
++## alpha2 changes
++
++alpha2 changes the wire protocol from `SMP2` to **`SMP3`** and adds reliability semantics that alpha1 intentionally lacked.
++
++### 1. Cumulative ACKs
++
++Every logical direction has its own monotonically increasing frame sequence. The receiver ACKs the next expected sequence after bytes have been delivered into the logical stream.
++
++```text
++DATA 0 ---->
++DATA 1 ---->
++DATA 2 ---->
++        <---- ACK 3
++```
++
++`ACK 3` means all frames `< 3` have been accepted in order.
++
++### 2. Sender retransmission window
++
++Unacknowledged frame payloads are retained in an outstanding window (`max_inflight_frames`). They are not freed merely because the underlying TCP `Write()` succeeded.
++
++This fixes the fundamental alpha1 problem where a transport TCP could accept a frame locally, die before the peer completed that frame, and leave the logical reassembler waiting forever.
++
++### 3. Seamless single-leg loss
++
++When one transport leg fails:
++
++- only that leg is removed;
++- the logical connection is **not** immediately failed;
++- records queued/in-flight on the dead leg become retryable;
++- outstanding records are replayed on a surviving leg;
++- duplicate frames are harmlessly discarded by sequence number;
++- the client background-redials the failed leg using the same logical session ID;
++- a recovered leg can rejoin using its original leg ID.
++
++If the preferred leg dies before the bandwidth threshold has ever fired, alpha2 performs **emergency activation** and allows leg 1 to come up immediately.
++
++Only when **no leg recovers within `recovery_timeout`** is the logical connection failed.
++
++### 4. ACK-timeout replay and silent-black-hole failover
++
++Underlying TCP remains responsible for ordinary packet loss on a healthy single path. SMP3 does not try to compete with normal TCP retransmission.
++
++When two legs are alive, a logical frame that remains unacknowledged past `retransmit_timeout` may be replayed over the *other* leg. This covers black-hole/stalled-path cases where a socket has not failed yet.
++
++When only the preferred leg exists and its oldest logical frame remains unacknowledged past `retransmit_timeout`, alpha2 now treats that as a **silent-stall failover signal** and activates the lazy booster even if the bandwidth threshold was never reached. This avoids a low-rate connection hanging forever on an ESTABLISHED-but-black-holed TCP path.
++
++### 5. Secondary leg still stays lazy
++
++The public/booster leg is **not dialed at connection start**.
++
++It is created only when one of these happens:
++
++- local send rate stays above `activation_threshold_mbps` for the activation window;
++- the preferred-leg send queue remains >=80% full for the activation window;
++- the peer sends the SMP3 `ACTIVATE` control frame because the opposite direction became a large flow;
++- the preferred leg fails and emergency failover is required.
++
++After activation, the second leg stays eligible until the logical connection ends.
++
++### 6. Two different aggregation addresses
++
++alpha2 adds `endpoints`, one per child outbound:
++
++```json
++"outbounds": ["line-path", "public-path"],
++"endpoints": [
++  { "server": "10.66.66.1", "server_port": 24444 },
++  { "server": "YOUR_SERVER_IP", "server_port": 24444 }
++]
++```
++
++This matters when the dedicated-line path can reach the landing through a private/WG address while the public path can reach only a public/proxied address.
++
++For compatibility, the old single `server` / `server_port` pair is still accepted and is used for both paths.
++
++### 7. Orphan-secondary protection
++
++Only leg 0 may create a new server-side logical session. A delayed/replayed leg 1 cannot accidentally create a second routed connection after the original session has expired.
++
++### 8. Recovery deadlines are generation-safe
++
++A temporary recovery now invalidates the previous zero-leg recovery timer. If a path comes back and fails again later, the new outage receives a fresh full `recovery_timeout` instead of being killed by a stale deadline left over from the earlier outage.
++
++### 9. Idempotent reinstall/update scripts
++
++The Windows installer stops an existing task/process before replacing the binary. The Linux installer validates the new configuration before replacing the running service and safely restarts it.
++
++## Authentication and confidentiality
+ 
+-The multipath payload itself is **not encrypted** by SMP2; HMAC authenticates it but does not provide confidentiality. Therefore both child paths should normally be encrypted/authenticated proxy transports (Snell, Shadowsocks, AnyTLS, VLESS+TLS, etc.). Avoid using a raw `direct` child over an untrusted public network.
++The initial SMP3 hello is authenticated with HMAC-SHA256 and includes a timestamp + random nonce replay cache.
++
++**SMP3 payload frames are not independently encrypted.** Use encrypted/authenticated child transports on untrusted networks (Snell, Shadowsocks, AnyTLS, VLESS+TLS, etc.). For the public leg, running an ordinary encrypted proxy on the same landing server avoids an extra geographic hop while also preventing the custom SMP3 stream from being exposed directly.
++
++Do not expose a raw `direct -> public SMP3 inbound` unless you explicitly accept that limitation.
++
++## Remaining limitations
++
++- TCP only. UDP is delegated to `udp_outbound`; it is not multipath-aggregated.
++- If the **whole client process**, **whole server process**, or landing server dies, the logical connection dies. ACK/retransmission protects transport-leg loss, not process crash/state replication.
++- Large RTT differences can still cause head-of-line blocking in the ordered reassembly buffer. alpha2 keeps the simple weighted work-conserving scheduler; RTT/reorder-pressure-aware scheduling is a later optimization.
++- If both legs disappear for longer than `recovery_timeout`, the logical connection is closed.
++- `max_inflight_frames * chunk_size` is the approximate worst-case retained TX payload memory per busy logical direction. With the defaults (`1024 * 64KiB`) the upper bound is roughly 64 MiB for a connection that completely stops ACKing; normal usage is much lower.
++
++## Important tuning guidance
++
++Set `activation_threshold_mbps` **below the sustainable capacity of the preferred dedicated line** if you want the public booster to arrive before that line is saturated.
++
++For example, for a ~100 Mbps preferred line:
++
++```json
++"activation_threshold_mbps": 80,
++"activation_window": "1s",
++"bandwidth_mbps": [100, 500]
++```
++
++`bandwidth_mbps` is a scheduler weight, not a hard limiter.
++
++Reliability defaults:
++
++```json
++"max_reorder_frames": 4096,
++"max_inflight_frames": 1024,
++"ack_interval": "20ms",
++"retransmit_timeout": "1500ms",
++"recovery_timeout": "15s",
++"redial_interval": "1s"
++```
++
++## Snell carrier note
++
++The example intentionally uses **Snell `version: 4` on the sing-box client outbound** and **Snell `version: 5` on the landing-server inbound**. sing-box does not expose a separate v5 client mode because the non-QUIC v5 wire protocol is effectively the same as v4. This is suitable for carrying SMP3 over an existing Snell v5 server.
++
++For the public booster leg, `server.example.json` includes an optional public Snell inbound on port `23456`. The SMP3 inbound itself remains bound to the landing's private aggregation address. The public Snell carrier then CONNECTs to that private SMP3 address locally on the same landing server.
++
++This gives the intended topology:
++
++```text
++leg 0: local SMP3 -> existing dedicated-line Snell -> landing private SMP3
++leg 1: local SMP3 -> public Snell on landing -> landing private SMP3
++```
++
++The custom SMP3 wire format therefore does not need to be exposed raw on the public Internet.
+ 
+ ## Build
+ 
+-On Debian/WSL with Git + a current Go toolchain:
++On Debian/WSL with Git, Python 3 and Go 1.21+ installed:
++
++> The pinned sing-box revision declares **Go 1.25.5**. `build.sh` pins `GOTOOLCHAIN=go1.25.5+auto`, so Go 1.21+ can bootstrap that exact compiler automatically when network access is available.
+ 
+ ```bash
+ ./build.sh
+ ```
+ 
+-The script checks out the exact pinned sing-box revision, injects the bundled source, and builds Linux amd64 + Windows amd64 binaries.
++The build script:
++
++1. runs the bundled standalone transport reliability tests;
++2. checks out the exact pinned sing-box revision;
++3. injects the bundled SMP3 source;
++4. compiles/tests the injected `protocol/multipath` package against that revision;
++5. builds Linux amd64 and Windows amd64 binaries;
++6. writes SHA256 checksums.
+ 
+-## Server
++Outputs:
++
++```text
++dist/smp3-proxy-linux-amd64
++dist/smp3-proxy-windows-amd64.exe
++dist/SHA256SUMS
++```
++
++Before a full source build, you can run the bundled offline core checks:
++
++```bash
++./validate-kit.sh
++```
++
++To generate strong example secrets:
++
++```bash
++./scripts/gen-secrets.sh
++```
++
++## Server installation
+ 
+ ```bash
+ cp config/server.example.json config/server.json
+-# edit config/server.json
++# edit server.json
+ sudo ./install-server.sh
+ ```
+ 
+-## Windows client
++Logs:
++
++```bash
++journalctl -u smp3-proxy -f
++```
++
++## Windows client installation
+ 
+ ```powershell
+ Copy-Item config\client.example.json config\client.json
+@@ -45,17 +243,27 @@
+ powershell -ExecutionPolicy Bypass -File .\install-client.ps1
+ ```
+ 
+-Then add a Mihomo SOCKS5 node pointing at `127.0.0.1:2080`.
+-
+-## Architecture
++Then point Mihomo at the local proxy exposed by the local SMP3 proxy:
+ 
+-```text
+-Mihomo -> local patched sing-box -> leg0 (preferred line)
+-                            \-----> leg1 (public, only after threshold)
+-                                      |
+-                               same patched server
+-                                      |
+-                                   Internet
++```yaml
++proxies:
++  - name: MP-JP
++    type: socks5
++    server: 127.0.0.1
++    port: 2080
+ ```
+ 
+-`server` / `server_port` inside the multipath outbound is the aggregation destination that **both child outbounds must be able to reach**. The child outbounds determine how each leg gets there.
++Mihomo remains responsible for TUN/DNS/rules/selection. The local SMP3 proxy is only the multipath transport engine; Mihomo remains the user-facing client.
++
++## Tests included
++
++`src/protocol/multipath/core_test.go` currently covers:
++
++- normal ordered transfer over one transport leg;
++- a leg dying in the middle of a frame, followed by replay over another leg without breaking the logical stream;
++- a live but black-holed preferred leg, where lack of SMP3 ACK triggers replay over the other live leg;
++- one-way ACK/control black-hole, with ACK broadcast over surviving legs;
++- silent preferred-path black-hole causing automatic lazy-booster activation;
++- recovery timeout reset after a temporary path recovery;
++- write-then-close draining so final logical frames are not torn down before ACK.
++
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/VERSION alpha2/VERSION
+--- alpha1/VERSION	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/VERSION	2026-08-26 09:36:13.715927071 +0000
+@@ -0,0 +1,6 @@
++kit_version=alpha2
++kit_revision=alpha2-r2
++wire_protocol=SMP3
++sing_box_base=v1.14.0-beta.14
++sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
++go_toolchain=go1.25.5
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/build.sh alpha2/build.sh
+--- alpha1/build.sh	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/build.sh	2026-08-26 09:37:32.931773910 +0000
+@@ -8,7 +8,24 @@
+ OUT="$ROOT/dist"
+ mkdir -p "$WORK" "$OUT"
+ command -v git >/dev/null || { echo 'missing git'; exit 1; }
+-command -v go >/dev/null || { echo 'missing go (sing-box beta.14 expects a current Go toolchain)'; exit 1; }
++command -v go >/dev/null || { echo 'missing go (Go 1.21+ bootstrap required; pinned sing-box needs Go 1.25.5)'; exit 1; }
++command -v python3 >/dev/null || { echo 'missing python3'; exit 1; }
++
++# The pinned sing-box revision declares `go 1.25.5`. Go 1.21+ can bootstrap
++# the exact toolchain automatically through GOTOOLCHAIN when network access is
++# available. This avoids accidentally compiling the fixed source base with a
++# materially different local compiler.
++export GOTOOLCHAIN=go1.25.5+auto
++echo "[+] Go toolchain target: $GOTOOLCHAIN"
++
++# These reliability tests exercise the transport core without needing the
++# sing-box repository or external Go modules.
++echo '[+] running standalone SMP3 core reliability tests'
++(
++  cd "$ROOT/src/protocol/multipath"
++  go test core.go core_test.go -v
++)
++
+ if [ ! -d "$SRC/.git" ]; then
+   git clone https://github.com/SagerNet/sing-box.git "$SRC"
+ fi
+@@ -21,11 +38,24 @@
+ echo "[+] fixed base: $BASE_LABEL ($BASE_REV)"
+ python3 "$ROOT/scripts/apply_source.py" "$SRC"
+ gofmt -w constant/proxy.go include/registry.go option/multipath.go protocol/multipath/*.go
+-TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS 2>/dev/null || true)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-mp2 -s -w"
++# Use the project's own default non-Naive build tag set and mandatory shared
++# linker flags. release/LDFLAGS contains flags such as -checklinkname=0 that
++# official sing-box builds require on modern Go versions. We intentionally use
++# DEFAULT_BUILD_TAGS_OTHERS for both targets to avoid pulling the optional
++# Naive/cronet runtime into this small transport-only build.
++TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
++LDFLAGS_SHARED="$(cat release/LDFLAGS)"
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2 $LDFLAGS_SHARED -s -w -buildid="
++
++echo '[+] compiling/testing injected multipath package against pinned sing-box'
++go test -tags "$TAGS" ./protocol/multipath
++
+ echo '[+] building linux/amd64'
+-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags "$LDFLAGS" -o "$OUT/sing-box-mp-linux-amd64" ./cmd/sing-box
++CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags "$LDFLAGS" -o "$OUT/smp3-proxy-linux-amd64" ./cmd/sing-box
++
+ echo '[+] building windows/amd64'
+-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags "$LDFLAGS" -o "$OUT/sing-box-mp-windows-amd64.exe" ./cmd/sing-box
++CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags "$TAGS" -ldflags "$LDFLAGS" -o "$OUT/smp3-proxy-windows-amd64.exe" ./cmd/sing-box
++
+ sha256sum "$OUT"/* | tee "$OUT/SHA256SUMS"
+-echo '[+] done:'; ls -lh "$OUT"
++echo '[+] done:'
++ls -lh "$OUT"
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/config/client.example.json alpha2/config/client.example.json
+--- alpha1/config/client.example.json	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/config/client.example.json	2026-08-26 09:35:01.958077688 +0000
+@@ -1,7 +1,12 @@
+ {
+   "log": { "level": "info", "timestamp": true },
+   "inbounds": [
+-    { "type": "mixed", "tag": "mihomo-local", "listen": "127.0.0.1", "listen_port": 2080 }
++    {
++      "type": "mixed",
++      "tag": "mihomo-local",
++      "listen": "127.0.0.1",
++      "listen_port": 2080
++    }
+   ],
+   "outbounds": [
+     {
+@@ -9,16 +14,16 @@
+       "tag": "line-path",
+       "server": "YOUR_LINE_ENTRY",
+       "server_port": 12345,
+-      "version": 5,
+-      "psk": "YOUR_SNELL_PSK"
++      "version": 4,
++      "psk": "YOUR_LINE_SNELL_PSK"
+     },
+     {
+-      "type": "shadowsocks",
++      "type": "snell",
+       "tag": "public-path",
+-      "server": "YOUR_PUBLIC_RELAY",
+-      "server_port": 12346,
+-      "method": "2022-blake3-aes-128-gcm",
+-      "password": "YOUR_SS_KEY"
++      "server": "YOUR_LANDING_PUBLIC_IP",
++      "server_port": 23456,
++      "version": 4,
++      "psk": "YOUR_PUBLIC_SNELL_PSK"
+     },
+     {
+       "type": "multipath",
+@@ -26,14 +31,25 @@
+       "outbounds": ["line-path", "public-path"],
+       "preferred": "line-path",
+       "udp_outbound": "line-path",
+-      "server": "AGGREGATION_ADDRESS_REACHABLE_THROUGH_BOTH_CHILDREN",
+-      "server_port": 24444,
++
++      "endpoints": [
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
++        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
++      ],
++
+       "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
+-      "activation_threshold_mbps": 150,
++      "activation_threshold_mbps": 80,
+       "activation_window": "1s",
+       "chunk_size": 65536,
+       "queue_frames": 256,
+-      "bandwidth_mbps": [100, 500]
++      "bandwidth_mbps": [100, 500],
++
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s",
++      "redial_interval": "1s"
+     }
+   ],
+   "route": { "final": "mp-jp" }
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/config/mihomo-snippet.yaml alpha2/config/mihomo-snippet.yaml
+--- alpha1/config/mihomo-snippet.yaml	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/config/mihomo-snippet.yaml	2026-08-26 09:26:56.226963746 +0000
+@@ -0,0 +1,11 @@
++proxies:
++  - name: MP-JP
++    type: socks5
++    server: 127.0.0.1
++    port: 2080
++    udp: false
++
++# Add MP-JP to whichever proxy-group you already use.
++# TCP is multipath through the local patched sing-box. UDP aggregation is not
++# implemented; if you need UDP, route it separately in Mihomo or configure the
++# sing-box udp_outbound for clients that connect directly to its mixed port.
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/config/server.example.json alpha2/config/server.example.json
+--- alpha1/config/server.example.json	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/config/server.example.json	2026-08-26 09:35:01.958177939 +0000
+@@ -2,19 +2,35 @@
+   "log": { "level": "info", "timestamp": true },
+   "inbounds": [
+     {
++      "type": "snell",
++      "tag": "public-carrier",
++      "listen": "0.0.0.0",
++      "listen_port": 23456,
++      "version": 5,
++      "psk": "CHANGE_PUBLIC_SNELL_PSK"
++    },
++    {
+       "type": "multipath",
+       "tag": "mp-in",
+-      "listen": "0.0.0.0",
++      "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
+       "listen_port": 24444,
+-      "password": "CHANGE_TO_A_LONG_RANDOM_SECRET",
+-      "activation_threshold_mbps": 150,
++      "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
++
++      "activation_threshold_mbps": 80,
+       "activation_window": "1s",
+       "chunk_size": 65536,
+       "queue_frames": 256,
+       "bandwidth_mbps": [100, 500],
+-      "max_reorder_frames": 4096
++
++      "max_reorder_frames": 4096,
++      "max_inflight_frames": 1024,
++      "ack_interval": "20ms",
++      "retransmit_timeout": "1500ms",
++      "recovery_timeout": "15s"
+     }
+   ],
+-  "outbounds": [ { "type": "direct", "tag": "direct" } ],
++  "outbounds": [
++    { "type": "direct", "tag": "direct" }
++  ],
+   "route": { "final": "direct" }
+ }
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/install-client.ps1 alpha2/install-client.ps1
+--- alpha1/install-client.ps1	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/install-client.ps1	2026-08-26 09:38:35.087690376 +0000
+@@ -1,16 +1,36 @@
+ param([string]$Config = "$PSScriptRoot\config\client.json")
+ $ErrorActionPreference = "Stop"
+-$bin = "$PSScriptRoot\dist\sing-box-mp-windows-amd64.exe"
++$bin = "$PSScriptRoot\dist\smp3-proxy-windows-amd64.exe"
+ if (!(Test-Path $bin)) { throw "Build first with build.sh in WSL/Linux." }
+ if (!(Test-Path $Config)) { throw "Create config\client.json from client.example.json first." }
+-$dst = "$env:ProgramData\sing-box-mp"
++
++$dst = "$env:ProgramData\smp3-proxy"
++$taskName = "smp3-multipath"
+ New-Item -ItemType Directory -Force $dst | Out-Null
+-Copy-Item $bin "$dst\sing-box-mp.exe" -Force
++
++# Validate the new config before replacing a running installation.
++& $bin check -c $Config
++if ($LASTEXITCODE -ne 0) { throw "New multipath config check failed." }
++
++try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
++try { Stop-ScheduledTask -TaskName "sing-box-multipath" -ErrorAction SilentlyContinue } catch {}
++try { Unregister-ScheduledTask -TaskName "sing-box-multipath" -Confirm:$false -ErrorAction SilentlyContinue } catch {}
++Get-Process "smp3-proxy","sing-box-mp" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
++Start-Sleep -Milliseconds 300
++
++Copy-Item $bin "$dst\smp3-proxy.exe" -Force
+ Copy-Item $Config "$dst\config.json" -Force
+-& "$dst\sing-box-mp.exe" check -c "$dst\config.json"
+-$action = New-ScheduledTaskAction -Execute "$dst\sing-box-mp.exe" -Argument "run -c `"$dst\config.json`""
++& "$dst\smp3-proxy.exe" check -c "$dst\config.json"
++if ($LASTEXITCODE -ne 0) { throw "Installed config check failed." }
++
++$action = New-ScheduledTaskAction -Execute "$dst\smp3-proxy.exe" -Argument "run -c `"$dst\config.json`""
+ $trigger = New-ScheduledTaskTrigger -AtLogOn
+ $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+-Register-ScheduledTask -TaskName "sing-box-multipath" -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+-Start-ScheduledTask -TaskName "sing-box-multipath"
+-Write-Host "Installed. Mihomo can use SOCKS5 127.0.0.1:2080"
++Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
++Start-ScheduledTask -TaskName $taskName
++Start-Sleep -Seconds 1
++
++$p = Get-Process "smp3-proxy" -ErrorAction SilentlyContinue
++if (!$p) { throw "smp3-proxy did not stay running; start it manually to inspect logs." }
++Write-Host "Installed/updated. Mihomo can use SOCKS5 127.0.0.1:2080"
++Write-Host "Config: $dst\config.json"
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/install-server.sh alpha2/install-server.sh
+--- alpha1/install-server.sh	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/install-server.sh	2026-08-26 09:37:39.917671999 +0000
+@@ -1,28 +1,51 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")" && pwd)"
+-BIN="$ROOT/dist/sing-box-mp-linux-amd64"
++BIN="$ROOT/dist/smp3-proxy-linux-amd64"
+ CFG_SRC="${1:-$ROOT/config/server.json}"
++[ "$(id -u)" -eq 0 ] || { echo 'run as root (sudo ./install-server.sh)'; exit 1; }
+ [ -x "$BIN" ] || { echo "build first: ./build.sh"; exit 1; }
+ [ -f "$CFG_SRC" ] || { echo "create $ROOT/config/server.json from server.example.json first"; exit 1; }
+-install -m 0755 "$BIN" /usr/local/bin/sing-box-mp
+-install -d -m 0750 /etc/sing-box-mp
+-install -m 0640 "$CFG_SRC" /etc/sing-box-mp/config.json
+-cat >/etc/systemd/system/sing-box-mp.service <<'EOF'
++
++install -d -m 0750 /etc/smp3-proxy
++install -m 0640 "$CFG_SRC" /etc/smp3-proxy/config.json.new
++"$BIN" check -c /etc/smp3-proxy/config.json.new
++
++# alpha1 used the provisional sing-box-mp service name. Stop it if present
++# so an in-place test upgrade cannot leave two local engines competing.
++if systemctl list-unit-files sing-box-mp.service >/dev/null 2>&1; then
++  systemctl disable --now sing-box-mp.service || true
++fi
++if systemctl list-unit-files smp3-proxy.service >/dev/null 2>&1; then
++  systemctl stop smp3-proxy.service || true
++fi
++install -m 0755 "$BIN" /usr/local/bin/smp3-proxy
++mv -f /etc/smp3-proxy/config.json.new /etc/smp3-proxy/config.json
++chmod 0640 /etc/smp3-proxy/config.json
++
++cat >/etc/systemd/system/smp3-proxy.service <<'UNIT'
+ [Unit]
+-Description=sing-box Multipath v2
++Description=SMP3 Multipath proxy alpha2
+ After=network-online.target
+ Wants=network-online.target
++
+ [Service]
+ Type=simple
+-ExecStart=/usr/local/bin/sing-box-mp run -c /etc/sing-box-mp/config.json
++ExecStart=/usr/local/bin/smp3-proxy run -c /etc/smp3-proxy/config.json
+ Restart=on-failure
+ RestartSec=2
+ LimitNOFILE=1048576
++NoNewPrivileges=true
++
+ [Install]
+ WantedBy=multi-user.target
+-EOF
+-/usr/local/bin/sing-box-mp check -c /etc/sing-box-mp/config.json
++UNIT
++
+ systemctl daemon-reload
+-systemctl enable --now sing-box-mp
+-systemctl --no-pager --full status sing-box-mp
++systemctl enable --now smp3-proxy
++sleep 1
++systemctl --no-pager --full status smp3-proxy
++
++echo '[+] server installed/updated'
++echo '    config: /etc/smp3-proxy/config.json'
++echo '    logs:   journalctl -u smp3-proxy -f'
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/scripts/apply_source.py alpha2/scripts/apply_source.py
+--- alpha1/scripts/apply_source.py	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/scripts/apply_source.py	2026-08-26 09:21:44.795790051 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] multipath v2 source installed')
++print('[+] SMP3 multipath alpha2 source installed')
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/scripts/gen-secrets.sh alpha2/scripts/gen-secrets.sh
+--- alpha1/scripts/gen-secrets.sh	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/scripts/gen-secrets.sh	2026-08-26 09:35:01.958320004 +0000
+@@ -0,0 +1,5 @@
++#!/usr/bin/env bash
++set -euo pipefail
++command -v openssl >/dev/null || { echo 'openssl is required'; exit 1; }
++echo "SMP3_PASSWORD=$(openssl rand -hex 32)"
++echo "PUBLIC_SNELL_PSK=$(openssl rand -base64 24 | tr -d '\n')"
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/src/option/multipath.go alpha2/src/option/multipath.go
+--- alpha1/src/option/multipath.go	2026-08-26 08:50:28.000000000 +0000
++++ alpha2/src/option/multipath.go	2026-08-26 09:26:17.020995272 +0000
+@@ -2,21 +2,35 @@
+ 
+ import "github.com/sagernet/sing/common/json/badoption"
+ 
+-// MultipathOutboundOptions combines multiple existing reliable outbounds into
+-// one logical TCP byte stream. UDP is intentionally not aggregated and is
+-// delegated to UDPOutbound (or Preferred / the first child).
++type MultipathEndpointOptions struct {
++	Server     string `json:"server"`
++	ServerPort uint16 `json:"server_port"`
++}
++
++// MultipathOutboundOptions combines exactly two existing reliable outbounds
++// into one logical, ordered TCP byte stream. UDP is intentionally not
++// aggregated and is delegated to UDPOutbound (or Preferred / first child).
+ type MultipathOutboundOptions struct {
+-	Outbounds               []string           `json:"outbounds" reference:"outbound"`
+-	Preferred               string             `json:"preferred,omitempty" reference:"outbound"`
+-	UDPOutbound             string             `json:"udp_outbound,omitempty" reference:"outbound"`
+-	Server                  string             `json:"server"`
+-	ServerPort              uint16             `json:"server_port"`
+-	Password                string             `json:"password"`
+-	ActivationThresholdMbps uint32             `json:"activation_threshold_mbps,omitempty"`
+-	ActivationWindow        badoption.Duration `json:"activation_window,omitempty"`
+-	ChunkSize               uint32             `json:"chunk_size,omitempty"`
+-	QueueFrames             uint32             `json:"queue_frames,omitempty"`
+-	BandwidthMbps           []uint32           `json:"bandwidth_mbps,omitempty"`
++	Outbounds   []string `json:"outbounds" reference:"outbound"`
++	Preferred   string   `json:"preferred,omitempty" reference:"outbound"`
++	UDPOutbound string   `json:"udp_outbound,omitempty" reference:"outbound"`
++	// Endpoints optionally supplies a distinct aggregation address for each child path.
++	// When omitted, Server/ServerPort is used for both paths for compatibility.
++	Endpoints               []MultipathEndpointOptions `json:"endpoints,omitempty"`
++	Server                  string                     `json:"server,omitempty"`
++	ServerPort              uint16                     `json:"server_port,omitempty"`
++	Password                string                     `json:"password"`
++	ActivationThresholdMbps uint32                     `json:"activation_threshold_mbps,omitempty"`
++	ActivationWindow        badoption.Duration         `json:"activation_window,omitempty"`
++	ChunkSize               uint32                     `json:"chunk_size,omitempty"`
++	QueueFrames             uint32                     `json:"queue_frames,omitempty"`
++	BandwidthMbps           []uint32                   `json:"bandwidth_mbps,omitempty"`
++	MaxReorderFrames        uint32                     `json:"max_reorder_frames,omitempty"`
++	MaxInflightFrames       uint32                     `json:"max_inflight_frames,omitempty"`
++	AckInterval             badoption.Duration         `json:"ack_interval,omitempty"`
++	RetransmitTimeout       badoption.Duration         `json:"retransmit_timeout,omitempty"`
++	RecoveryTimeout         badoption.Duration         `json:"recovery_timeout,omitempty"`
++	RedialInterval          badoption.Duration         `json:"redial_interval,omitempty"`
+ }
+ 
+ type MultipathInboundOptions struct {
+@@ -28,4 +42,8 @@
+ 	QueueFrames             uint32             `json:"queue_frames,omitempty"`
+ 	BandwidthMbps           []uint32           `json:"bandwidth_mbps,omitempty"`
+ 	MaxReorderFrames        uint32             `json:"max_reorder_frames,omitempty"`
++	MaxInflightFrames       uint32             `json:"max_inflight_frames,omitempty"`
++	AckInterval             badoption.Duration `json:"ack_interval,omitempty"`
++	RetransmitTimeout       badoption.Duration `json:"retransmit_timeout,omitempty"`
++	RecoveryTimeout         badoption.Duration `json:"recovery_timeout,omitempty"`
+ }
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/src/protocol/multipath/core.go alpha2/src/protocol/multipath/core.go
+--- alpha1/src/protocol/multipath/core.go	2026-08-26 08:50:30.000000000 +0000
++++ alpha2/src/protocol/multipath/core.go	2026-08-26 09:34:06.026432078 +0000
+@@ -13,7 +13,8 @@
+ const (
+ 	frameTypeData     byte = 1
+ 	frameTypeActivate byte = 2
+-	frameHeaderSize        = 13 // type(1) + seq(8) + len(4)
++	frameTypeAck      byte = 3
++	frameHeaderSize        = 13 // type(1) + seq/ack(8) + len(4)
+ 	maxFramePayload        = 1 << 20
+ )
+ 
+@@ -26,7 +27,12 @@
+ 	ActivationWindow     time.Duration
+ 	BandwidthMbps        []uint32
+ 	MaxReorderFrames     int
++	MaxInflightFrames    int
++	AckInterval          time.Duration
++	RetransmitTimeout    time.Duration
++	RecoveryTimeout      time.Duration
+ 	OnActivate           func()
++	OnLegDown            func(uint8, error)
+ 	NotifyPeerOnActivate bool
+ }
+ 
+@@ -35,10 +41,24 @@
+ 	data []byte
+ }
+ 
++type txRecord struct {
++	seq uint64
++	// data is immutable until the record is cumulatively ACKed. We deliberately
++	// do not return TX payloads to a pool because stale retransmit queue entries
++	// may still reference them after an ACK races with a queued retry.
++	data []byte
++
++	lastSent   time.Time
++	lastLeg    int16 // -1 until the first successful write
++	inTransit  bool
++	transitLeg uint8
++	attempts   uint32
++}
++
+ type mpLeg struct {
+ 	id      uint8
+ 	conn    net.Conn
+-	send    chan dataFrame
++	send    chan *txRecord
+ 	onClose func(error)
+ 	once    sync.Once
+ 	writeMu sync.Mutex
+@@ -53,6 +73,12 @@
+ 	})
+ }
+ 
++type wireFrame struct {
++	typ  byte
++	seq  uint64
++	data []byte
++}
++
+ type mpCore struct {
+ 	cfg      coreConfig
+ 	appConn  net.Conn
+@@ -68,12 +94,27 @@
+ 
+ 	txSeq atomic.Uint64
+ 
++	txMu        sync.Mutex
++	outstanding map[uint64]*txRecord
++	ackedNext   uint64
++	inflight    chan struct{}
++	retryCh     chan struct{}
++
+ 	ingressBytes atomic.Uint64
+ 	active       atomic.Bool
+ 	activeCh     chan struct{}
+ 	activateOnce sync.Once
+ 
+-	bufferPool sync.Pool
++	ackNext   atomic.Uint64
++	ackForce  atomic.Bool
++	ackWakeCh chan struct{}
++
++	// recoveryEpoch invalidates stale "no legs" recovery timers. A temporary
++	// recovery followed by a later outage must get a fresh RecoveryTimeout, not
++	// inherit the deadline from the earlier outage.
++	recoveryEpoch atomic.Uint64
++
++	bufferPool sync.Pool // RX-only buffers
+ }
+ 
+ func newCore(cfg coreConfig) (*mpCore, net.Conn) {
+@@ -89,15 +130,31 @@
+ 	if cfg.MaxReorderFrames <= 0 {
+ 		cfg.MaxReorderFrames = 2048
+ 	}
++	if cfg.MaxInflightFrames <= 0 {
++		cfg.MaxInflightFrames = 1024
++	}
++	if cfg.AckInterval <= 0 {
++		cfg.AckInterval = 20 * time.Millisecond
++	}
++	if cfg.RetransmitTimeout <= 0 {
++		cfg.RetransmitTimeout = 1500 * time.Millisecond
++	}
++	if cfg.RecoveryTimeout <= 0 {
++		cfg.RecoveryTimeout = 15 * time.Second
++	}
+ 	appConn, pipeConn := net.Pipe()
+ 	c := &mpCore{
+-		cfg:      cfg,
+-		appConn:  appConn,
+-		pipeConn: pipeConn,
+-		legs:     make(map[uint8]*mpLeg),
+-		incoming: make(chan dataFrame, cfg.QueueFrames*2),
+-		done:     make(chan struct{}),
+-		activeCh: make(chan struct{}),
++		cfg:         cfg,
++		appConn:     appConn,
++		pipeConn:    pipeConn,
++		legs:        make(map[uint8]*mpLeg),
++		incoming:    make(chan dataFrame, cfg.QueueFrames*2),
++		done:        make(chan struct{}),
++		activeCh:    make(chan struct{}),
++		outstanding: make(map[uint64]*txRecord),
++		inflight:    make(chan struct{}, cfg.MaxInflightFrames),
++		retryCh:     make(chan struct{}, 1),
++		ackWakeCh:   make(chan struct{}, 1),
+ 	}
+ 	c.bufferPool.New = func() any {
+ 		return make([]byte, cfg.ChunkSize)
+@@ -108,10 +165,17 @@
+ 	go c.txLoop()
+ 	go c.rxLoop()
+ 	go c.activationLoop()
++	go c.ackLoop()
++	go c.retransmitLoop()
+ 	return c, appConn
+ }
+ 
+ func (c *mpCore) addLeg(id uint8, conn net.Conn, onClose func(error)) error {
++	select {
++	case <-c.done:
++		return errCoreClosed
++	default:
++	}
+ 	c.legsMu.Lock()
+ 	if _, exists := c.legs[id]; exists {
+ 		c.legsMu.Unlock()
+@@ -120,23 +184,22 @@
+ 	leg := &mpLeg{
+ 		id:      id,
+ 		conn:    conn,
+-		send:    make(chan dataFrame, c.cfg.QueueFrames),
++		send:    make(chan *txRecord, c.cfg.QueueFrames),
+ 		onClose: onClose,
+ 	}
+ 	c.legs[id] = leg
+ 	c.legsMu.Unlock()
++	// Any successful join/rejoin cancels an older zero-leg recovery deadline.
++	c.recoveryEpoch.Add(1)
+ 	go c.legWriteLoop(leg)
+ 	go c.legReadLoop(leg)
++	c.kickRetry()
++	c.forceAck()
+ 	return nil
+ }
+ 
+-func (c *mpCore) AppConn() net.Conn {
+-	return c.appConn
+-}
+-
+-func (c *mpCore) Done() <-chan struct{} {
+-	return c.done
+-}
++func (c *mpCore) AppConn() net.Conn     { return c.appConn }
++func (c *mpCore) Done() <-chan struct{} { return c.done }
+ 
+ func (c *mpCore) Close() error {
+ 	c.fail(io.EOF)
+@@ -164,10 +227,7 @@
+ 	})
+ }
+ 
+-func (c *mpCore) getBuffer() []byte {
+-	return c.bufferPool.Get().([]byte)
+-}
+-
++func (c *mpCore) getBuffer() []byte { return c.bufferPool.Get().([]byte) }
+ func (c *mpCore) putBuffer(buffer []byte) {
+ 	if cap(buffer) < c.cfg.ChunkSize {
+ 		return
+@@ -175,31 +235,90 @@
+ 	c.bufferPool.Put(buffer[:c.cfg.ChunkSize])
+ }
+ 
++func (c *mpCore) acquireInflight() bool {
++	select {
++	case c.inflight <- struct{}{}:
++		return true
++	case <-c.done:
++		return false
++	}
++}
++
++func (c *mpCore) releaseInflight(count int) {
++	for range count {
++		select {
++		case <-c.inflight:
++		default:
++			return
++		}
++	}
++}
++
+ func (c *mpCore) txLoop() {
+ 	for {
+-		buffer := c.getBuffer()
+-		n, err := c.pipeConn.Read(buffer[:c.cfg.ChunkSize])
++		if !c.acquireInflight() {
++			return
++		}
++		buffer := make([]byte, c.cfg.ChunkSize)
++		n, err := c.pipeConn.Read(buffer)
+ 		if n > 0 {
+ 			c.ingressBytes.Add(uint64(n))
+-			frame := dataFrame{
+-				seq:  c.txSeq.Add(1) - 1,
+-				data: buffer[:n],
+-			}
+-			if enqueueErr := c.enqueue(frame); enqueueErr != nil {
+-				c.putBuffer(buffer)
++			record := &txRecord{
++				seq:     c.txSeq.Add(1) - 1,
++				data:    buffer[:n],
++				lastLeg: -1,
++			}
++			c.txMu.Lock()
++			c.outstanding[record.seq] = record
++			c.txMu.Unlock()
++			if enqueueErr := c.enqueueRecord(record, -1); enqueueErr != nil {
+ 				c.fail(enqueueErr)
+ 				return
+ 			}
+ 		} else {
+-			c.putBuffer(buffer)
++			c.releaseInflight(1)
+ 		}
+ 		if err != nil {
++			// net.Pipe reports the local application close here. Give already-read
++			// logical frames a short chance to receive cumulative ACKs before the
++			// transport legs are torn down; otherwise a write-then-close workload
++			// could lose its final frames even though appConn.Write had succeeded.
++			c.drainOutstandingOnClose()
+ 			c.fail(err)
+ 			return
+ 		}
+ 	}
+ }
+ 
++func (c *mpCore) drainOutstandingOnClose() {
++	timeout := c.cfg.RecoveryTimeout
++	if timeout > 5*time.Second {
++		timeout = 5 * time.Second
++	}
++	if timeout < 500*time.Millisecond {
++		timeout = 500 * time.Millisecond
++	}
++	deadline := time.NewTimer(timeout)
++	defer deadline.Stop()
++	ticker := time.NewTicker(5 * time.Millisecond)
++	defer ticker.Stop()
++	for {
++		c.txMu.Lock()
++		remaining := len(c.outstanding)
++		c.txMu.Unlock()
++		if remaining == 0 {
++			return
++		}
++		select {
++		case <-c.done:
++			return
++		case <-deadline.C:
++			return
++		case <-ticker.C:
++		}
++	}
++}
++
+ func (c *mpCore) activationLoop() {
+ 	if c.active.Load() {
+ 		return
+@@ -266,20 +385,7 @@
+ 	})
+ }
+ 
+-func (c *mpCore) notifyPeerActivate() {
+-	leg := c.getLeg(0)
+-	if leg == nil {
+-		return
+-	}
+-	var header [frameHeaderSize]byte
+-	header[0] = frameTypeActivate
+-	leg.writeMu.Lock()
+-	_, err := leg.conn.Write(header[:])
+-	leg.writeMu.Unlock()
+-	if err != nil {
+-		leg.close(err)
+-	}
+-}
++func (c *mpCore) notifyPeerActivate() { c.sendControlFrame(frameTypeActivate, 0) }
+ 
+ func (c *mpCore) getLeg(id uint8) *mpLeg {
+ 	c.legsMu.RLock()
+@@ -288,6 +394,8 @@
+ 	return leg
+ }
+ 
++func (c *mpCore) hasLeg(id uint8) bool { return c.getLeg(id) != nil }
++
+ func (c *mpCore) availableLegs() []*mpLeg {
+ 	c.legsMu.RLock()
+ 	legs := make([]*mpLeg, 0, len(c.legs))
+@@ -298,6 +406,13 @@
+ 	return legs
+ }
+ 
++func (c *mpCore) legCount() int {
++	c.legsMu.RLock()
++	n := len(c.legs)
++	c.legsMu.RUnlock()
++	return n
++}
++
+ func (c *mpCore) weightFor(id uint8) uint32 {
+ 	if int(id) < len(c.cfg.BandwidthMbps) && c.cfg.BandwidthMbps[id] > 0 {
+ 		return c.cfg.BandwidthMbps[id]
+@@ -305,14 +420,19 @@
+ 	return 1
+ }
+ 
+-func (c *mpCore) chooseLeg(active bool) *mpLeg {
++func (c *mpCore) chooseLeg(active bool, avoid int16) *mpLeg {
+ 	if !active {
+-		return c.getLeg(0)
++		if primary := c.getLeg(0); primary != nil && int16(primary.id) != avoid {
++			return primary
++		}
+ 	}
+ 	legs := c.availableLegs()
+ 	var best *mpLeg
+ 	var bestNum, bestDen uint64
+ 	for _, leg := range legs {
++		if len(legs) > 1 && int16(leg.id) == avoid {
++			continue
++		}
+ 		weight := uint64(c.weightFor(leg.id))
+ 		num := uint64(len(leg.send) + 1)
+ 		if best == nil || num*bestDen < bestNum*weight {
+@@ -321,56 +441,97 @@
+ 			bestDen = weight
+ 		}
+ 	}
++	if best == nil && len(legs) > 0 {
++		return legs[0]
++	}
+ 	return best
+ }
+ 
+-func (c *mpCore) enqueue(frame dataFrame) error {
++func (c *mpCore) markTransit(record *txRecord, legID uint8) bool {
++	c.txMu.Lock()
++	defer c.txMu.Unlock()
++	if current := c.outstanding[record.seq]; current != record || record.inTransit {
++		return false
++	}
++	record.inTransit = true
++	record.transitLeg = legID
++	return true
++}
++
++func (c *mpCore) clearTransit(record *txRecord, legID uint8) {
++	c.txMu.Lock()
++	if current := c.outstanding[record.seq]; current == record && record.inTransit && record.transitLeg == legID {
++		record.inTransit = false
++	}
++	c.txMu.Unlock()
++}
++
++func (c *mpCore) markSent(record *txRecord, legID uint8) {
++	c.txMu.Lock()
++	if current := c.outstanding[record.seq]; current == record && record.inTransit && record.transitLeg == legID {
++		record.inTransit = false
++		record.lastSent = time.Now()
++		record.lastLeg = int16(legID)
++		record.attempts++
++	}
++	c.txMu.Unlock()
++}
++
++func (c *mpCore) isOutstanding(record *txRecord) bool {
++	c.txMu.Lock()
++	ok := c.outstanding[record.seq] == record
++	c.txMu.Unlock()
++	return ok
++}
++
++func (c *mpCore) tryQueue(leg *mpLeg, record *txRecord) bool {
++	if !c.markTransit(record, leg.id) {
++		return !c.isOutstanding(record)
++	}
++	select {
++	case leg.send <- record:
++		return true
++	default:
++		c.clearTransit(record, leg.id)
++		return false
++	}
++}
++
++func (c *mpCore) enqueueRecord(record *txRecord, avoid int16) error {
+ 	for {
+ 		select {
+ 		case <-c.done:
+ 			return errCoreClosed
+ 		default:
+ 		}
++		if !c.isOutstanding(record) {
++			return nil
++		}
+ 		active := c.active.Load()
+-		leg := c.chooseLeg(active)
++		leg := c.chooseLeg(active, avoid)
+ 		if leg == nil {
+ 			select {
+ 			case <-c.done:
+ 				return errCoreClosed
+-			case <-time.After(5 * time.Millisecond):
+-				continue
++			case <-c.retryCh:
++			case <-time.After(10 * time.Millisecond):
+ 			}
++			continue
+ 		}
+-		select {
+-		case leg.send <- frame:
++		if c.tryQueue(leg, record) {
+ 			return nil
+-		default:
+-		}
+-		if !active {
+-			select {
+-			case leg.send <- frame:
+-				return nil
+-			case <-c.activeCh:
+-				continue
+-			case <-c.done:
+-				return errCoreClosed
+-			}
+ 		}
+-		// Work-conserving fallback: if the predicted-best leg is full, try any
+-		// other active leg before blocking.
+-		for _, other := range c.availableLegs() {
+-			if other == leg {
+-				continue
+-			}
+-			select {
+-			case other.send <- frame:
+-				return nil
+-			default:
++		if active {
++			for _, other := range c.availableLegs() {
++				if other == leg || (c.legCount() > 1 && int16(other.id) == avoid) {
++					continue
++				}
++				if c.tryQueue(other, record) {
++					return nil
++				}
+ 			}
+ 		}
+ 		select {
+-		case leg.send <- frame:
+-			return nil
+ 		case <-c.done:
+ 			return errCoreClosed
+ 		case <-time.After(time.Millisecond):
+@@ -383,39 +544,323 @@
+ 		select {
+ 		case <-c.done:
+ 			return
+-		case frame := <-leg.send:
++		case record := <-leg.send:
++			if record == nil {
++				continue
++			}
++			if !c.isOutstanding(record) {
++				c.clearTransit(record, leg.id)
++				continue
++			}
+ 			leg.writeMu.Lock()
+-			err := writeDataFrame(leg.conn, frame)
++			err := writeDataFrame(leg.conn, dataFrame{seq: record.seq, data: record.data})
+ 			leg.writeMu.Unlock()
+-			c.putBuffer(frame.data)
+ 			if err != nil {
+-				leg.close(err)
+-				c.fail(err)
++				c.clearTransit(record, leg.id)
++				c.handleLegFailure(leg, err)
+ 				return
+ 			}
++			c.markSent(record, leg.id)
+ 		}
+ 	}
+ }
+ 
+ func (c *mpCore) legReadLoop(leg *mpLeg) {
+ 	for {
+-		frame, activate, err := readWireFrame(leg.conn, c)
++		frame, err := readWireFrame(leg.conn, c)
+ 		if err != nil {
+-			leg.close(err)
+-			c.fail(err)
++			c.handleLegFailure(leg, err)
+ 			return
+ 		}
+-		if activate {
++		switch frame.typ {
++		case frameTypeActivate:
+ 			c.activate()
++		case frameTypeAck:
++			if err := c.handleAck(frame.seq); err != nil {
++				c.handleLegFailure(leg, err)
++				return
++			}
++		case frameTypeData:
++			select {
++			case c.incoming <- dataFrame{seq: frame.seq, data: frame.data}:
++			case <-c.done:
++				c.putBuffer(frame.data)
++				return
++			}
++		}
++	}
++}
++
++func (c *mpCore) handleLegFailure(leg *mpLeg, err error) {
++	leg.close(err)
++	removed := false
++	c.legsMu.Lock()
++	if current := c.legs[leg.id]; current == leg {
++		delete(c.legs, leg.id)
++		removed = true
++	}
++	remaining := len(c.legs)
++	c.legsMu.Unlock()
++	if !removed {
++		return
++	}
++
++	// Any record queued/writing on the dead leg must become retryable. A frame
++	// that actually arrived before the failure is harmlessly deduplicated by seq.
++	c.txMu.Lock()
++	for _, record := range c.outstanding {
++		if record.inTransit && record.transitLeg == leg.id {
++			record.inTransit = false
++		}
++	}
++	c.txMu.Unlock()
++
++	// Primary loss before the threshold is an emergency activation: leg 1 is
++	// allowed to come up immediately so the logical stream has a chance to live.
++	if leg.id == 0 && !c.active.Load() {
++		c.activate()
++	}
++	if c.cfg.OnLegDown != nil {
++		go c.cfg.OnLegDown(leg.id, err)
++	}
++	c.kickRetry()
++	c.forceAck()
++	if remaining == 0 {
++		epoch := c.recoveryEpoch.Add(1)
++		go c.failIfNoLegRecovers(epoch)
++	}
++}
++
++func (c *mpCore) failIfNoLegRecovers(epoch uint64) {
++	timer := time.NewTimer(c.cfg.RecoveryTimeout)
++	defer timer.Stop()
++	select {
++	case <-c.done:
++		return
++	case <-timer.C:
++		if c.recoveryEpoch.Load() == epoch && c.legCount() == 0 {
++			c.fail(errors.New("multipath recovery timeout: no transport leg available"))
++		}
++	}
++}
++
++func (c *mpCore) kickRetry() {
++	select {
++	case c.retryCh <- struct{}{}:
++	default:
++	}
++}
++
++func (c *mpCore) kickAck() {
++	select {
++	case c.ackWakeCh <- struct{}{}:
++	default:
++	}
++}
++
++func (c *mpCore) forceAck() {
++	c.ackForce.Store(true)
++	c.kickAck()
++}
++
++func (c *mpCore) retransmitLoop() {
++	interval := c.cfg.RetransmitTimeout / 4
++	if interval < 50*time.Millisecond {
++		interval = 50 * time.Millisecond
++	}
++	if interval > 250*time.Millisecond {
++		interval = 250 * time.Millisecond
++	}
++	ticker := time.NewTicker(interval)
++	defer ticker.Stop()
++	for {
++		select {
++		case <-c.done:
++			return
++		case <-ticker.C:
++		case <-c.retryCh:
++		}
++		c.scheduleRetries()
++	}
++}
++
++func (c *mpCore) scheduleRetries() {
++	legs := c.availableLegs()
++	if len(legs) == 0 {
++		return
++	}
++	now := time.Now()
++	available := make(map[uint8]struct{}, len(legs))
++	for _, leg := range legs {
++		available[leg.id] = struct{}{}
++	}
++	var retry []*txRecord
++	var avoids []int16
++	activateForStall := false
++	c.txMu.Lock()
++	// Frames that have never been successfully written, or whose last successful
++	// transport leg is now gone, need immediate replay. Multiple such frames can
++	// legitimately exist after an abrupt leg failure.
++	for _, record := range c.outstanding {
++		if record.inTransit {
++			continue
++		}
++		if record.lastLeg < 0 {
++			retry = append(retry, record)
++			avoids = append(avoids, -1)
+ 			continue
+ 		}
++		lastID := uint8(record.lastLeg)
++		if _, lastAlive := available[lastID]; !lastAlive {
++			retry = append(retry, record)
++			avoids = append(avoids, record.lastLeg)
++		}
++	}
++
++	// With cumulative ACKs, one delayed head-of-line frame can make every later
++	// frame appear unacknowledged. Replaying the whole window would cause a
++	// duplicate storm. Timer-based black-hole recovery therefore retries only
++	// the oldest outstanding sequence; once it arrives, the cumulative ACK can
++	// retire all later frames that were already buffered by the peer.
++	if head := c.outstanding[c.ackedNext]; head != nil && !head.inTransit && head.lastLeg >= 0 && !head.lastSent.IsZero() && now.Sub(head.lastSent) >= c.cfg.RetransmitTimeout {
++		if len(legs) == 1 && !c.active.Load() {
++			// A TCP socket can stay ESTABLISHED while the path silently black-holes.
++			// Do not wait for bandwidth/queue activation forever: an overdue logical
++			// ACK is itself a failover signal and permits the lazy booster to dial.
++			activateForStall = true
++		} else if len(legs) > 1 {
++			if _, lastAlive := available[uint8(head.lastLeg)]; lastAlive {
++				already := false
++				for _, record := range retry {
++					if record == head {
++						already = true
++						break
++					}
++				}
++				if !already {
++					retry = append(retry, head)
++					avoids = append(avoids, head.lastLeg)
++				}
++			}
++		}
++	}
++	c.txMu.Unlock()
++	if activateForStall {
++		c.activate()
++	}
++	for idx, record := range retry {
++		if err := c.enqueueRecord(record, avoids[idx]); err != nil && !errors.Is(err, errCoreClosed) {
++			c.fail(err)
++			return
++		}
++	}
++}
++
++func (c *mpCore) handleAck(next uint64) error {
++	max := c.txSeq.Load()
++	if next > max {
++		return errors.New("invalid multipath ACK beyond transmitted sequence")
++	}
++	c.txMu.Lock()
++	if next <= c.ackedNext {
++		c.txMu.Unlock()
++		return nil
++	}
++	released := 0
++	for seq := c.ackedNext; seq < next; seq++ {
++		if _, exists := c.outstanding[seq]; exists {
++			delete(c.outstanding, seq)
++			released++
++		}
++	}
++	c.ackedNext = next
++	c.txMu.Unlock()
++	c.releaseInflight(released)
++	return nil
++}
++
++func (c *mpCore) requestAck(next uint64) {
++	for {
++		old := c.ackNext.Load()
++		if next <= old || c.ackNext.CompareAndSwap(old, next) {
++			break
++		}
++	}
++	c.kickAck()
++}
++
++func (c *mpCore) ackLoop() {
++	ticker := time.NewTicker(c.cfg.AckInterval)
++	defer ticker.Stop()
++	var sent uint64
++	for {
+ 		select {
+-		case c.incoming <- frame:
+ 		case <-c.done:
+-			c.putBuffer(frame.data)
+ 			return
++		case <-ticker.C:
++		case <-c.ackWakeCh:
++			// Wake quickly after recovery/leg join, but coalescing still happens
++			// because ackNext is cumulative.
++		}
++		next := c.ackNext.Load()
++		force := c.ackForce.Swap(false)
++		if next == 0 || (next <= sent && !force) || c.legCount() == 0 {
++			if force && c.legCount() == 0 {
++				c.ackForce.Store(true)
++			}
++			continue
++		}
++		if c.sendAckFrame(next) {
++			sent = next
++		} else if force {
++			c.ackForce.Store(true)
++		}
++	}
++}
++
++func (c *mpCore) sendAckFrame(value uint64) bool {
++	legs := c.availableLegs()
++	if len(legs) == 0 {
++		return false
++	}
++	var header [frameHeaderSize]byte
++	header[0] = frameTypeAck
++	binary.BigEndian.PutUint64(header[1:9], value)
++	success := false
++	for _, leg := range legs {
++		leg.writeMu.Lock()
++		err := writeAll(leg.conn, header[:])
++		leg.writeMu.Unlock()
++		if err != nil {
++			c.handleLegFailure(leg, err)
++			continue
+ 		}
++		success = true
+ 	}
++	return success
++}
++
++func (c *mpCore) sendControlFrame(typ byte, value uint64) bool {
++	legs := c.availableLegs()
++	if len(legs) == 0 {
++		return false
++	}
++	// Prefer leg 0 for control traffic, otherwise use any surviving leg.
++	leg := c.getLeg(0)
++	if leg == nil {
++		leg = legs[0]
++	}
++	var header [frameHeaderSize]byte
++	header[0] = typ
++	binary.BigEndian.PutUint64(header[1:9], value)
++	leg.writeMu.Lock()
++	err := writeAll(leg.conn, header[:])
++	leg.writeMu.Unlock()
++	if err != nil {
++		c.handleLegFailure(leg, err)
++		return false
++	}
++	return true
+ }
+ 
+ func (c *mpCore) rxLoop() {
+@@ -431,6 +876,7 @@
+ 		case frame := <-c.incoming:
+ 			if frame.seq < expected {
+ 				c.putBuffer(frame.data)
++				c.forceAck()
+ 				continue
+ 			}
+ 			if frame.seq > expected {
+@@ -461,6 +907,7 @@
+ 				delete(pending, expected)
+ 				frame = next
+ 			}
++			c.requestAck(expected)
+ 		}
+ 	}
+ }
+@@ -475,48 +922,48 @@
+ 	return err
+ }
+ 
+-func readWireFrame(conn net.Conn, core *mpCore) (dataFrame, bool, error) {
++func readWireFrame(conn net.Conn, core *mpCore) (wireFrame, error) {
+ 	var header [frameHeaderSize]byte
+ 	if _, err := io.ReadFull(conn, header[:]); err != nil {
+-		return dataFrame{}, false, err
++		return wireFrame{}, err
+ 	}
+-	switch header[0] {
+-	case frameTypeActivate:
+-		return dataFrame{}, true, nil
++	frame := wireFrame{typ: header[0], seq: binary.BigEndian.Uint64(header[1:9])}
++	switch frame.typ {
++	case frameTypeActivate, frameTypeAck:
++		if binary.BigEndian.Uint32(header[9:13]) != 0 {
++			return wireFrame{}, errors.New("invalid multipath control frame length")
++		}
++		return frame, nil
+ 	case frameTypeData:
+ 	default:
+-		return dataFrame{}, false, errors.New("unknown multipath frame type")
++		return wireFrame{}, errors.New("unknown multipath frame type")
+ 	}
+-	seq := binary.BigEndian.Uint64(header[1:9])
+ 	length := int(binary.BigEndian.Uint32(header[9:13]))
+-	if length < 0 || length > maxFramePayload {
+-		return dataFrame{}, false, errors.New("invalid multipath frame length")
++	if length <= 0 || length > maxFramePayload {
++		return wireFrame{}, errors.New("invalid multipath frame length")
+ 	}
+-	var buffer []byte
+ 	if length <= core.cfg.ChunkSize {
+-		buffer = core.getBuffer()[:length]
++		frame.data = core.getBuffer()[:length]
+ 	} else {
+-		buffer = make([]byte, length)
++		frame.data = make([]byte, length)
+ 	}
+-	if _, err := io.ReadFull(conn, buffer); err != nil {
+-		core.putBuffer(buffer)
+-		return dataFrame{}, false, err
++	if _, err := io.ReadFull(conn, frame.data); err != nil {
++		core.putBuffer(frame.data)
++		return wireFrame{}, err
+ 	}
+-	return dataFrame{seq: seq, data: buffer}, false, nil
++	return frame, nil
+ }
+ 
+-func writeAll(writer io.Writer, data []byte) error {
+-	for len(data) > 0 {
+-		n, err := writer.Write(data)
+-		if n > 0 {
+-			data = data[n:]
+-		}
++func writeAll(writer io.Writer, buffer []byte) error {
++	for len(buffer) > 0 {
++		n, err := writer.Write(buffer)
+ 		if err != nil {
+ 			return err
+ 		}
+-		if n == 0 {
+-			return io.ErrShortWrite
++		if n <= 0 {
++			return io.ErrUnexpectedEOF
+ 		}
++		buffer = buffer[n:]
+ 	}
+ 	return nil
+ }
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/src/protocol/multipath/core_test.go alpha2/src/protocol/multipath/core_test.go
+--- alpha1/src/protocol/multipath/core_test.go	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/src/protocol/multipath/core_test.go	2026-08-26 09:34:22.156805325 +0000
+@@ -0,0 +1,394 @@
++package multipath
++
++import (
++	"bytes"
++	"errors"
++	"io"
++	"net"
++	"sync"
++	"testing"
++	"time"
++)
++
++type failAfterConn struct {
++	net.Conn
++	mu        sync.Mutex
++	remaining int
++	failed    bool
++}
++
++func (c *failAfterConn) Write(p []byte) (int, error) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.failed {
++		return 0, io.ErrClosedPipe
++	}
++	if c.remaining <= 0 {
++		c.failed = true
++		_ = c.Conn.Close()
++		return 0, io.ErrClosedPipe
++	}
++	if len(p) <= c.remaining {
++		n, err := c.Conn.Write(p)
++		c.remaining -= n
++		return n, err
++	}
++	limit := c.remaining
++	n, _ := c.Conn.Write(p[:limit])
++	c.remaining -= n
++	c.failed = true
++	_ = c.Conn.Close()
++	return n, io.ErrClosedPipe
++}
++
++func testCoreConfig() coreConfig {
++	return coreConfig{
++		ChunkSize:         4096,
++		QueueFrames:       32,
++		ThresholdBytesPS:  0,
++		ActivationWindow:  50 * time.Millisecond,
++		BandwidthMbps:     []uint32{100, 500},
++		MaxReorderFrames:  256,
++		MaxInflightFrames: 128,
++		AckInterval:       5 * time.Millisecond,
++		RetransmitTimeout: 50 * time.Millisecond,
++		RecoveryTimeout:   2 * time.Second,
++	}
++}
++
++func TestCoreSingleLegRoundTrip(t *testing.T) {
++	leftCore, leftApp := newCore(testCoreConfig())
++	rightCore, rightApp := newCore(testCoreConfig())
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a, b := net.Pipe()
++	if err := leftCore.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("abc123"), 20000)
++	readDone := make(chan error, 1)
++	got := make([]byte, len(payload))
++	go func() {
++		_, err := io.ReadFull(rightApp, got)
++		readDone <- err
++	}()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timeout")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload mismatch")
++	}
++}
++
++func TestCoreLegFailureRetransmitsWithoutLogicalBreak(t *testing.T) {
++	leftCore, leftApp := newCore(testCoreConfig())
++	rightCore, rightApp := newCore(testCoreConfig())
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a0, b0 := net.Pipe()
++	faulty := &failAfterConn{Conn: a0, remaining: 48 * 1024}
++	if err := leftCore.addLeg(0, faulty, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b0, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("multipath-failover-"), 30000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() {
++		_, err := io.ReadFull(rightApp, got)
++		readDone <- err
++	}()
++	writeDone := make(chan error, 1)
++	go func() {
++		_, err := leftApp.Write(payload)
++		writeDone <- err
++	}()
++
++	// Allow leg 0 to fail mid-frame, then add a completely new path with the
++	// same leg id semantics as a secondary transport.
++	time.Sleep(100 * time.Millisecond)
++	a1, b1 := net.Pipe()
++	if err := leftCore.addLeg(1, a1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b1, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	select {
++	case err := <-writeDone:
++		if err != nil && !errors.Is(err, net.ErrClosed) {
++			t.Fatalf("logical write broke: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("logical write timeout")
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatalf("logical read broke: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("logical read timeout")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload mismatch after failover")
++	}
++}
++
++type blackholeWriteConn struct{ net.Conn }
++
++func (c *blackholeWriteConn) Write(p []byte) (int, error) { return len(p), nil }
++
++func TestCoreAckTimeoutReplaysOnOtherLiveLeg(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.BandwidthMbps = []uint32{10000, 1} // initial scheduler strongly prefers leg 0
++	cfg.RetransmitTimeout = 40 * time.Millisecond
++	leftCore, leftApp := newCore(cfg)
++	rightCore, rightApp := newCore(cfg)
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a0, b0 := net.Pipe()
++	if err := leftCore.addLeg(0, &blackholeWriteConn{Conn: a0}, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b0, nil); err != nil {
++		t.Fatal(err)
++	}
++	a1, b1 := net.Pipe()
++	if err := leftCore.addLeg(1, a1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b1, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("timeout-replay-"), 4000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() { _, err := io.ReadFull(rightApp, got); readDone <- err }()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timeout waiting for replay on second leg")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload mismatch after ACK-timeout replay")
++	}
++}
++
++func TestCoreAckBroadcastSurvivesOneWayControlBlackhole(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.BandwidthMbps = []uint32{10000, 1}
++	leftCore, leftApp := newCore(cfg)
++	rightCore, rightApp := newCore(cfg)
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a0, b0 := net.Pipe()
++	// Client->server data on leg0 works, but server->client writes on leg0 are
++	// silently discarded. ACK broadcasting must still release the sender window
++	// through leg1.
++	if err := leftCore.addLeg(0, a0, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, &blackholeWriteConn{Conn: b0}, nil); err != nil {
++		t.Fatal(err)
++	}
++	a1, b1 := net.Pipe()
++	if err := leftCore.addLeg(1, a1, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(1, b1, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("ack-broadcast-"), 10000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() { _, err := io.ReadFull(rightApp, got); readDone <- err }()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timeout")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload mismatch")
++	}
++
++	deadline := time.Now().Add(2 * time.Second)
++	for {
++		leftCore.txMu.Lock()
++		remaining := len(leftCore.outstanding)
++		leftCore.txMu.Unlock()
++		if remaining == 0 {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("ACK window not released, %d outstanding", remaining)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++}
++
++func TestCoreWriteThenCloseDrainsOutstanding(t *testing.T) {
++	cfg := testCoreConfig()
++	leftCore, leftApp := newCore(cfg)
++	rightCore, rightApp := newCore(cfg)
++	defer leftCore.Close()
++	defer rightCore.Close()
++	a, b := net.Pipe()
++	if err := leftCore.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("final-frame-"), 10000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() { _, err := io.ReadFull(rightApp, got); readDone <- err }()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	_ = leftApp.Close()
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatalf("reader lost final data: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timeout waiting for final drained data")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("final payload mismatch")
++	}
++}
++
++func TestCoreSilentPrimaryStallActivatesBooster(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.ThresholdBytesPS = 1 << 60 // bandwidth trigger must not be the reason
++	cfg.RetransmitTimeout = 40 * time.Millisecond
++	cfg.RecoveryTimeout = 500 * time.Millisecond
++
++	leftCore, leftApp := newCore(cfg)
++	rightCore, rightApp := newCore(cfg)
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a0, b0 := net.Pipe()
++	if err := leftCore.addLeg(0, &blackholeWriteConn{Conn: a0}, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b0, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	activated := make(chan struct{}, 1)
++	leftCore.cfg.OnActivate = func() {
++		a1, b1 := net.Pipe()
++		if err := leftCore.addLeg(1, a1, nil); err != nil {
++			return
++		}
++		if err := rightCore.addLeg(1, b1, nil); err != nil {
++			return
++		}
++		activated <- struct{}{}
++	}
++
++	payload := bytes.Repeat([]byte("silent-stall-"), 6000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() { _, err := io.ReadFull(rightApp, got); readDone <- err }()
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++
++	select {
++	case <-activated:
++	case <-time.After(2 * time.Second):
++		t.Fatal("silent primary stall did not activate booster")
++	}
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timeout waiting for replay after silent stall")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload mismatch after silent-stall failover")
++	}
++}
++
++func TestRecoveryTimeoutResetsAfterTemporaryRecovery(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.RecoveryTimeout = 180 * time.Millisecond
++	core, _ := newCore(cfg)
++	defer core.Close()
++
++	// First outage starts a recovery timer.
++	a0, b0 := net.Pipe()
++	if err := core.addLeg(0, a0, nil); err != nil {
++		t.Fatal(err)
++	}
++	_ = b0.Close()
++	time.Sleep(40 * time.Millisecond)
++	if core.legCount() != 0 {
++		t.Fatal("expected first leg to be removed")
++	}
++
++	// Recover before the first deadline, then fail again shortly before that old
++	// deadline. The second outage must receive a full RecoveryTimeout.
++	a1, b1 := net.Pipe()
++	if err := core.addLeg(0, a1, nil); err != nil {
++		t.Fatal(err)
++	}
++	time.Sleep(100 * time.Millisecond)
++	_ = b1.Close()
++	time.Sleep(55 * time.Millisecond) // crosses the first outage's old deadline
++	select {
++	case <-core.Done():
++		t.Fatal("stale recovery timer killed a later outage too early")
++	default:
++	}
++
++	select {
++	case <-core.Done():
++		// Expected only after the second outage's own timeout.
++	case <-time.After(300 * time.Millisecond):
++		t.Fatal("second outage did not expire after its own recovery timeout")
++	}
++}
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/src/protocol/multipath/inbound.go alpha2/src/protocol/multipath/inbound.go
+--- alpha1/src/protocol/multipath/inbound.go	2026-08-26 08:50:30.000000000 +0000
++++ alpha2/src/protocol/multipath/inbound.go	2026-08-26 09:23:47.127309038 +0000
+@@ -47,38 +47,25 @@
+ 	if options.Password == "" {
+ 		return nil, E.New("missing multipath password")
+ 	}
+-	threshold := options.ActivationThresholdMbps
+-	if threshold == 0 {
+-		threshold = 150
+-	}
+-	window := time.Duration(options.ActivationWindow)
+-	if window <= 0 {
+-		window = time.Second
+-	}
+-	chunkSize := int(options.ChunkSize)
+-	if chunkSize == 0 {
+-		chunkSize = 64 * 1024
+-	}
+-	if chunkSize < 1024 || chunkSize > maxFramePayload {
+-		return nil, E.New("invalid chunk_size")
+-	}
+-	queueFrames := int(options.QueueFrames)
+-	if queueFrames == 0 {
+-		queueFrames = 256
+-	}
+-	if queueFrames < 8 || queueFrames > 4096 {
+-		return nil, E.New("invalid queue_frames")
+-	}
+-	maxReorderFrames := int(options.MaxReorderFrames)
+-	if maxReorderFrames == 0 {
+-		maxReorderFrames = 2048
+-	}
+-	if maxReorderFrames < 64 || maxReorderFrames > 65536 {
+-		return nil, E.New("invalid max_reorder_frames")
+-	}
+ 	if len(options.BandwidthMbps) != 0 && len(options.BandwidthMbps) != 2 {
+-		return nil, E.New("multipath PoC bandwidth_mbps must contain exactly 2 entries")
++		return nil, E.New("multipath bandwidth_mbps must contain exactly 2 entries")
+ 	}
++	cfg, err := makeCoreConfig(
++		options.ActivationThresholdMbps,
++		time.Duration(options.ActivationWindow),
++		int(options.ChunkSize),
++		int(options.QueueFrames),
++		options.BandwidthMbps,
++		int(options.MaxReorderFrames),
++		int(options.MaxInflightFrames),
++		time.Duration(options.AckInterval),
++		time.Duration(options.RetransmitTimeout),
++		time.Duration(options.RecoveryTimeout),
++	)
++	if err != nil {
++		return nil, err
++	}
++	cfg.NotifyPeerOnActivate = true
+ 	i := &Inbound{
+ 		Adapter:  inbound.NewAdapter(C.TypeMultipath, tag),
+ 		ctx:      ctx,
+@@ -87,15 +74,7 @@
+ 		sessions: make(map[[16]byte]*serverSession),
+ 		password: options.Password,
+ 		nonces:   make(map[[16]byte]time.Time),
+-		cfg: coreConfig{
+-			ChunkSize:            chunkSize,
+-			QueueFrames:          queueFrames,
+-			ThresholdBytesPS:     uint64(threshold) * 1000 * 1000 / 8,
+-			ActivationWindow:     window,
+-			BandwidthMbps:        append([]uint32(nil), options.BandwidthMbps...),
+-			MaxReorderFrames:     maxReorderFrames,
+-			NotifyPeerOnActivate: true,
+-		},
++		cfg:      cfg,
+ 	}
+ 	i.listener = listener.New(listener.Options{
+ 		Context:           ctx,
+@@ -164,7 +143,16 @@
+ 			N.CloseOnHandshakeFailure(conn, onClose, err)
+ 			return
+ 		}
+-		i.logger.InfoContext(ctx, "multipath leg ", hello.LegID, " joined session for ", destination)
++		i.logger.InfoContext(ctx, "multipath leg ", hello.LegID, " joined/rejoined session for ", destination)
++		return
++	}
++
++	// Only leg 0 may create a logical session. A delayed/replayed secondary leg
++	// must never create a second routed connection after the original session
++	// has already expired.
++	if hello.LegID != 0 {
++		i.access.Unlock()
++		N.CloseOnHandshakeFailure(conn, onClose, E.New("multipath secondary leg has no active session"))
+ 		return
+ 	}
+ 
+@@ -172,6 +160,9 @@
+ 	cfg.OnActivate = func() {
+ 		i.logger.InfoContext(ctx, "multipath server booster activated for ", destination)
+ 	}
++	cfg.OnLegDown = func(id uint8, legErr error) {
++		i.logger.WarnContext(ctx, "multipath server leg ", id, " down for ", destination, ": ", legErr)
++	}
+ 	core, appConn := newCore(cfg)
+ 	session = &serverSession{
+ 		id:          hello.Session,
+@@ -188,6 +179,11 @@
+ 	i.sessions[hello.Session] = session
+ 	i.access.Unlock()
+ 
++	go func() {
++		<-core.Done()
++		i.removeSession(hello.Session, session)
++	}()
++
+ 	metadata.Inbound = i.Tag()
+ 	metadata.InboundType = i.Type()
+ 	metadata.Destination = destination
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/src/protocol/multipath/outbound.go alpha2/src/protocol/multipath/outbound.go
+--- alpha1/src/protocol/multipath/outbound.go	2026-08-26 08:51:42.000000000 +0000
++++ alpha2/src/protocol/multipath/outbound.go	2026-08-26 09:26:17.021147842 +0000
+@@ -24,24 +24,41 @@
+ 
+ type Outbound struct {
+ 	outbound.Adapter
+-	ctx         context.Context
+-	manager     adapter.OutboundManager
+-	logger      log.ContextLogger
+-	tags        []string
+-	children    []adapter.Outbound
+-	udpTag      string
+-	udpOutbound adapter.Outbound
+-	aggregation M.Socksaddr
+-	cfg         coreConfig
+-	password    string
++	ctx            context.Context
++	manager        adapter.OutboundManager
++	logger         log.ContextLogger
++	tags           []string
++	children       []adapter.Outbound
++	udpTag         string
++	udpOutbound    adapter.Outbound
++	aggregations   []M.Socksaddr
++	cfg            coreConfig
++	password       string
++	redialInterval time.Duration
+ }
+ 
+ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MultipathOutboundOptions) (adapter.Outbound, error) {
+ 	if len(options.Outbounds) != 2 {
+-		return nil, E.New("multipath PoC requires exactly 2 outbounds")
++		return nil, E.New("multipath requires exactly 2 outbounds")
+ 	}
+-	if options.Server == "" || options.ServerPort == 0 {
+-		return nil, E.New("missing multipath server/server_port")
++	var aggregations []M.Socksaddr
++	if len(options.Endpoints) > 0 {
++		if len(options.Endpoints) != 2 {
++			return nil, E.New("multipath endpoints must contain exactly 2 entries")
++		}
++		aggregations = make([]M.Socksaddr, 2)
++		for idx, endpoint := range options.Endpoints {
++			if endpoint.Server == "" || endpoint.ServerPort == 0 {
++				return nil, E.New("invalid multipath endpoint at index ", idx)
++			}
++			aggregations[idx] = M.ParseSocksaddrHostPort(endpoint.Server, endpoint.ServerPort)
++		}
++	} else {
++		if options.Server == "" || options.ServerPort == 0 {
++			return nil, E.New("missing multipath endpoints or server/server_port")
++		}
++		shared := M.ParseSocksaddrHostPort(options.Server, options.ServerPort)
++		aggregations = []M.Socksaddr{shared, shared}
+ 	}
+ 	if options.Password == "" {
+ 		return nil, E.New("missing multipath password")
+@@ -61,6 +78,7 @@
+ 	}
+ 	if preferredIndex != 0 {
+ 		tags[0], tags[preferredIndex] = tags[preferredIndex], tags[0]
++		aggregations[0], aggregations[preferredIndex] = aggregations[preferredIndex], aggregations[0]
+ 		if len(weights) > 0 {
+ 			weights[0], weights[preferredIndex] = weights[preferredIndex], weights[0]
+ 		}
+@@ -69,49 +87,45 @@
+ 	if udpTag == "" {
+ 		udpTag = preferred
+ 	}
+-	threshold := options.ActivationThresholdMbps
+-	if threshold == 0 {
+-		threshold = 150
+-	}
+-	window := time.Duration(options.ActivationWindow)
+-	if window <= 0 {
+-		window = time.Second
+-	}
+-	chunkSize := int(options.ChunkSize)
+-	if chunkSize == 0 {
+-		chunkSize = 64 * 1024
+-	}
+-	if chunkSize < 1024 || chunkSize > maxFramePayload {
+-		return nil, E.New("invalid chunk_size")
++
++	cfg, err := makeCoreConfig(
++		options.ActivationThresholdMbps,
++		time.Duration(options.ActivationWindow),
++		int(options.ChunkSize),
++		int(options.QueueFrames),
++		weights,
++		int(options.MaxReorderFrames),
++		int(options.MaxInflightFrames),
++		time.Duration(options.AckInterval),
++		time.Duration(options.RetransmitTimeout),
++		time.Duration(options.RecoveryTimeout),
++	)
++	if err != nil {
++		return nil, err
+ 	}
+-	queueFrames := int(options.QueueFrames)
+-	if queueFrames == 0 {
+-		queueFrames = 256
++	redialInterval := time.Duration(options.RedialInterval)
++	if redialInterval <= 0 {
++		redialInterval = time.Second
+ 	}
+-	if queueFrames < 8 || queueFrames > 4096 {
+-		return nil, E.New("invalid queue_frames")
++	if redialInterval < 100*time.Millisecond || redialInterval > 30*time.Second {
++		return nil, E.New("redial_interval must be between 100ms and 30s")
+ 	}
++
+ 	dependencies := append([]string(nil), options.Outbounds...)
+ 	if !slices.Contains(dependencies, udpTag) {
+ 		dependencies = append(dependencies, udpTag)
+ 	}
+ 	return &Outbound{
+-		Adapter:     outbound.NewAdapter(C.TypeMultipath, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
+-		ctx:         ctx,
+-		manager:     service.FromContext[adapter.OutboundManager](ctx),
+-		logger:      logger,
+-		tags:        tags,
+-		udpTag:      udpTag,
+-		aggregation: M.ParseSocksaddrHostPort(options.Server, options.ServerPort),
+-		password:    options.Password,
+-		cfg: coreConfig{
+-			ChunkSize:        chunkSize,
+-			QueueFrames:      queueFrames,
+-			ThresholdBytesPS: uint64(threshold) * 1000 * 1000 / 8,
+-			ActivationWindow: window,
+-			BandwidthMbps:    weights,
+-			MaxReorderFrames: 2048,
+-		},
++		Adapter:        outbound.NewAdapter(C.TypeMultipath, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies),
++		ctx:            ctx,
++		manager:        service.FromContext[adapter.OutboundManager](ctx),
++		logger:         logger,
++		tags:           tags,
++		udpTag:         udpTag,
++		aggregations:   aggregations,
++		password:       options.Password,
++		cfg:            cfg,
++		redialInterval: redialInterval,
+ 	}, nil
+ }
+ 
+@@ -149,12 +163,13 @@
+ 	if len(o.children) != 2 {
+ 		return nil, E.New("multipath outbound is not started")
+ 	}
++
+ 	sessionID, err := newSessionID()
+ 	if err != nil {
+ 		return nil, E.Cause(err, "generate multipath session id")
+ 	}
+ 	destinationString := destination.String()
+-	primaryConn, err := o.children[0].DialContext(ctx, N.NetworkTCP, o.aggregation)
++	primaryConn, err := o.children[0].DialContext(ctx, N.NetworkTCP, o.aggregations[0])
+ 	if err != nil {
+ 		return nil, E.Cause(err, "dial multipath preferred leg ", o.tags[0])
+ 	}
+@@ -162,51 +177,106 @@
+ 		primaryConn.Close()
+ 		return nil, E.Cause(err, "write multipath preferred hello")
+ 	}
++
+ 	cfg := o.cfg
+-	secondaryCtx := context.WithoutCancel(ctx)
++	sessionCtx := context.WithoutCancel(ctx)
+ 	var core *mpCore
+-	var joinOnce sync.Once
+-	cfg.OnActivate = func() {
+-		o.logger.InfoContext(ctx, "multipath booster activated for ", destination)
+-		joinOnce.Do(func() { go o.joinSecondary(secondaryCtx, core, sessionID, destinationString) })
+-	}
+-	core, appConn := newCore(cfg)
+-	if err = core.addLeg(0, primaryConn, nil); err != nil {
+-		appConn.Close()
+-		return nil, err
+-	}
+-	o.logger.InfoContext(ctx, "multipath connection to ", destination, " via preferred ", o.tags[0])
+-	return appConn, nil
+-}
+-
+-func (o *Outbound) joinSecondary(ctx context.Context, core *mpCore, sessionID [16]byte, destination string) {
+-	for {
++	var dialMu sync.Mutex
++	joining := [2]bool{}
++	var ensureLeg func(uint8)
++	ensureLeg = func(id uint8) {
++		if id > 1 || core == nil {
++			return
++		}
+ 		select {
+ 		case <-core.Done():
+ 			return
+ 		default:
+ 		}
+-		conn, err := o.children[1].DialContext(ctx, N.NetworkTCP, o.aggregation)
+-		if err == nil {
+-			err = writeHello(conn, helloMessage{Session: sessionID, LegID: 1, Destination: destination}, o.password)
+-		}
+-		if err == nil {
+-			err = core.addLeg(1, conn, nil)
+-		}
+-		if err == nil {
+-			o.logger.InfoContext(ctx, "multipath secondary leg ready via ", o.tags[1])
++		if id == 1 && !core.active.Load() {
+ 			return
+ 		}
+-		if conn != nil {
+-			conn.Close()
++		if core.hasLeg(id) {
++			return
+ 		}
+-		o.logger.WarnContext(ctx, "multipath secondary leg failed: ", err)
+-		select {
+-		case <-core.Done():
++		dialMu.Lock()
++		if joining[id] {
++			dialMu.Unlock()
+ 			return
+-		case <-time.After(2 * time.Second):
+ 		}
++		joining[id] = true
++		dialMu.Unlock()
++		go func() {
++			defer func() {
++				dialMu.Lock()
++				joining[id] = false
++				dialMu.Unlock()
++				select {
++				case <-core.Done():
++					return
++				default:
++				}
++				// Close the tiny race where a just-added leg can fail before this
++				// dial goroutine clears its joining flag and the OnLegDown callback
++				// therefore observes "already joining".
++				if !core.hasLeg(id) && (id == 0 || core.active.Load()) {
++					time.AfterFunc(o.redialInterval, func() { ensureLeg(id) })
++				}
++			}()
++			for {
++				select {
++				case <-core.Done():
++					return
++				default:
++				}
++				if id == 1 && !core.active.Load() {
++					return
++				}
++				if core.hasLeg(id) {
++					return
++				}
++				conn, dialErr := o.children[id].DialContext(sessionCtx, N.NetworkTCP, o.aggregations[id])
++				if dialErr == nil {
++					dialErr = writeHello(conn, helloMessage{Session: sessionID, LegID: id, Destination: destinationString}, o.password)
++				}
++				if dialErr == nil {
++					dialErr = core.addLeg(id, conn, nil)
++				}
++				if dialErr == nil {
++					o.logger.InfoContext(ctx, "multipath leg ", id, " ready via ", o.tags[id], " for ", destination)
++					return
++				}
++				if conn != nil {
++					conn.Close()
++				}
++				o.logger.WarnContext(ctx, "multipath leg ", id, " redial failed via ", o.tags[id], ": ", dialErr)
++				select {
++				case <-core.Done():
++					return
++				case <-time.After(o.redialInterval):
++				}
++			}
++		}()
+ 	}
++
++	cfg.OnActivate = func() {
++		o.logger.InfoContext(ctx, "multipath booster activated for ", destination)
++		ensureLeg(1)
++	}
++	cfg.OnLegDown = func(id uint8, legErr error) {
++		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", o.tags[id], ": ", legErr)
++		ensureLeg(id)
++		if id == 0 {
++			ensureLeg(1)
++		}
++	}
++	core, appConn := newCore(cfg)
++	if err = core.addLeg(0, primaryConn, nil); err != nil {
++		appConn.Close()
++		return nil, err
++	}
++	o.logger.InfoContext(ctx, "multipath connection to ", destination, " via preferred ", o.tags[0])
++	return appConn, nil
+ }
+ 
+ func (o *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+@@ -215,3 +285,66 @@
+ 	}
+ 	return o.udpOutbound.ListenPacket(ctx, destination)
+ }
++
++func makeCoreConfig(threshold uint32, window time.Duration, chunkSize, queueFrames int, weights []uint32, maxReorder, maxInflight int, ackInterval, retransmitTimeout, recoveryTimeout time.Duration) (coreConfig, error) {
++	if threshold == 0 {
++		threshold = 150
++	}
++	if window <= 0 {
++		window = time.Second
++	}
++	if chunkSize == 0 {
++		chunkSize = 64 * 1024
++	}
++	if chunkSize < 1024 || chunkSize > maxFramePayload {
++		return coreConfig{}, E.New("invalid chunk_size")
++	}
++	if queueFrames == 0 {
++		queueFrames = 256
++	}
++	if queueFrames < 8 || queueFrames > 4096 {
++		return coreConfig{}, E.New("invalid queue_frames")
++	}
++	if maxReorder == 0 {
++		maxReorder = 4096
++	}
++	if maxReorder < 64 || maxReorder > 65536 {
++		return coreConfig{}, E.New("invalid max_reorder_frames")
++	}
++	if maxInflight == 0 {
++		maxInflight = 1024
++	}
++	if maxInflight < 32 || maxInflight > 65536 {
++		return coreConfig{}, E.New("invalid max_inflight_frames")
++	}
++	if ackInterval <= 0 {
++		ackInterval = 20 * time.Millisecond
++	}
++	if ackInterval < time.Millisecond || ackInterval > time.Second {
++		return coreConfig{}, E.New("ack_interval must be between 1ms and 1s")
++	}
++	if retransmitTimeout <= 0 {
++		retransmitTimeout = 1500 * time.Millisecond
++	}
++	if retransmitTimeout < 100*time.Millisecond || retransmitTimeout > 30*time.Second {
++		return coreConfig{}, E.New("retransmit_timeout must be between 100ms and 30s")
++	}
++	if recoveryTimeout <= 0 {
++		recoveryTimeout = 15 * time.Second
++	}
++	if recoveryTimeout < time.Second || recoveryTimeout > 5*time.Minute {
++		return coreConfig{}, E.New("recovery_timeout must be between 1s and 5m")
++	}
++	return coreConfig{
++		ChunkSize:         chunkSize,
++		QueueFrames:       queueFrames,
++		ThresholdBytesPS:  uint64(threshold) * 1000 * 1000 / 8,
++		ActivationWindow:  window,
++		BandwidthMbps:     append([]uint32(nil), weights...),
++		MaxReorderFrames:  maxReorder,
++		MaxInflightFrames: maxInflight,
++		AckInterval:       ackInterval,
++		RetransmitTimeout: retransmitTimeout,
++		RecoveryTimeout:   recoveryTimeout,
++	}, nil
++}
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/src/protocol/multipath/protocol.go alpha2/src/protocol/multipath/protocol.go
+--- alpha1/src/protocol/multipath/protocol.go	2026-08-26 08:50:30.000000000 +0000
++++ alpha2/src/protocol/multipath/protocol.go	2026-08-26 09:16:18.255886083 +0000
+@@ -11,9 +11,9 @@
+ 	"time"
+ )
+ 
+-var helloMagic = [4]byte{'S', 'M', 'P', '2'}
++var helloMagic = [4]byte{'S', 'M', 'P', '3'}
+ 
+-const helloVersion byte = 2
++const helloVersion byte = 3
+ const helloSkew = 90 * time.Second
+ 
+ type helloMessage struct {
+diff -ruN '--exclude=patches' '--exclude=__pycache__' alpha1/validate-kit.sh alpha2/validate-kit.sh
+--- alpha1/validate-kit.sh	1970-01-01 00:00:00.000000000 +0000
++++ alpha2/validate-kit.sh	2026-08-26 09:35:01.958243869 +0000
+@@ -0,0 +1,23 @@
++#!/usr/bin/env bash
++set -euo pipefail
++ROOT="$(cd "$(dirname "$0")" && pwd)"
++command -v go >/dev/null || { echo "missing go"; exit 1; }
++command -v python3 >/dev/null || { echo "missing python3"; exit 1; }
++
++echo '[+] JSON syntax'
++python3 -m json.tool "$ROOT/config/client.example.json" >/dev/null
++python3 -m json.tool "$ROOT/config/server.example.json" >/dev/null
++
++echo '[+] standalone SMP3 reliability tests'
++(
++  cd "$ROOT/src/protocol/multipath"
++  go test core.go core_test.go -race -count=5
++)
++
++echo '[+] source injector syntax'
++python3 -m py_compile "$ROOT/scripts/apply_source.py"
++
++echo '[+] shell syntax'
++bash -n "$ROOT/build.sh" "$ROOT/install-server.sh" "$ROOT/validate-kit.sh"
++
++echo '[+] kit validation passed'

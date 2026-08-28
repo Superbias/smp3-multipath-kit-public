@@ -36,13 +36,13 @@ func TestInboundSecondaryCanCreateSessionBeforePrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.core.Close()
-	defer session.appConn.Close()
+	defer session.streamCore.Close()
+	defer session.streamConn.Close()
 	if !created {
 		t.Fatal("secondary first arrival did not create session")
 	}
-	if !session.core.hasLeg(1) || session.core.hasLeg(0) {
-		t.Fatalf("unexpected initial legs: leg0=%v leg1=%v", session.core.hasLeg(0), session.core.hasLeg(1))
+	if !session.streamCore.hasLeg(1) || session.streamCore.hasLeg(0) {
+		t.Fatalf("unexpected initial legs: leg0=%v leg1=%v", session.streamCore.hasLeg(0), session.streamCore.hasLeg(1))
 	}
 
 	leg0, peer0 := net.Pipe()
@@ -58,8 +58,8 @@ func TestInboundSecondaryCanCreateSessionBeforePrimary(t *testing.T) {
 	if joined != session {
 		t.Fatalf("primary joined wrong session: got=%p want=%p", joined, session)
 	}
-	if !session.core.hasLeg(0) || !session.core.hasLeg(1) {
-		t.Fatalf("both legs not present after join: leg0=%v leg1=%v", session.core.hasLeg(0), session.core.hasLeg(1))
+	if !session.streamCore.hasLeg(0) || !session.streamCore.hasLeg(1) {
+		t.Fatalf("both legs not present after join: leg0=%v leg1=%v", session.streamCore.hasLeg(0), session.streamCore.hasLeg(1))
 	}
 }
 
@@ -125,10 +125,10 @@ func TestInboundConcurrentFirstLegsCreateExactlyOneSession(t *testing.T) {
 		t.Fatalf("concurrent legs did not converge on one session: %p %p", got[0].session, got[1].session)
 	}
 	session := got[0].session
-	defer session.core.Close()
-	defer session.appConn.Close()
-	if !session.core.hasLeg(0) || !session.core.hasLeg(1) {
-		t.Fatalf("concurrent first legs not both attached: leg0=%v leg1=%v", session.core.hasLeg(0), session.core.hasLeg(1))
+	defer session.streamCore.Close()
+	defer session.streamConn.Close()
+	if !session.streamCore.hasLeg(0) || !session.streamCore.hasLeg(1) {
+		t.Fatalf("concurrent first legs not both attached: leg0=%v leg1=%v", session.streamCore.hasLeg(0), session.streamCore.hasLeg(1))
 	}
 }
 
@@ -149,7 +149,7 @@ func TestServerSessionRejectsLiveDuplicateLegJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session := &serverSession{core: core}
+	session := &serverSession{mode: helloModeStream, streamCore: core}
 	replacement, peer := net.Pipe()
 	defer peer.Close()
 	defer replacement.Close()
@@ -175,7 +175,7 @@ func TestInboundCompletedSessionTombstoneRejectsLateLeg(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("create session: created=%v err=%v", created, err)
 	}
-	_ = session.core.Close()
+	_ = session.streamCore.Close()
 
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -221,8 +221,8 @@ func TestInboundExpiredTombstoneAllowsFreshCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.core.Close()
-	defer session.appConn.Close()
+	defer session.streamCore.Close()
+	defer session.streamConn.Close()
 	if !created {
 		t.Fatal("expired tombstone blocked a fresh create")
 	}
@@ -247,5 +247,68 @@ func TestInboundClosedRejectsNewSession(t *testing.T) {
 	}
 	if created || got != nil {
 		t.Fatalf("closed inbound created session: created=%v session=%p", created, got)
+	}
+}
+
+func TestInboundDatagramSessionRejectsStreamModeJoin(t *testing.T) {
+	inbound := newTestInboundForSessionCreation()
+	inbound.udpEnabled = true
+	inbound.udpCfg = datagramConfig{Mode: datagramModeAdaptive, QueueFrames: 16, DedupWindow: 64, IdleTimeout: time.Minute, RecoveryTimeout: time.Second}
+	var id [16]byte
+	id[0] = 0x81
+	destination := M.ParseSocksaddr("192.0.2.1:53")
+
+	leg1, peer1 := net.Pipe()
+	defer peer1.Close()
+	session, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
+		Session: id, LegID: 1, Mode: helloModeDatagram, Destination: destination.String(),
+	}, destination, leg1, nil)
+	if err != nil || !created {
+		t.Fatalf("create datagram session: created=%v err=%v", created, err)
+	}
+	defer session.datagramCore.Close()
+
+	streamLeg, streamPeer := net.Pipe()
+	defer streamLeg.Close()
+	defer streamPeer.Close()
+	_, created, err = inbound.createOrJoinSession(context.Background(), helloMessage{
+		Session: id, LegID: 0, Mode: helloModeStream, Destination: destination.String(),
+	}, destination, streamLeg, nil)
+	if err == nil || err.Error() != "multipath session mode mismatch" {
+		t.Fatalf("cross-mode join was not rejected: %v", err)
+	}
+	if created {
+		t.Fatal("cross-mode join created a second session")
+	}
+}
+
+func TestInboundDatagramSecondLegJoinsSameSession(t *testing.T) {
+	inbound := newTestInboundForSessionCreation()
+	inbound.udpEnabled = true
+	inbound.udpCfg = datagramConfig{Mode: datagramModeAdaptive, QueueFrames: 16, DedupWindow: 64, IdleTimeout: time.Minute, RecoveryTimeout: time.Second}
+	var id [16]byte
+	id[0] = 0x82
+	destination := M.ParseSocksaddr("203.0.113.9:53")
+
+	leg0, peer0 := net.Pipe()
+	defer peer0.Close()
+	session, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
+		Session: id, LegID: 0, Mode: helloModeDatagram, Destination: destination.String(),
+	}, destination, leg0, nil)
+	if err != nil || !created {
+		t.Fatalf("create datagram session: created=%v err=%v", created, err)
+	}
+	defer session.datagramCore.Close()
+
+	leg1, peer1 := net.Pipe()
+	defer peer1.Close()
+	joined, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
+		Session: id, LegID: 1, Mode: helloModeDatagram, Destination: destination.String(),
+	}, destination, leg1, nil)
+	if err != nil || created || joined != session {
+		t.Fatalf("datagram join failed: created=%v same=%v err=%v", created, joined == session, err)
+	}
+	if !session.datagramCore.hasLeg(0) || !session.datagramCore.hasLeg(1) {
+		t.Fatal("datagram session does not contain both legs")
 	}
 }

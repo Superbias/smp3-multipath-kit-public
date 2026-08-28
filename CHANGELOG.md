@@ -1,5 +1,23 @@
 # Changelog
 
+## alpha2.3-r11 — adaptive scheduling, bootstrap failover and MP-UDP
+
+- Added bandwidth-aware TCP scheduling using useful ACK/write throughput and per-leg write latency while preserving static bandwidth weights as priors.
+- Added delayed parallel bootstrap: leg0 gets a configurable head start, then leg1 races; a hard leg0 failure starts leg1 immediately.
+- Kept TCP HELLO v4 for r10 stream compatibility and introduced HELLO v5 only for Datagram sessions.
+- Added independent MP-UDP Datagram core with per-datagram destination/ID, bounded dedup, no cumulative ACK and no global ordered wait.
+- Added UDP `stripe`, `duplicate`, and `adaptive` modes plus optional small-packet adaptive duplication.
+- Added UDP same-ID transport retirement/rejoin and zero-leg recovery timeout.
+- Integrated Datagram sessions with sing-box packet routing via the normal packet-connection router.
+- Added a native sing `N.PacketConn` adapter so per-datagram `M.Socksaddr` reaches `RoutePacketConnectionEx` without an implementation-specific `net.Addr` conversion shim.
+- Capped routed UDP datagrams at 16384 bytes for r11 to match sing packet-buffer routing boundaries; oversized fragmented UDP is rejected rather than silently truncated.
+- Retained all r10 ACK-paced rescue and same-ID stream hardening.
+- Pre-release review fixed stale duplicate re-delivery after UDP dedup-window eviction while preserving extreme out-of-order unique delivery in `stripe` mode.
+- Connected UDP hard carrier failures to the shared Hy2 -> Snell cooldown/probation state; probation recovery requires real useful UDP payload and unused probation releases the global canary slot.
+- Added immediate Snell retry when bootstrap leg1 selected Hy2 but Hy2 Dial/HELLO failed.
+- Reworked graceful stream drain stall detection around observed ACK progress rather than a timer-channel race.
+- Made UDP scheduler pressure byte-aware, bounded routed-address metadata before allocation, removed the initial UDP repair-callback race, and immediately activates the TCP booster when the preferred send queue is saturated.
+
 ## alpha2.3-r10 — ACK-paced cumulative-frontier rescue
 
 - Kept R9's single-sequence concurrent frontier rescue semantics, but removed the extra periodic-ticker delay after cumulative ACK progress. When an ACK advances `ackedNext`, R10 immediately wakes an O(1) check of the newly exposed `outstanding[ackedNext]` frontier.

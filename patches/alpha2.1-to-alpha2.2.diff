@@ -1,0 +1,625 @@
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/BUILD_STATUS.md alpha2.2/BUILD_STATUS.md
+--- alpha2.1/BUILD_STATUS.md	2026-08-26 14:16:38.000000000 +0000
++++ alpha2.2/BUILD_STATUS.md	2026-08-26 15:06:54.833076908 +0000
+@@ -1,28 +1,35 @@
+-# Alpha2.1 verification status
++# Alpha2.2 verification status
+ 
+ Verified in the artifact build environment on 2026-08-26:
+ 
+ - JSON syntax for both example configs.
+ - Python source injector syntax.
+ - Bash syntax for build/server/validation scripts.
+-- SMP3 standalone transport-core tests.
+-- SMP3 standalone transport-core tests with the Go race detector.
+-- `go vet` on the standalone SMP3 core and tests.
+-- Regression tests for future/impossible ACK handling: the ACK is ignored without retiring outstanding payload and without dropping the transport leg.
+-- Existing hard leg failure, ACK-timeout replay, one-way control black-hole, silent-stall activation, recovery-timer reset, and final-frame drain tests continue to pass.
+-
+-Observed in the preceding alpha2 live test before this hotfix:
+-
+-- Preferred dedicated-line transport carried a long download.
+-- The public booster activated and repeatedly rejoined the same logical session.
+-- The server then rejected the rejoined leg with `invalid multipath ACK beyond transmitted sequence`, while the client entered repeated `ready -> Remote EOF -> rejoin` cycles.
+-- alpha2.1 changes that ACK anomaly to a non-destructive ignore and rate-limits post-drop reconnects.
++- SMP3 standalone core + hello/protocol tests.
++- SMP3 standalone tests with the Go race detector (`-count=5`).
++- `go vet` on the standalone core/protocol/tests.
++- Existing hard-leg failure, ACK-timeout replay, one-way control black-hole, silent-stall activation, recovery-timer reset, final-frame drain, and alpha2.1 future-ACK regression tests continue to pass.
++- New regression: graceful tail draining is governed by *lack of ACK progress*, not a fixed total close deadline. The test keeps making cumulative-ACK progress for longer than one configured recovery window and verifies the drain does not return early.
++- New regression: after all DATA is ACKed, the logical CLOSE control frame causes the peer core to finish promptly instead of waiting for carrier recovery timeout.
++
++Live behavior that motivated alpha2.2:
++
++- The user's alpha2.1 long-download test successfully established the preferred leg, activated the public booster, and kept leg 1 joined for roughly twenty seconds without the alpha2 reconnect storm.
++- Near the response tail, both carriers were then closed while the Windows curl still had data left to receive. alpha2.1 contained an absolute graceful-drain deadline capped at 5 seconds; this could close the logical core while a large outstanding tail was still making ACK progress.
++- alpha2.2 removes that absolute cap, keeps server-side routed EOF in graceful-drain state, and adds an explicit logical CLOSE marker.
++
++Wire compatibility:
++
++- The wire magic remains SMP3.
++- The hello version byte is **4** in alpha2.2 (alpha2/alpha2.1 used 3).
++- Both endpoints must be upgraded together. Mixed alpha2.1/alpha2.2 peers are intentionally rejected at hello rather than silently using incompatible close semantics.
++- JSON configuration schema is unchanged.
+ 
+ Not executed in this artifact environment:
+ 
+-- A complete checkout + full `go build` of the pinned upstream sing-box revision, because this execution environment cannot resolve/download GitHub and Go modules directly.
+-- A two-host live alpha2.1 interoperability/throughput test.
++- A complete checkout + full `go build` of the pinned upstream sing-box revision, because this environment cannot resolve GitHub/Go module hosts.
++- A two-host live alpha2.2 interoperability/throughput test.
+ 
+-`build.sh` performs the missing integration checks on the deployment machine: it checks out the exact pinned revision, injects the alpha2.1 sources, runs `go test ./protocol/multipath`, and only then builds the Linux/Windows binaries.
++`build.sh` performs the missing integration checks on the deployment machine: it checks out the exact pinned revision, injects the alpha2.2 sources, runs `go test ./protocol/multipath`, and only then builds the Linux/Windows binaries.
+ 
+-Treat alpha2.1 as experimental until the full integrated build and the same long-download test pass on both Windows and the landing server.
++Treat alpha2.2 as experimental until the full integrated build and the same 256 MiB landing-local regression test pass with both endpoints upgraded.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/CHANGELOG.md alpha2.2/CHANGELOG.md
+--- alpha2.1/CHANGELOG.md	2026-08-26 14:14:51.000000000 +0000
++++ alpha2.2/CHANGELOG.md	2026-08-26 15:05:21.988238815 +0000
+@@ -1,5 +1,15 @@
+ # Changelog
+ 
++## alpha2.2 — graceful tail + logical CLOSE
++
++- Replaced the fixed graceful-drain deadline (maximum 5 seconds) with ACK-progress-based draining. `recovery_timeout` now acts as a stall/no-progress timeout during graceful close.
++- Added SMP3 logical `CLOSE` control frames so peers can distinguish normal logical EOF from carrier failure and avoid pointless reconnects after a completed stream.
++- Routed/server-side close now starts graceful drain instead of immediately failing the core; the server session stays registered until the core is actually done.
++- Carrier failures during the drain remain recoverable, while carrier EOFs during final CLOSE teardown do not start new reconnect/recovery work.
++- Added regression tests for long-but-progressing close drains and prompt peer termination through logical CLOSE.
++- Bumped the SMP3 hello version byte from 3 to 4. alpha2.2 is intentionally not wire-compatible with alpha2/alpha2.1; upgrade both endpoints together.
++- Configuration schema is unchanged.
++
+ ## alpha2.1 — SMP3 hotfix
+ 
+ - Changed impossible/future cumulative ACK handling from fatal leg teardown to non-destructive ignore; TX acknowledgement state is never advanced by such an ACK, and rate-limited anomaly logging remains enabled.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/README.md alpha2.2/README.md
+--- alpha2.1/README.md	2026-08-26 14:14:51.000000000 +0000
++++ alpha2.2/README.md	2026-08-26 15:06:37.430420386 +0000
+@@ -1,4 +1,4 @@
+-# SMP3 Multipath Kit — experimental alpha2.1
++# SMP3 Multipath Kit — experimental alpha2.2
+ 
+ Pinned base: **sing-box v1.14.0-beta.14**, revision `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`.
+ 
+@@ -38,6 +38,20 @@
+ 
+ In that layout the custom SMP3 protocol is never exposed directly to the public Internet. The public path is still the normal public route to the same landing server; only its transport wrapper is Snell/SS/etc.
+ 
++## alpha2.2 graceful-tail hotfix
++
++alpha2.2 fixes the large-download truncation found in the live alpha2.1 test. **Both endpoints must be upgraded together.** The SMP3 hello version byte is bumped from 3 to 4 because alpha2.2 adds a logical `CLOSE` control frame; alpha2/alpha2.1 peers will reject the new hello instead of silently mixing incompatible close semantics. The JSON configuration schema is unchanged.
++
++- Removed alpha2/alpha2.1's fixed graceful-drain deadline (capped at 5 seconds). A closing logical stream now waits as long as cumulative ACKs keep making progress. `recovery_timeout` is used as a **no-progress/stall timeout**, not as an absolute tail-length limit.
++- Added a logical `CLOSE` control frame, broadcast over surviving legs after all locally accepted DATA has been cumulatively ACKed. This gives the peer an explicit logical EOF instead of forcing it to infer connection completion from carrier EOF and start an unnecessary reconnect cycle.
++- A routed/server-side EOF now enters graceful drain instead of immediately calling the fatal `fail()` path. The server session remains registered until the core actually finishes, so a leg that needs repair while draining can rejoin the same logical state.
++- During final CLOSE teardown, carrier read/write EOFs no longer schedule another recovery cycle. During the drain itself, normal leg recovery remains enabled.
++- Added regression coverage for a tail that takes longer than one recovery window in total while still making ACK progress, plus prompt peer shutdown through the logical CLOSE frame.
++
++### Why alpha2.1 could stop around the end of a large response
++
++The sender can have up to `max_inflight_frames * chunk_size` bytes accepted from the routed application but not yet cumulatively ACKed by the peer. With the default `1024 * 64KiB`, that can be roughly 64 MiB. alpha2.1 waited at most 5 seconds after local EOF and then tore down both carriers even if ACKs were still progressing. On a slower path this could truncate the tail of an otherwise healthy 256 MiB download. alpha2.2 waits for progress instead of enforcing that absolute 5-second cap.
++
+ ## alpha2.1 hotfixes
+ 
+ alpha2.1 keeps the **SMP3 wire format unchanged**. Alpha2 and alpha2.1 are wire-compatible, but both endpoints should be upgraded because either alpha2 endpoint can still apply the old fatal ACK behavior. It addresses two failures found during a live long-download test of alpha2:
+@@ -150,8 +164,9 @@
+ ## Remaining limitations
+ 
+ - TCP only. UDP is delegated to `udp_outbound`; it is not multipath-aggregated.
++- Logical `CLOSE` currently represents whole-connection shutdown; independent TCP half-close (`CloseWrite` while continuing to read) is not modeled as a separate wire state yet.
+ - If the **whole client process**, **whole server process**, or landing server dies, the logical connection dies. ACK/retransmission protects transport-leg loss, not process crash/state replication.
+-- Large RTT differences can still cause head-of-line blocking in the ordered reassembly buffer. alpha2.1 keeps the simple weighted work-conserving scheduler; RTT/reorder-pressure-aware scheduling is a later optimization.
++- Large RTT differences can still cause head-of-line blocking in the ordered reassembly buffer. alpha2.2 keeps the simple weighted work-conserving scheduler; RTT/reorder-pressure-aware scheduling is a later optimization.
+ - If both legs disappear for longer than `recovery_timeout`, the logical connection is closed.
+ - `max_inflight_frames * chunk_size` is the approximate worst-case retained TX payload memory per busy logical direction. With the defaults (`1024 * 64KiB`) the upper bound is roughly 64 MiB for a connection that completely stops ACKing; normal usage is much lower.
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/UPGRADE-alpha2.1-to-alpha2.2.md alpha2.2/UPGRADE-alpha2.1-to-alpha2.2.md
+--- alpha2.1/UPGRADE-alpha2.1-to-alpha2.2.md	1970-01-01 00:00:00.000000000 +0000
++++ alpha2.2/UPGRADE-alpha2.1-to-alpha2.2.md	2026-08-26 15:05:21.988327056 +0000
+@@ -0,0 +1,35 @@
++# Upgrade alpha2.1 -> alpha2.2
++
++alpha2.2 keeps the same JSON configuration schema, secrets, ports, child outbounds and SMP3 aggregation addresses. Only the binaries need to be rebuilt/replaced.
++
++**Upgrade both Windows and landing-server binaries together.** alpha2.2 bumps the SMP3 hello version byte to 4 because it adds the logical CLOSE frame. Mixing alpha2.1 and alpha2.2 is intentionally rejected at handshake time.
++
++## Build
++
++```bash
++cd smp3-multipath-kit-alpha2.2
++mkdir -p ~/go-tmp ~/go-build-cache
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./validate-kit.sh
++GOTMPDIR="$HOME/go-tmp" GOCACHE="$HOME/go-build-cache" ./build.sh
++```
++
++Outputs remain:
++
++```text
++dist/smp3-proxy-linux-amd64
++dist/smp3-proxy-windows-amd64.exe
++```
++
++## Live regression test
++
++Keep the existing configs. Replace both binaries, start both processes, then repeat the same 256 MiB local landing test without restarting any process during the transfer. Expected behavior:
++
++```text
++preferred leg connects
++booster activates
++leg 1 joins and remains stable
++256 MiB reaches 100%
++normal logical CLOSE ends the session without a reconnect loop
++```
++
++The server must no longer truncate the tail because a fixed 5-second drain deadline expired.
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/VERSION alpha2.2/VERSION
+--- alpha2.1/VERSION	2026-08-26 14:08:17.000000000 +0000
++++ alpha2.2/VERSION	2026-08-26 15:00:41.904600574 +0000
+@@ -1,5 +1,5 @@
+-kit_version=alpha2.1
+-kit_revision=alpha2.1-r1
++kit_version=alpha2.2
++kit_revision=alpha2.2-r1
+ wire_protocol=SMP3
+ sing_box_base=v1.14.0-beta.14
+ sing_box_revision=4902660f8424fef3c2a60dfcdce7aeadfe3f3b88
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/build.sh alpha2.2/build.sh
+--- alpha2.1/build.sh	2026-08-26 14:08:17.000000000 +0000
++++ alpha2.2/build.sh	2026-08-26 15:05:37.176206788 +0000
+@@ -23,7 +23,7 @@
+ echo '[+] running standalone SMP3 core reliability tests'
+ (
+   cd "$ROOT/src/protocol/multipath"
+-  go test core.go core_test.go -v
++  go test core.go protocol.go core_test.go -v
+ )
+ 
+ if [ ! -d "$SRC/.git" ]; then
+@@ -45,7 +45,7 @@
+ # Naive/cronet runtime into this small transport-only build.
+ TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
+ LDFLAGS_SHARED="$(cat release/LDFLAGS)"
+-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.1 $LDFLAGS_SHARED -s -w -buildid="
++LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.2 $LDFLAGS_SHARED -s -w -buildid="
+ 
+ echo '[+] compiling/testing injected multipath package against pinned sing-box'
+ go test -tags "$TAGS" ./protocol/multipath
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/install-server.sh alpha2.2/install-server.sh
+--- alpha2.1/install-server.sh	2026-08-26 14:16:21.000000000 +0000
++++ alpha2.2/install-server.sh	2026-08-26 15:05:23.440361638 +0000
+@@ -25,7 +25,7 @@
+ 
+ cat >/etc/systemd/system/smp3-proxy.service <<'UNIT'
+ [Unit]
+-Description=SMP3 Multipath proxy alpha2.1
++Description=SMP3 Multipath proxy alpha2.2
+ After=network-online.target
+ Wants=network-online.target
+ 
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/scripts/apply_source.py alpha2.2/scripts/apply_source.py
+--- alpha2.1/scripts/apply_source.py	2026-08-26 14:08:17.000000000 +0000
++++ alpha2.2/scripts/apply_source.py	2026-08-26 15:05:23.440537265 +0000
+@@ -41,4 +41,4 @@
+ (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
+ shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
+ for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+-print('[+] SMP3 multipath alpha2.1 source installed')
++print('[+] SMP3 multipath alpha2.2 source installed')
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/src/protocol/multipath/core.go alpha2.2/src/protocol/multipath/core.go
+--- alpha2.1/src/protocol/multipath/core.go	2026-08-26 14:14:51.000000000 +0000
++++ alpha2.2/src/protocol/multipath/core.go	2026-08-26 15:04:06.744761743 +0000
+@@ -14,6 +14,7 @@
+ 	frameTypeData     byte = 1
+ 	frameTypeActivate byte = 2
+ 	frameTypeAck      byte = 3
++	frameTypeClose    byte = 4
+ 	frameHeaderSize        = 13 // type(1) + seq/ack(8) + len(4)
+ 	maxFramePayload        = 1 << 20
+ )
+@@ -88,10 +89,16 @@
+ 	legsMu sync.RWMutex
+ 	legs   map[uint8]*mpLeg
+ 
+-	incoming chan dataFrame
+-	done     chan struct{}
+-	closeErr atomic.Value
+-	closeOne sync.Once
++	incoming  chan dataFrame
++	done      chan struct{}
++	txStopped chan struct{}
++	closeErr  atomic.Value
++	closeOne  sync.Once
++
++	closing      atomic.Bool
++	finalizing   atomic.Bool
++	gracefulOnce sync.Once
++	gracefulCh   chan struct{}
+ 
+ 	txSeq          atomic.Uint64
+ 	futureAckCount atomic.Uint64
+@@ -152,6 +159,8 @@
+ 		legs:        make(map[uint8]*mpLeg),
+ 		incoming:    make(chan dataFrame, cfg.QueueFrames*2),
+ 		done:        make(chan struct{}),
++		txStopped:   make(chan struct{}),
++		gracefulCh:  make(chan struct{}),
+ 		activeCh:    make(chan struct{}),
+ 		outstanding: make(map[uint64]*txRecord),
+ 		inflight:    make(chan struct{}, cfg.MaxInflightFrames),
+@@ -208,6 +217,48 @@
+ 	return nil
+ }
+ 
++// startGracefulClose terminates a logical stream without discarding payload that
++// has already been accepted from the local application. The TX loop is stopped,
++// outstanding DATA is allowed to drain while ACK progress continues, and a
++// logical CLOSE control frame is emitted before the transport legs are torn down.
++//
++// This is intentionally different from fail(): fail is for fatal/shutdown paths
++// and may drop outstanding payload; startGracefulClose is for ordinary routed TCP
++// EOF/close where already-written bytes must reach the peer first.
++func (c *mpCore) startGracefulClose(err error) {
++	if err == nil {
++		err = io.EOF
++	}
++	c.closing.Store(true)
++	c.gracefulOnce.Do(func() {
++		close(c.gracefulCh)
++		// Closing the application side wakes txLoop if the router/application has
++		// not already done so. Successful net.Pipe writes are synchronous, so once
++		// txLoop stops, every byte accepted from appConn is represented in TX state.
++		_ = c.appConn.Close()
++		go func(closeErr error) {
++			select {
++			case <-c.done:
++				return
++			case <-c.txStopped:
++			}
++			if drainErr := c.drainOutstandingOnClose(); drainErr != nil {
++				if !errors.Is(drainErr, errCoreClosed) {
++					c.fail(drainErr)
++				}
++				return
++			}
++
++			// From this point on, leg loss is part of normal final teardown and must
++			// not start another reconnect/recovery cycle. CLOSE is broadcast because
++			// it is the only logical EOF marker and should survive loss of one leg.
++			c.finalizing.Store(true)
++			c.sendCloseFrame(c.txSeq.Load())
++			c.fail(closeErr)
++		}(err)
++	})
++}
++
+ func (c *mpCore) fail(err error) {
+ 	if err == nil {
+ 		err = errCoreClosed
+@@ -241,6 +292,8 @@
+ 	select {
+ 	case c.inflight <- struct{}{}:
+ 		return true
++	case <-c.gracefulCh:
++		return false
+ 	case <-c.done:
+ 		return false
+ 	}
+@@ -257,6 +310,7 @@
+ }
+ 
+ func (c *mpCore) txLoop() {
++	defer close(c.txStopped)
+ 	for {
+ 		if !c.acquireInflight() {
+ 			return
+@@ -281,41 +335,64 @@
+ 			c.releaseInflight(1)
+ 		}
+ 		if err != nil {
+-			// net.Pipe reports the local application close here. Give already-read
+-			// logical frames a short chance to receive cumulative ACKs before the
+-			// transport legs are torn down; otherwise a write-then-close workload
+-			// could lose its final frames even though appConn.Write had succeeded.
+-			c.drainOutstandingOnClose()
+-			c.fail(err)
++			// A local application/router close is not a transport failure. Preserve
++			// every frame already accepted from appConn and finish the stream only
++			// after cumulative ACKs have drained the outstanding window.
++			c.startGracefulClose(err)
+ 			return
+ 		}
+ 	}
+ }
+ 
+-func (c *mpCore) drainOutstandingOnClose() {
+-	timeout := c.cfg.RecoveryTimeout
+-	if timeout > 5*time.Second {
+-		timeout = 5 * time.Second
+-	}
+-	if timeout < 500*time.Millisecond {
+-		timeout = 500 * time.Millisecond
+-	}
+-	deadline := time.NewTimer(timeout)
+-	defer deadline.Stop()
+-	ticker := time.NewTicker(5 * time.Millisecond)
++// drainOutstandingOnClose has no fixed total deadline. A large/slow tail is
++// allowed to take arbitrarily long as long as cumulative ACKs keep making
++// progress. RecoveryTimeout is instead used as a *stall* timeout: if no ACK/TX
++// retirement progress occurs for that long, the graceful close is considered
++// wedged and the logical stream fails. This avoids alpha2/alpha2.1's 5-second
++// absolute cap truncating large responses that were still draining normally.
++func (c *mpCore) drainOutstandingOnClose() error {
++	stallTimeout := c.cfg.RecoveryTimeout
++	if stallTimeout <= 0 {
++		stallTimeout = 15 * time.Second
++	}
++	if stallTimeout < 100*time.Millisecond {
++		stallTimeout = 100 * time.Millisecond
++	}
++
++	ticker := time.NewTicker(10 * time.Millisecond)
+ 	defer ticker.Stop()
++	stall := time.NewTimer(stallTimeout)
++	defer stall.Stop()
++
++	lastRemaining := -1
++	var lastAck uint64
+ 	for {
+ 		c.txMu.Lock()
+ 		remaining := len(c.outstanding)
++		acked := c.ackedNext
+ 		c.txMu.Unlock()
+ 		if remaining == 0 {
+-			return
++			return nil
+ 		}
++
++		progress := lastRemaining >= 0 && (remaining < lastRemaining || acked > lastAck)
++		lastRemaining = remaining
++		lastAck = acked
++		if progress {
++			if !stall.Stop() {
++				select {
++				case <-stall.C:
++				default:
++				}
++			}
++			stall.Reset(stallTimeout)
++		}
++
+ 		select {
+ 		case <-c.done:
+-			return
+-		case <-deadline.C:
+-			return
++			return errCoreClosed
++		case <-stall.C:
++			return errors.New("multipath graceful drain stalled waiting for ACK progress")
+ 		case <-ticker.C:
+ 		}
+ 	}
+@@ -582,6 +659,16 @@
+ 				c.handleLegFailure(leg, err)
+ 				return
+ 			}
++		case frameTypeClose:
++			// CLOSE carries the sender's final next-sequence value. The sender only
++			// emits it after our cumulative ACK has retired all of those DATA frames,
++			// so a value beyond ackNext is inconsistent and must not truncate data.
++			if frame.seq > c.ackNext.Load() {
++				c.handleLegFailure(leg, errors.New("multipath CLOSE beyond received sequence"))
++				return
++			}
++			c.startGracefulClose(io.EOF)
++			return
+ 		case frameTypeData:
+ 			select {
+ 			case c.incoming <- dataFrame{seq: frame.seq, data: frame.data}:
+@@ -625,6 +712,9 @@
+ 		return
+ 	default:
+ 	}
++	if c.finalizing.Load() {
++		return
++	}
+ 
+ 	// Primary loss before the threshold is an emergency activation: leg 1 is
+ 	// allowed to come up immediately so the logical stream has a chance to live.
+@@ -860,6 +950,28 @@
+ 	return success
+ }
+ 
++func (c *mpCore) sendCloseFrame(value uint64) bool {
++	legs := c.availableLegs()
++	if len(legs) == 0 {
++		return false
++	}
++	var header [frameHeaderSize]byte
++	header[0] = frameTypeClose
++	binary.BigEndian.PutUint64(header[1:9], value)
++	success := false
++	for _, leg := range legs {
++		leg.writeMu.Lock()
++		err := writeAll(leg.conn, header[:])
++		leg.writeMu.Unlock()
++		if err != nil {
++			c.handleLegFailure(leg, err)
++			continue
++		}
++		success = true
++	}
++	return success
++}
++
+ func (c *mpCore) sendControlFrame(typ byte, value uint64) bool {
+ 	legs := c.availableLegs()
+ 	if len(legs) == 0 {
+@@ -915,7 +1027,12 @@
+ 			for {
+ 				if err := writeAll(c.pipeConn, frame.data); err != nil {
+ 					c.putBuffer(frame.data)
+-					c.fail(err)
++					if !c.closing.Load() {
++						c.fail(err)
++					}
++					for _, pendingFrame := range pending {
++						c.putBuffer(pendingFrame.data)
++					}
+ 					return
+ 				}
+ 				c.putBuffer(frame.data)
+@@ -949,7 +1066,7 @@
+ 	}
+ 	frame := wireFrame{typ: header[0], seq: binary.BigEndian.Uint64(header[1:9])}
+ 	switch frame.typ {
+-	case frameTypeActivate, frameTypeAck:
++	case frameTypeActivate, frameTypeAck, frameTypeClose:
+ 		if binary.BigEndian.Uint32(header[9:13]) != 0 {
+ 			return wireFrame{}, errors.New("invalid multipath control frame length")
+ 		}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/src/protocol/multipath/core_test.go alpha2.2/src/protocol/multipath/core_test.go
+--- alpha2.1/src/protocol/multipath/core_test.go	2026-08-26 14:15:28.000000000 +0000
++++ alpha2.2/src/protocol/multipath/core_test.go	2026-08-26 15:03:06.757654985 +0000
+@@ -475,3 +475,98 @@
+ 		t.Fatal("future ACK incorrectly removed the transport leg")
+ 	}
+ }
++
++func TestGracefulDrainUsesProgressTimeoutNotAbsoluteDeadline(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.RecoveryTimeout = 120 * time.Millisecond
++	core, _ := newCore(cfg)
++	defer core.Close()
++
++	const frames = 8
++	core.txSeq.Store(frames)
++	core.txMu.Lock()
++	for seq := uint64(0); seq < frames; seq++ {
++		core.outstanding[seq] = &txRecord{seq: seq, data: []byte{byte(seq)}, lastLeg: 0}
++	}
++	core.txMu.Unlock()
++
++	drainDone := make(chan error, 1)
++	go func() { drainDone <- core.drainOutstandingOnClose() }()
++
++	// Keep making ACK progress for ~640ms. alpha2/alpha2.1 used a fixed close
++	// deadline (500ms minimum / 5s maximum), so an absolute timer can return
++	// while payload is still outstanding. alpha2.2 must extend the stall window
++	// on every cumulative-ACK advance.
++	for next := uint64(1); next <= frames; next++ {
++		time.Sleep(80 * time.Millisecond)
++		select {
++		case err := <-drainDone:
++			t.Fatalf("graceful drain returned before ACK progress completed at next=%d: %v", next, err)
++		default:
++		}
++		if err := core.handleAck(next); err != nil {
++			t.Fatal(err)
++		}
++	}
++
++	select {
++	case err := <-drainDone:
++		if err != nil {
++			t.Fatalf("graceful drain failed despite continuing ACK progress: %v", err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("graceful drain did not finish after final ACK")
++	}
++}
++
++func TestGracefulCloseFrameEndsPeerWithoutRecoveryDelay(t *testing.T) {
++	cfg := testCoreConfig()
++	cfg.RecoveryTimeout = 2 * time.Second
++	leftCore, leftApp := newCore(cfg)
++	rightCore, rightApp := newCore(cfg)
++	defer leftCore.Close()
++	defer rightCore.Close()
++
++	a, b := net.Pipe()
++	if err := leftCore.addLeg(0, a, nil); err != nil {
++		t.Fatal(err)
++	}
++	if err := rightCore.addLeg(0, b, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	payload := bytes.Repeat([]byte("graceful-close-frame-"), 12000)
++	got := make([]byte, len(payload))
++	readDone := make(chan error, 1)
++	go func() {
++		_, err := io.ReadFull(rightApp, got)
++		readDone <- err
++	}()
++
++	if _, err := leftApp.Write(payload); err != nil {
++		t.Fatal(err)
++	}
++	if err := leftApp.Close(); err != nil {
++		t.Fatal(err)
++	}
++
++	select {
++	case err := <-readDone:
++		if err != nil {
++			t.Fatalf("peer lost payload before logical CLOSE: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("timeout waiting for payload before logical CLOSE")
++	}
++	if !bytes.Equal(got, payload) {
++		t.Fatal("payload mismatch before logical CLOSE")
++	}
++
++	// The peer should learn logical EOF from frameTypeClose instead of waiting
++	// RecoveryTimeout for both carrier sockets to disappear.
++	select {
++	case <-rightCore.Done():
++	case <-time.After(500 * time.Millisecond):
++		t.Fatal("peer did not close promptly after logical CLOSE frame")
++	}
++}
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/src/protocol/multipath/inbound.go alpha2.2/src/protocol/multipath/inbound.go
+--- alpha2.1/src/protocol/multipath/inbound.go	2026-08-26 14:14:51.000000000 +0000
++++ alpha2.2/src/protocol/multipath/inbound.go	2026-08-26 15:02:24.220482051 +0000
+@@ -192,8 +192,11 @@
+ 	metadata.Destination = destination
+ 	i.logger.InfoContext(ctx, "multipath session established to ", destination, " on leg ", hello.LegID)
+ 	logicalOnClose := N.OnceClose(func(closeErr error) {
+-		core.fail(closeErr)
+-		i.removeSession(hello.Session, session)
++		// Ordinary routed EOF/close must not discard response bytes that have
++		// already been accepted into SMP3 but are still awaiting cumulative ACKs.
++		// The session remains registered until core.Done(), allowing any transport
++		// repair needed during the graceful tail drain to rejoin the same core.
++		core.startGracefulClose(closeErr)
+ 	})
+ 	i.router.RouteConnectionEx(ctx, appConn, metadata, logicalOnClose)
+ }
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/src/protocol/multipath/protocol.go alpha2.2/src/protocol/multipath/protocol.go
+--- alpha2.1/src/protocol/multipath/protocol.go	2026-08-26 14:08:17.000000000 +0000
++++ alpha2.2/src/protocol/multipath/protocol.go	2026-08-26 15:03:08.002884478 +0000
+@@ -13,7 +13,7 @@
+ 
+ var helloMagic = [4]byte{'S', 'M', 'P', '3'}
+ 
+-const helloVersion byte = 3
++const helloVersion byte = 4
+ const helloSkew = 90 * time.Second
+ 
+ type helloMessage struct {
+diff -ruN '--exclude=MANIFEST.sha256' '--exclude=alpha1-to-alpha2.diff' '--exclude=alpha2-to-alpha2.1.diff' '--exclude=alpha2.1-to-alpha2.2.diff' alpha2.1/validate-kit.sh alpha2.2/validate-kit.sh
+--- alpha2.1/validate-kit.sh	2026-08-26 14:13:31.000000000 +0000
++++ alpha2.2/validate-kit.sh	2026-08-26 15:05:37.175955323 +0000
+@@ -11,8 +11,8 @@
+ echo '[+] standalone SMP3 reliability tests'
+ (
+   cd "$ROOT/src/protocol/multipath"
+-  go test core.go core_test.go -race -count=5
+-  go vet core.go core_test.go
++  go test core.go protocol.go core_test.go -race -count=5
++  go vet core.go protocol.go core_test.go
+ )
+ 
+ echo '[+] source injector syntax'

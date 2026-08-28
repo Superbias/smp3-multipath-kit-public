@@ -11,20 +11,20 @@ command -v git >/dev/null || { echo 'missing git'; exit 1; }
 command -v go >/dev/null || { echo 'missing go (Go 1.21+ bootstrap required; pinned sing-box needs Go 1.25.5)'; exit 1; }
 command -v python3 >/dev/null || { echo 'missing python3'; exit 1; }
 
-# The pinned sing-box revision declares `go 1.25.5`. Go 1.21+ can bootstrap
-# the exact toolchain automatically through GOTOOLCHAIN when network access is
-# available. This avoids accidentally compiling the fixed source base with a
-# materially different local compiler.
-export GOTOOLCHAIN=go1.25.5+auto
-echo "[+] Go toolchain target: $GOTOOLCHAIN"
-
 # These reliability tests exercise the transport core without needing the
-# sing-box repository or external Go modules.
+# sing-box repository or external Go modules. Use the installed bootstrap Go
+# toolchain here so local source verification does not require network access.
 echo '[+] running standalone SMP3 core reliability tests'
 (
   cd "$ROOT/src/protocol/multipath"
-  go test core.go protocol.go adaptive.go core_test.go adaptive_test.go protocol_test.go -v
+  GOTOOLCHAIN=local go test core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go -v
 )
+
+# The pinned sing-box revision declares `go 1.25.5`. Go 1.21+ can bootstrap
+# the exact toolchain automatically through GOTOOLCHAIN when network access is
+# available. The injected/full build below always uses that pinned compiler.
+export GOTOOLCHAIN=go1.25.5+auto
+echo "[+] Go toolchain target: $GOTOOLCHAIN"
 
 if [ ! -d "$SRC/.git" ]; then
   git clone https://github.com/SagerNet/sing-box.git "$SRC"
@@ -39,7 +39,7 @@ git clean -fdx
 git checkout --detach "$BASE_REV"
 [ "$(git rev-parse HEAD)" = "$BASE_REV" ] || { echo 'base revision mismatch'; exit 1; }
 echo "[+] fixed base: $BASE_LABEL ($BASE_REV)"
-python3 "$ROOT/scripts/apply_source.py" "$SRC"
+python3 "$ROOT/scripts/apply_source.py" "$SRC" "$WORK"
 gofmt -w constant/proxy.go include/registry.go option/multipath.go protocol/multipath/*.go
 # Use the project's own default non-Naive build tag set and mandatory shared
 # linker flags. release/LDFLAGS contains flags such as -checklinkname=0 that
@@ -48,7 +48,7 @@ gofmt -w constant/proxy.go include/registry.go option/multipath.go protocol/mult
 # Naive/cronet runtime into this small transport-only build.
 TAGS="$(cat release/DEFAULT_BUILD_TAGS_OTHERS)"
 LDFLAGS_SHARED="$(cat release/LDFLAGS)"
-LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r10 $LDFLAGS_SHARED -s -w -buildid="
+LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-alpha2.3-r11 $LDFLAGS_SHARED -s -w -buildid="
 
 echo '[+] compiling/testing injected multipath package against pinned sing-box'
 go test -tags "$TAGS" ./protocol/multipath

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"sort"
 	"sync"
@@ -22,7 +23,69 @@ const (
 
 var errCoreClosed = errors.New("multipath core closed")
 
+type schedulerMode uint8
+
+const (
+	schedulerStatic schedulerMode = iota
+	schedulerAdaptive
+)
+
+type streamLegPerf struct {
+	mu           sync.Mutex
+	writeBPS     float64
+	writeLatency time.Duration
+	ackedBPS     float64
+	lastAckAt    time.Time
+}
+
+func (p *streamLegPerf) observeWrite(bytes int, elapsed time.Duration) {
+	if elapsed <= 0 {
+		elapsed = time.Microsecond
+	}
+	bps := float64(bytes) / elapsed.Seconds()
+	p.mu.Lock()
+	if p.writeBPS == 0 {
+		p.writeBPS = bps
+	} else {
+		p.writeBPS = p.writeBPS*0.85 + bps*0.15
+	}
+	if p.writeLatency == 0 {
+		p.writeLatency = elapsed
+	} else {
+		p.writeLatency = time.Duration(float64(p.writeLatency)*0.85 + float64(elapsed)*0.15)
+	}
+	p.mu.Unlock()
+}
+
+func (p *streamLegPerf) observeAck(bytes int, now time.Time) {
+	if bytes <= 0 {
+		return
+	}
+	p.mu.Lock()
+	if !p.lastAckAt.IsZero() {
+		elapsed := now.Sub(p.lastAckAt)
+		if elapsed > 0 {
+			bps := float64(bytes) / elapsed.Seconds()
+			if p.ackedBPS == 0 {
+				p.ackedBPS = bps
+			} else {
+				p.ackedBPS = p.ackedBPS*0.8 + bps*0.2
+			}
+		}
+	}
+	p.lastAckAt = now
+	p.mu.Unlock()
+}
+
+func (p *streamLegPerf) snapshot() (writeBPS, ackedBPS float64, latency time.Duration) {
+	p.mu.Lock()
+	writeBPS, ackedBPS, latency = p.writeBPS, p.ackedBPS, p.writeLatency
+	p.mu.Unlock()
+	return
+}
+
 type coreConfig struct {
+	SchedulerMode        schedulerMode
 	ChunkSize            int
 	QueueFrames          int
 	ThresholdBytesPS     uint64
@@ -152,6 +215,7 @@ type mpLeg struct {
 	done       chan struct{}
 	workers    sync.WaitGroup
 	retired    chan struct{}
+	perf       streamLegPerf
 }
 
 func (l *mpLeg) close(err error) {
@@ -660,11 +724,20 @@ func (c *mpCore) drainOutstandingOnClose() error {
 		stallTimeout = 100 * time.Millisecond
 	}
 
-	ticker := time.NewTicker(10 * time.Millisecond)
+	// A timer channel is only a wake-up mechanism here, never proof that progress
+	// actually stalled. Under scheduler pressure an ACK can retire DATA after the
+	// timer becomes readable but before this goroutine runs; treating the stale
+	// timer event as authoritative caused false graceful-drain failures. Poll the
+	// protected ACK/outstanding state first and measure the stall interval from the
+	// last state we observed making progress.
+	pollInterval := 10 * time.Millisecond
+	if quarter := stallTimeout / 4; quarter > 0 && quarter < pollInterval {
+		pollInterval = quarter
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	stall := time.NewTimer(stallTimeout)
-	defer stall.Stop()
 
+	lastProgress := time.Now()
 	lastRemaining := -1
 	var lastAck uint64
 	for {
@@ -676,24 +749,19 @@ func (c *mpCore) drainOutstandingOnClose() error {
 			return nil
 		}
 
-		progress := lastRemaining >= 0 && (remaining < lastRemaining || acked > lastAck)
+		now := time.Now()
+		if lastRemaining < 0 || remaining < lastRemaining || acked > lastAck {
+			lastProgress = now
+		}
 		lastRemaining = remaining
 		lastAck = acked
-		if progress {
-			if !stall.Stop() {
-				select {
-				case <-stall.C:
-				default:
-				}
-			}
-			stall.Reset(stallTimeout)
+		if now.Sub(lastProgress) >= stallTimeout {
+			return errors.New("multipath graceful drain stalled waiting for ACK progress")
 		}
 
 		select {
 		case <-c.done:
 			return errCoreClosed
-		case <-stall.C:
-			return errors.New("multipath graceful drain stalled waiting for ACK progress")
 		case <-ticker.C:
 		}
 	}
@@ -814,6 +882,45 @@ func (c *mpCore) weightFor(id uint8) uint32 {
 	return 1
 }
 
+func (c *mpCore) effectiveSchedulerWeight(leg *mpLeg) float64 {
+	base := float64(c.weightFor(leg.id))
+	if c.cfg.SchedulerMode != schedulerAdaptive {
+		return base
+	}
+	writeBPS, ackedBPS, latency := leg.perf.snapshot()
+	observed := ackedBPS
+	if observed <= 0 {
+		observed = writeBPS
+	}
+	if observed > 0 {
+		observedMbps := observed * 8 / 1e6
+		if observedMbps < 1 {
+			observedMbps = 1
+		}
+		if base > 1 {
+			// Static bandwidth is a prior; useful ACK/write feedback gradually
+			// reshapes it without letting one short sample dominate scheduling.
+			base = math.Sqrt(base * observedMbps)
+		} else {
+			base = observedMbps
+		}
+	}
+	if latency > 0 {
+		// A leg that takes longer to drain a frame should receive fewer early
+		// sequence numbers. This directly reduces slow-path HOL pressure before
+		// frontier rescue is needed.
+		penaltyBase := c.cfg.RetransmitTimeout / 8
+		if penaltyBase < 20*time.Millisecond {
+			penaltyBase = 20 * time.Millisecond
+		}
+		base /= 1 + float64(latency)/float64(penaltyBase)
+	}
+	if base < 0.1 {
+		base = 0.1
+	}
+	return base
+}
+
 func (c *mpCore) chooseLeg(active bool, avoid int16) *mpLeg {
 	if !active {
 		if primary := c.getLeg(0); primary != nil && int16(primary.id) != avoid {
@@ -822,17 +929,16 @@ func (c *mpCore) chooseLeg(active bool, avoid int16) *mpLeg {
 	}
 	legs := c.availableLegs()
 	var best *mpLeg
-	var bestNum, bestDen uint64
+	bestScore := math.MaxFloat64
 	for _, leg := range legs {
 		if len(legs) > 1 && int16(leg.id) == avoid {
 			continue
 		}
-		weight := uint64(c.weightFor(leg.id))
-		num := uint64(len(leg.send) + 1)
-		if best == nil || num*bestDen < bestNum*weight {
+		weight := c.effectiveSchedulerWeight(leg)
+		score := float64(len(leg.send)+1) / weight
+		if best == nil || score < bestScore {
 			best = leg
-			bestNum = num
-			bestDen = weight
+			bestScore = score
 		}
 	}
 	if best == nil && len(legs) > 0 {
@@ -1062,6 +1168,14 @@ func (c *mpCore) enqueueRecord(record *txRecord, avoid int16) error {
 		if c.tryQueue(leg, record) {
 			return nil
 		}
+		if !active && leg != nil && leg.id == 0 && cap(leg.send) > 0 && len(leg.send) >= cap(leg.send) {
+			// A saturated preferred queue is direct evidence that the single-path data
+			// plane cannot currently absorb ingress. Do not wait an entire activation
+			// sampling window before waking the booster; this also improves short burst
+			// and speed-test flows while preserving lazy leg1 startup for light traffic.
+			c.activate()
+			active = true
+		}
 		if active {
 			for _, other := range c.availableLegs() {
 				if other == leg || (c.legCount() > 1 && int16(other.id) == avoid) {
@@ -1142,11 +1256,13 @@ func (c *mpCore) legWriteLoop(leg *mpLeg) {
 		if !c.attemptCurrent(record, leg.id, attempt.rescue) {
 			return true
 		}
+		writeStarted := time.Now()
 		if err := writeDataFrame(leg.conn, dataFrame{seq: record.seq, data: record.data}); err != nil {
 			c.clearAttempt(record, leg.id, attempt.rescue)
 			c.handleLegFailure(leg, err)
 			return false
 		}
+		leg.perf.observeWrite(len(record.data), time.Since(writeStarted))
 		c.markAttemptSent(record, leg.id, attempt.rescue)
 		return true
 	}
@@ -1562,6 +1678,7 @@ func (c *mpCore) handleAck(next uint64) error {
 		return nil
 	}
 	released := 0
+	var ackedBytesByLeg [2]int
 	for seq := c.ackedNext; seq < next; seq++ {
 		if record, exists := c.outstanding[seq]; exists {
 			legID := record.lastSentLeg
@@ -1574,6 +1691,7 @@ func (c *mpCore) handleAck(next uint64) error {
 			}
 			if legID >= 0 && legID < int16(len(c.txAckedUseful)) {
 				c.txAckedUseful[legID].Add(uint64(len(record.data)))
+				ackedBytesByLeg[legID] += len(record.data)
 			}
 			delete(c.outstanding, seq)
 			released++
@@ -1582,7 +1700,16 @@ func (c *mpCore) handleAck(next uint64) error {
 	c.ackedNext = next
 	c.txMu.Unlock()
 	if released > 0 {
-		c.lastAckProgressNs.Store(time.Now().UnixNano())
+		now := time.Now()
+		c.lastAckProgressNs.Store(now.UnixNano())
+		for legID, bytes := range ackedBytesByLeg {
+			if bytes <= 0 {
+				continue
+			}
+			if leg := c.getLeg(uint8(legID)); leg != nil {
+				leg.perf.observeAck(bytes, now)
+			}
+		}
 	}
 	c.releaseInflight(released)
 	// R10: cumulative ACK progress can expose another already-overdue blocker.

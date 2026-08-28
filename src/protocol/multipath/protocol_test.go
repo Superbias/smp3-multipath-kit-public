@@ -38,8 +38,35 @@ func TestHelloWireCompatibilityAndSessionReuse(t *testing.T) {
 		if err := <-writeErr; err != nil {
 			t.Fatalf("write leg %d hello: %v", legID, err)
 		}
-		if got.Session != session || got.LegID != legID || got.Destination != "example.com:443" {
+		if got.Session != session || got.LegID != legID || got.Mode != helloModeStream || got.Destination != "example.com:443" {
 			t.Fatalf("decoded leg %d hello=%+v", legID, got)
 		}
+	}
+}
+
+func TestDatagramHelloV5(t *testing.T) {
+	if helloVersionDatagram != 5 {
+		t.Fatalf("datagram hello version=%d, want 5", helloVersionDatagram)
+	}
+	password := "test-password"
+	session := [16]byte{9, 8, 7, 6, 5, 4, 3, 2, 1}
+	client, server := net.Pipe()
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- writeHello(client, helloMessage{
+			Session: session, LegID: 1, Mode: helloModeDatagram, Destination: "192.0.2.1:53",
+		}, password)
+		_ = client.Close()
+	}()
+	got, _, err := readHello(server, password)
+	_ = server.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+	if got.Session != session || got.LegID != 1 || got.Mode != helloModeDatagram || got.Destination != "192.0.2.1:53" {
+		t.Fatalf("decoded datagram hello=%+v", got)
 	}
 }

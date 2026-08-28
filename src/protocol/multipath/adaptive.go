@@ -218,6 +218,39 @@ func (s *adaptiveConn) currentCarrier() leg1Carrier {
 	return carrier
 }
 
+func (s *adaptiveConn) completeProbationRecovery() bool {
+	s.mu.Lock()
+	if !s.enabled || s.carrier != carrierHy2 || !s.probation {
+		s.mu.Unlock()
+		return false
+	}
+	s.probation = false
+	s.state = adaptiveHealthy
+	s.recoveryReported = true
+	onRecovery := s.onRecovery
+	s.mu.Unlock()
+	if onRecovery != nil {
+		onRecovery()
+	}
+	return true
+}
+
+func (s *adaptiveConn) releaseUnusedProbation() {
+	s.mu.Lock()
+	if !s.enabled || s.carrier != carrierHy2 || !s.probation {
+		s.mu.Unlock()
+		return
+	}
+	s.probation = false
+	onRelease := s.onProbationRelease
+	s.mu.Unlock()
+	if onRelease != nil {
+		onRelease()
+	} else if s.global != nil {
+		s.global.releaseProbation()
+	}
+}
+
 func ackProgressAge(stats coreStats) time.Duration {
 	if stats.LastAckProgress.IsZero() {
 		return stats.OldestOutstandingAge

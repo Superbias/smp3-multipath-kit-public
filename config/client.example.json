@@ -1,5 +1,8 @@
 {
-  "log": { "level": "info", "timestamp": true },
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
   "inbounds": [
     {
       "type": "mixed",
@@ -28,29 +31,51 @@
     {
       "type": "multipath",
       "tag": "mp-jp",
-      "outbounds": ["line-path", "public-path"],
-      "preferred": "line-path",
-      "udp_outbound": "line-path",
-
-      "endpoints": [
-        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 },
-        { "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP", "server_port": 24444 }
+      "outbounds": [
+        "line-path",
+        "public-path"
       ],
-
+      "preferred": "line-path",
+      "endpoints": [
+        {
+          "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
+          "server_port": 24444
+        },
+        {
+          "server": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
+          "server_port": 24444
+        }
+      ],
       "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
       "activation_threshold_mbps": 80,
       "activation_window": "1s",
       "chunk_size": 65536,
       "queue_frames": 256,
-      "bandwidth_mbps": [100, 500],
-
+      "bandwidth_mbps": [
+        100,
+        500
+      ],
       "max_reorder_frames": 4096,
       "max_inflight_frames": 1024,
       "ack_interval": "20ms",
       "retransmit_timeout": "1500ms",
       "recovery_timeout": "15s",
-      "redial_interval": "1s"
+      "redial_interval": "1s",
+      "scheduler_mode": "adaptive",
+      "bootstrap_fallback_delay": "250ms",
+      "udp_multipath": {
+        "enabled": true,
+        "mode": "adaptive",
+        "queue_frames": 256,
+        "max_datagram_size": 16384,
+        "dedup_window": 4096,
+        "idle_timeout": "2m",
+        "adaptive_queue_delay": "120ms",
+        "adaptive_duplicate_threshold": 0
+      }
     }
   ],
-  "route": { "final": "mp-jp" }
+  "route": {
+    "final": "mp-jp"
+  }
 }

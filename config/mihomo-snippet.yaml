@@ -3,9 +3,7 @@ proxies:
     type: socks5
     server: 127.0.0.1
     port: 2080
-    udp: false
+    udp: true
 
-# Add MP-JP to whichever proxy-group you already use.
-# TCP is multipath through the local patched sing-box. UDP aggregation is not
-# implemented; if you need UDP, route it separately in Mihomo or configure the
-# sing-box udp_outbound for clients that connect directly to its mixed port.
+# r11 can carry both TCP stream and UDP datagram traffic through SMP3.
+# Add MP-JP to the proxy-group used by your traffic rules.

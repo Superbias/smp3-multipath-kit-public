@@ -1,48 +1,39 @@
-# Alpha2.3-r10 verification status
+# alpha2.3-r11 build status
 
-## Source verification
+Status: **final closeout artifact (not published)**.
 
-R10 retains R9's single-sequence cumulative-frontier rescue boundary while removing the additional periodic-ticker wait after real cumulative ACK progress.
+Completed in the artifact environment:
 
-Completed source checks:
+- 101 standalone multipath tests / 101 injected multipath tests / 441 generated source-tree `Test*` cases
+- standalone normal Go test PASS
+- standalone normal stress (`-count=20`) PASS
+- standalone race gate (`-race -count=5`) PASS
+- TCP core/protocol race stress (`-race -count=20`) PASS
+- adaptive-controller race stress (`-race -count=20`) PASS
+- Datagram race stress (`-race -count=100`) PASS
+- standalone go vet PASS
+- gofmt PASS
+- JSON examples / source injector / shell syntax PASS via `validate-kit.sh`
 
-- standalone SMP3 tests discovered: 65
-- `go test`: PASS
-- `go test -race -count=5`: PASS
-- standalone `go vet`: PASS
-- gofmt: PASS
-- example JSON syntax: PASS
-- Python/shell syntax: PASS
+The pinned source was injected and rebuilt from scratch after the r11 PacketConn integration changes. Both Linux/amd64 and Windows/amd64 binaries were produced; no older binary was reused or mislabeled as r11. The resulting binaries report `1.14.0-beta.14-smp3-alpha2.3-r11`.
 
-R10-specific regressions cover:
+The required integration build is:
 
-- ACK progress waking a newly exposed overdue frontier before the periodic safety-net tick;
-- never rescuing a speculative later sequence beyond `ackedNext`;
-- failed/full rescue enqueue not consuming the retransmit cooldown;
-- same-ID transport failure invalidating stale generation ownership;
-- dead-leg replay ordered frontier-first;
-- non-overdue frontier fast path avoiding transport-snapshot allocation.
+- sing-box `v1.14.0-beta.14`
+- commit `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
+- Go `1.25.5`
 
-## Live acceptance
+The reproducible build commands are:
 
-Live 500 MiB (`524288000` bytes) acceptance is complete.
+```bash
+./validate-kit.sh
+./build.sh
+```
 
-Accepted scenarios include:
+Both binaries report:
 
-- normal multipath upload;
-- controlled +300 ms preferred-path delay/HOL pressure;
-- forced preferred-leg TCP destruction while outstanding DATA remained;
-- replacement preferred leg reconnect with the same numeric leg ID;
-- server rejoin into the same logical session using a new TCP transport;
-- complete HTTP 200 payload after repair;
-- no observed false Hy2 fallback / actual `tx_ack_stall` in the accepted r10 runs.
+```text
+1.14.0-beta.14-smp3-alpha2.3-r11
+```
 
-## Build status of this archive
-
-This environment has no outbound DNS/HTTPS access to fetch the pinned sing-box repository/toolchain dependency graph, so this archive is intentionally shipped as a **clean source release** without prebuilt binaries.
-
-Run `./build.sh` in WSL/Linux with network access to build both targets.
-
-Expected binary version:
-
-`1.14.0-beta.14-smp3-alpha2.3-r10`
+Final live TCP/UDP acceptance is recorded in `TEST_RESULTS.txt`. The H3 100 MiB diagnostic is explicitly inconclusive because it reproduces on direct aioquic without SMP3. A full generated-tree `go test ./...` has non-SMP3 failures caused by namespace permissions, a current-Go runtime linkname incompatibility, and internet-dependent TLS tests; the SMP3 package gates pass.

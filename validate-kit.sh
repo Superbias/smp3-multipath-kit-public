@@ -14,8 +14,8 @@ python3 -m json.tool "$ROOT/config/server-hy2-snell.example.json" >/dev/null
 echo '[+] standalone SMP3 reliability tests'
 (
   cd "$ROOT/src/protocol/multipath"
-  go test core.go protocol.go adaptive.go core_test.go adaptive_test.go protocol_test.go -race -count=5
-  go vet core.go protocol.go adaptive.go core_test.go adaptive_test.go protocol_test.go
+  go test core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go -race -count=5
+  go vet core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go
 )
 
 echo '[+] source injector syntax'

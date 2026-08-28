@@ -819,3 +819,102 @@ func TestAdaptiveCarrierReplacementErrorPreservesCarrier(t *testing.T) {
 		t.Fatalf("unexpected replacement error text: %q", got)
 	}
 }
+
+func TestUDPStyleProbationNeedsUsefulTrafficAndThenRecovers(t *testing.T) {
+	settings := defaultAdaptiveSettings()
+	settings.Cooldown = 50 * time.Millisecond
+	settings.MaxCooldown = 200 * time.Millisecond
+	start := time.Unix(20000, 0)
+	var health hy2GlobalHealth
+	health.noteFallback(start, settings, false)
+	conn := newAdaptiveConn(true, settings, &health, nil)
+	conn.onRecovery = health.noteRecovery
+	if carrier := conn.carrierForLeg1(start.Add(settings.Cooldown)); carrier != carrierHy2 {
+		t.Fatalf("expected Hy2 probation carrier, got %v", carrier)
+	}
+	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Millisecond)); next.carrier != carrierSnell {
+		t.Fatalf("probation was cleared by dial/HELLO selection alone: %+v", next)
+	}
+	if !conn.completeProbationRecovery() {
+		t.Fatal("useful UDP probation traffic did not complete recovery")
+	}
+	if next := health.selectCarrier(start.Add(settings.Cooldown + 2*time.Millisecond)); next.carrier != carrierHy2 || next.probation {
+		t.Fatalf("useful UDP probation traffic did not restore global Hy2 health: %+v", next)
+	}
+}
+
+func TestUDPStyleUnusedProbationReleasesGlobalCanarySlot(t *testing.T) {
+	settings := defaultAdaptiveSettings()
+	settings.Cooldown = 50 * time.Millisecond
+	settings.MaxCooldown = 200 * time.Millisecond
+	start := time.Unix(21000, 0)
+	var health hy2GlobalHealth
+	health.noteFallback(start, settings, false)
+	conn := newAdaptiveConn(true, settings, &health, nil)
+	conn.onProbationRelease = health.releaseProbation
+	if carrier := conn.carrierForLeg1(start.Add(settings.Cooldown)); carrier != carrierHy2 {
+		t.Fatalf("expected Hy2 probation carrier, got %v", carrier)
+	}
+	conn.releaseUnusedProbation()
+	selection := health.selectCarrier(start.Add(settings.Cooldown + time.Millisecond))
+	if selection.carrier != carrierHy2 || !selection.probation {
+		t.Fatalf("unused UDP probation did not release the global canary slot: %+v", selection)
+	}
+	health.releaseProbation()
+}
+
+func TestUDPStyleEstablishedHy2FailuresEnterSnellCooldown(t *testing.T) {
+	settings := defaultAdaptiveSettings()
+	settings.HardFailureThreshold = 2
+	settings.HardFailureWindow = time.Second
+	settings.Cooldown = 90 * time.Millisecond
+	settings.MaxCooldown = 500 * time.Millisecond
+	start := time.Now()
+	var health hy2GlobalHealth
+	conn := newAdaptiveConn(true, settings, &health, nil)
+	conn.onFallback = func(_ string, cooldown bool, probation bool) {
+		if cooldown || probation {
+			health.noteFallback(time.Now(), settings, probation)
+		}
+	}
+	if carrier := conn.carrierForLeg1(start); carrier != carrierHy2 {
+		t.Fatalf("expected initial Hy2 carrier, got %v", carrier)
+	}
+	if conn.recordCarrierFailure(true) {
+		t.Fatal("single established Hy2 failure triggered hard fallback")
+	}
+	if !conn.recordCarrierFailure(true) {
+		t.Fatal("repeated established Hy2 failures did not trigger fallback")
+	}
+	if conn.currentCarrier() != carrierSnell {
+		t.Fatalf("UDP logical session did not switch to Snell: %v", conn.currentCarrier())
+	}
+	if !health.cooldownActive(time.Now()) {
+		t.Fatal("UDP carrier failure did not open global Hy2 cooldown")
+	}
+}
+
+func TestUDPStyleInitialHy2FailureFallsBackLocally(t *testing.T) {
+	settings := defaultAdaptiveSettings()
+	settings.InitialFailureThreshold = 3
+	settings.InitialFailureWindow = time.Second
+	var health hy2GlobalHealth
+	conn := newAdaptiveConn(true, settings, &health, nil)
+	conn.onFallback = func(_ string, cooldown bool, probation bool) {
+		if cooldown || probation {
+			health.noteFallback(time.Now(), settings, probation)
+		}
+	}
+	if carrier := conn.carrierForLeg1(time.Now()); carrier != carrierHy2 {
+		t.Fatalf("expected initial Hy2 carrier, got %v", carrier)
+	}
+	if !conn.recordCarrierFailure(false) {
+		t.Fatal("failed initial Hy2 carrier did not switch this UDP flow to Snell")
+	}
+	if conn.currentCarrier() != carrierSnell {
+		t.Fatalf("initial UDP carrier failure did not select Snell: %v", conn.currentCarrier())
+	}
+	if health.cooldownActive(time.Now()) {
+		t.Fatal("one initial failure should not poison global health before threshold")
+	}
+}
