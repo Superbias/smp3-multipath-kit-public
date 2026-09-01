@@ -67,7 +67,7 @@ frozen and the new hashes are recorded as the canonical 2.0.1 asset set.
 ## SOURCE ARCHIVE
 
 - Filename: `smp3-multipath-kit-2.0.1-source.zip`
-- SHA256: `6ed1177e44e70622ed89a64fba06b655f911dc92503b79db993c6365b38fa4f6`
+- SHA256: `6280c01aacf91d5b6284568765f438d6d8ac92540c36711c72b04879e67bce7c`
 - Size: `505799` bytes
 - Contains installer scripts/tests, examples, bilingual deployment docs,
   runtime source, build scripts, and validation tools.
@@ -93,13 +93,14 @@ script filenames, Release URLs, and example config paths match the repository.
 
 ## GIT PUSH
 
-- `main`: normal Git push blocked by repeated GitHub HTTPS connection/reset and non-fast-forward history from earlier API commits; equivalent non-force Contents API synchronization performed
+- `main`: PASS (`37bc9dd..ff252a2` fast-forward push after merging prior remote documentation history)
 - `v2.0.1` tag: PASS
 - force push: not used
 
-The final main source/docs content was synchronized through authenticated GitHub
-Contents API commits without force-pushing or exposing credentials; the remote
-content is verified afterward. The tag itself was pushed through normal Git.
+Earlier remote documentation synchronization used authenticated GitHub Contents
+API commits because Git transport was temporarily unavailable. The final 2.0.1
+release tree, including dist binaries, was then pushed through normal Git from
+`37bc9dd` to `ff252a2`; no force push was used.
 
 ## GITHUB RELEASE
 
@@ -113,9 +114,10 @@ content is verified afterward. The tag itself was pushed through normal Git.
 ## POST-RELEASE VERIFICATION
 
 Release API metadata reports exactly eight assets with exact filenames, sizes,
-and SHA256 digests matching the local release outputs. The six binary formats
-and architectures match the target checker; `SHA256SUMS` matches all six
-binaries; source archive integrity and fresh extraction validation pass.
+and SHA256 digests matching the local release outputs, including the digest of
+the `SHA256SUMS` file itself. The six binary formats and architectures match the
+target checker; `SHA256SUMS` matches all six binaries; source archive integrity
+and fresh extraction validation pass.
 
 ## KNOWN LIMITATIONS
 
