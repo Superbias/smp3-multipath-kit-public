@@ -14,6 +14,13 @@
 
 > 本项目是独立的 SMP3 发布版，不是 SagerNet / sing-box 或 MetaCubeX/Mihomo 官方发布。
 
+## 部署与使用
+
+完整教程见 [DEPLOYMENT.zh-CN.md](DEPLOYMENT.zh-CN.md)。基本流程是：先
+配置并检查 `config/standalone-server.example.json`，部署 `smp3-server`，
+再配置 `config/mihomo.example.yaml` 或可选的 sing-box client。standalone
+server 不是 sing-box server，也不负责终止 Snell/Hysteria2。
+
 ## 2.0.0 架构
 
 本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：
@@ -164,31 +171,35 @@ r11 关键字段：
 
 `adaptive_duplicate_threshold: 0` 表示默认不双发 UDP，避免直接翻倍流量。需要游戏/DNS 等低延迟小包双发时，再根据实测设置非 0 阈值。
 
-## 服务端配置
+## Standalone server 配置
 
-服务端 multipath inbound 同样必须启用 Datagram：
+生产服务端使用自己的 standalone schema，不是 sing-box 配置。直接参考
+`config/standalone-server.example.json`：
 
 ```json
 {
-  "type": "multipath",
-  "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
-  "listen_port": 24444,
-  "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
-  "scheduler_mode": "adaptive",
-  "udp_multipath": {
+  "listen": "0.0.0.0:24444",
+  "password": "CHANGE_TO_A_LONG_RANDOM_SMP3_PASSWORD",
+  "stream": { "scheduler_mode": "adaptive" },
+  "udp": {
     "enabled": true,
     "mode": "adaptive",
-    "queue_frames": 256,
     "max_datagram_size": 16384,
-    "dedup_window": 4096,
-    "idle_timeout": "2m",
-    "adaptive_queue_delay": "120ms",
-    "adaptive_duplicate_threshold": 0
+    "idle_timeout": "2m"
   }
 }
 ```
 
-仍然建议把裸 SMP3 aggregation Listener 放在私网 / WireGuard / 内部地址，通过加密 carrier 承载公网路径。
+Linux 检查和安装：
+
+```bash
+./dist/smp3-server-linux-amd64 -c config/server.json -check
+sudo ./install-server.sh config/server.json
+sudo systemctl status smp3-standalone
+```
+
+裸 SMP3 aggregation listener 仍建议放在私网 / WireGuard / 内部地址。完整
+的 client、启动、验证、升级、回滚和故障排查流程见 `DEPLOYMENT.zh-CN.md`。
 
 ## 兼容性
 
@@ -204,7 +215,6 @@ r11 关键字段：
 ## 构建
 
 ```bash
-./validate-kit.sh
 ./validate-kit.sh
 ./scripts/build-phase6-artifacts.sh
 ```
