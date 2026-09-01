@@ -93,7 +93,7 @@ script filenames, Release URLs, and example config paths match the repository.
 
 ## GIT PUSH
 
-- `main`: PASS (`37bc9dd..ff252a2` fast-forward push after merging prior remote documentation history)
+- `main`: PASS (`37bc9dd..ff252a2` release-tree fast-forward, followed by report-only `ff252a2..50e0834`)
 - `v2.0.1` tag: PASS
 - force push: not used
 
