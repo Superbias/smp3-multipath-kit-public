@@ -1,4 +1,18 @@
-# SMP3 2.0.0
+# SMP3 2.0.1
+
+SMP3 2.0.1 is an installer and operations patch release. It adds Windows
+Mihomo Core replacement/update/restore tooling, Linux standalone server
+installation and lifecycle management, `smp3ctl`, examples, and deployment
+tutorials.
+
+There are **no SMP3 protocol, Core, Wire, HELLO, scheduler, Stream, Datagram,
+repair, or recovery semantic changes**. The six runtime binaries retain the
+accepted 2.0.0 runtime semantics; the canonical 2.0.1 hashes are recorded in
+the release report.
+
+See `SMP3_2.0.1_INSTALLER_RELEASE_REPORT.md` for the closure matrix.
+
+## 2.0.0 runtime baseline (historical)
 
 SMP3 2.0.0 is the first release of the extracted canonical Core and standalone
 server architecture. It packages the independently reusable SMP3 Core together
