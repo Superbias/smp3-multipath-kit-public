@@ -2,15 +2,15 @@
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
-Experimental application-layer multipath transport for a pinned sing-box base.
+Independent application-layer multipath transport built around a reusable SMP3 Core and standalone server.
 
 - **Release:** `2.0.0`
-- **Pinned sing-box:** `v1.14.0-beta.14`
-- **Pinned commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
+- **Optional sing-box compatibility client build input:** `v1.14.0-beta.14`
+- **Compatibility build commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **Expected sing client binary:** `1.14.0-beta.14-smp3-2.0.0`
 - **Expected standalone server binary:** `2.0.0`
 - **TCP stream HELLO:** v4 (compatible with r10 stream mode)
-- **UDP datagram HELLO:** v5 (r11 endpoints required)
+- **UDP datagram HELLO:** v5 (2.0.0 endpoints required)
 
 > This is an independent SMP3 release. It is not an official SagerNet/sing-box or MetaCubeX/Mihomo release.
 
@@ -34,7 +34,7 @@ in the surrounding deployment and connect to the SMP3 listener.
 
 ## What 2.0.0 provides
 
-2.0.0 keeps the validated r11 wire behavior and packages the extracted Core,
+2.0.0 keeps the validated wire behavior and packages the extracted Core,
 standalone server, Mihomo adapter, and sing-box compatibility integration:
 
 1. **Adaptive TCP scheduler** — per-leg useful ACK/write throughput and write latency reshape static bandwidth weights so slow paths receive fewer early sequence numbers and cause less HOL pressure.
@@ -103,7 +103,7 @@ There are two different adaptive layers:
 
 - `scheduler_mode: adaptive`: TCP DATA scheduling between leg0/leg1.
 - `udp_multipath.mode: adaptive`: UDP datagram scheduling between leg0/leg1.
-- Existing `leg1_adaptive`: optional Hy2 -> Snell carrier fallback based on sustained logical-stream health. R11 keeps this mechanism.
+- Existing `leg1_adaptive`: optional Hy2 -> Snell carrier fallback based on sustained logical-stream health. 2.0.0 keeps this mechanism.
 
 These layers are intentionally separate so carrier replacement and path load balancing do not become one opaque state machine.
 
