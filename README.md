@@ -67,7 +67,9 @@ The release separates the reusable, standard-library-only SMP3 Core from its hos
 
 ```text
 Mihomo / sing-box client adapters
-        ↓  any configured reliable TCP-capable child carrier
+        ↓  SMP3 adapter: two independent child outbounds
+        ↓  external carrier servers terminate the outer protocols
+        ↓  raw TCP streams carrying SMP3 HELLO and frames
 standalone SMP3 server
         ↓
 canonical SMP3 Core
@@ -75,9 +77,13 @@ canonical SMP3 Core
 Internet destinations
 ```
 
-The standalone server is the production landing endpoint. It does not implement
-any child carrier protocol; carriers terminate in the client or surrounding
-deployment and connect to the SMP3 listener.
+The standalone server is the production landing endpoint. It only handles
+authenticated SMP3 HELLO, Stream frames, and Datagram frames. External carrier
+servers/terminators handle Snell, Hysteria2, VLESS, or other outer protocols and
+forward raw TCP streams to the SMP3 listener; standalone does not implement or
+listen for those child carrier protocols. The two child outbounds independently
+reach the same listener and share one SMP3 logical session, not one carrier
+connection.
 
 ## What 2.1.1 packages
 

@@ -14,20 +14,32 @@ other supported client integration.
 Applications
     ↓ SOCKS5 / mixed proxy
 Mihomo custom core or optional sing-box client
-    ↓ two reliable TCP-capable child carriers
-configured carrier terminators (Snell / Hysteria2 / VLESS / Trojan / direct)
-    ↓ private SMP3 listener
+    ↓ SMP3 adapter: two independent child outbounds
+    ↓ reliable TCP-capable carriers (Snell / Hysteria2 / VLESS / Trojan / direct)
+external carrier servers/terminators
+    ↓ raw TCP carrier streams carrying SMP3 HELLO and frames
 standalone SMP3 server (:24444)
+    ↓
+canonical SMP3 Core
     ↓
 Internet destinations
 ```
 
-The two child carriers must eventually reach the same SMP3 listener. SMP3 does
-not require a specific proxy protocol: each configured child must provide the
-reliable TCP dial capability required by the adapter. Snell, Hysteria2, VLESS,
-Trojan, TUIC, Shadowsocks, VMess, and Direct are examples; actual reachability
-depends on the host outbound. IPv4/IPv6 selection is delegated to the child
-outbound. The standalone server does not terminate child carrier protocols.
+Carrier servers/terminators are outside the standalone server. They may run on
+the same host or on a separate relay host; they terminate the outer Snell,
+Hysteria2, VLESS, or other carrier protocol and forward the resulting raw TCP
+stream to `smp3-server`. The standalone server only authenticates and handles
+SMP3 HELLO, Stream frames, and Datagram frames; it does not implement or listen
+for any child carrier protocol.
+
+The two client child outbounds must independently establish reliable TCP
+streams to the same SMP3 listener. They share one SMP3 logical session, not one
+underlying carrier connection. MP-UDP datagrams are encoded as SMP3 Datagram
+frames over those child streams; the standalone server is not expected to
+receive native UDP from the carrier. SMP3 does not require a specific proxy
+protocol: each configured child must provide the reliable TCP dial capability
+required by the adapter. IPv4/IPv6 selection and carrier reachability remain
+responsibilities of the host outbound and external carrier deployment.
 
 ## 2. Download and verify
 

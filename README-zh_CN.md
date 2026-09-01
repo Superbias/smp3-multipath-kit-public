@@ -65,7 +65,9 @@ Windows installer 只替换明确指定的 Mihomo executable；Linux installer �
 
 ```text
 Mihomo / sing-box client adapter
-        ↓  任意已配置且支持可靠 TCP dial 的 child carrier
+        ↓  SMP3 adapter：两个独立的 child outbound
+        ↓  外部 carrier 服务端终止外层协议
+        ↓  原始 TCP stream（承载 SMP3 HELLO 和 frames）
 standalone SMP3 server
         ↓
 canonical SMP3 Core
@@ -73,8 +75,12 @@ canonical SMP3 Core
 Internet destination
 ```
 
-standalone server 是生产 landing endpoint；它本身不实现任何 child carrier
-协议，这些 carrier 在客户端或外围部署中终止后连接 SMP3 listener。
+standalone server 是生产 landing endpoint，只处理经过认证的 SMP3 HELLO、
+Stream frame 和 Datagram frame。Snell、Hysteria2、VLESS 等外层 carrier 在
+standalone 之外的服务端/终止端解封装，再把原始 TCP stream 转交给 SMP3
+listener；standalone 不实现也不监听这些 child carrier 协议。两个 child
+outbound 分别连接同一个 listener，共享一个 SMP3 logical session，而不是
+共享同一个底层 carrier 连接。
 
 ## 2.1.1 打包什么
 
