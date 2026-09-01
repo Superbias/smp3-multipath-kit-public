@@ -14,6 +14,14 @@ Independent application-layer multipath transport built around a reusable SMP3 C
 
 > This is an independent SMP3 release. It is not an official SagerNet/sing-box or MetaCubeX/Mihomo release.
 
+## Deployment and usage
+
+See the complete [Deployment and Usage guide](DEPLOYMENT.md). The short path
+is: configure and validate `config/standalone-server.example.json`, install
+`smp3-server`, then configure either `config/mihomo.example.yaml` or the
+optional sing-box client profile. The standalone server is not a sing-box
+server and does not terminate Snell/Hysteria2.
+
 ## Architecture in 2.0.0
 
 The release separates the reusable, standard-library-only SMP3 Core from its hosts:
@@ -154,31 +162,34 @@ The r11-specific part is:
 
 `adaptive_duplicate_threshold: 0` disables replication by default. For latency-sensitive small UDP flows, a future deployment can set a non-zero threshold after testing bandwidth cost.
 
-## Server configuration
+## Standalone server configuration
 
-The multipath inbound must also enable the Datagram data plane:
+The production server uses its own standalone schema, not a sing-box config.
+Start from `config/standalone-server.example.json`:
 
 ```json
 {
-  "type": "multipath",
-  "listen": "YOUR_LANDING_PRIVATE_AGGREGATION_IP",
-  "listen_port": 24444,
-  "password": "CHANGE_TO_THE_SAME_LONG_RANDOM_SECRET",
-  "scheduler_mode": "adaptive",
-  "udp_multipath": {
+  "listen": "0.0.0.0:24444",
+  "password": "CHANGE_TO_A_LONG_RANDOM_SMP3_PASSWORD",
+  "stream": { "scheduler_mode": "adaptive" },
+  "udp": {
     "enabled": true,
     "mode": "adaptive",
-    "queue_frames": 256,
     "max_datagram_size": 16384,
-    "dedup_window": 4096,
-    "idle_timeout": "2m",
-    "adaptive_queue_delay": "120ms",
-    "adaptive_duplicate_threshold": 0
+    "idle_timeout": "2m"
   }
 }
 ```
 
-Keep the raw aggregation listener private/internal and use encrypted carriers for public paths.
+Validate/install on Linux:
+
+```bash
+./dist/smp3-server-linux-amd64 -c config/server.json -check
+sudo ./install-server.sh config/server.json
+sudo systemctl status smp3-standalone
+```
+
+Keep the raw aggregation listener private/internal and use encrypted carriers for public paths. For full client configuration, startup, verification, upgrade, rollback, and troubleshooting, use `DEPLOYMENT.md`.
 
 ## Compatibility
 
@@ -194,7 +205,6 @@ The TCP path continues writing HELLO v4. Only the Datagram mode writes v5.
 ## Build
 
 ```bash
-./validate-kit.sh
 ./validate-kit.sh
 ./scripts/build-phase6-artifacts.sh
 ```
