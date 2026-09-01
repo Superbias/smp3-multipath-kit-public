@@ -1,0 +1,28 @@
+{
+  "listen": "0.0.0.0:24444",
+  "password": "CHANGE_ME_TO_A_LONG_RANDOM_SMP3_PASSWORD",
+  "hello_read_timeout": "10s",
+  "recovery_timeout": "15s",
+  "stream": {
+    "scheduler_mode": "adaptive",
+    "activation_threshold_mbps": 80,
+    "activation_window": "1s",
+    "chunk_size": 65536,
+    "queue_frames": 256,
+    "bandwidth_mbps": [128, 500],
+    "max_reorder_frames": 4096,
+    "max_inflight_frames": 1024,
+    "ack_interval": "20ms",
+    "retransmit_timeout": "1500ms"
+  },
+  "udp": {
+    "enabled": true,
+    "mode": "adaptive",
+    "queue_frames": 256,
+    "max_datagram_size": 16384,
+    "dedup_window": 4096,
+    "idle_timeout": "2m",
+    "adaptive_queue_delay": "120ms",
+    "adaptive_duplicate_threshold": 0
+  }
+}
