@@ -39,4 +39,12 @@ PY
 echo '[+] shell syntax'
 bash -n "$ROOT/build.sh" "$ROOT/install-server.sh" "$ROOT/validate-kit.sh" "$ROOT/package-release.sh"
 
+echo '[+] installer tests'
+bash "$ROOT/scripts/tests/test-linux-installer.sh"
+if command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(wslpath -w "$ROOT/scripts/tests/test-mihomo-installer.ps1")"
+else
+  echo '[=] Windows installer test skipped: powershell.exe/wslpath unavailable'
+fi
+
 echo '[+] kit validation passed'
