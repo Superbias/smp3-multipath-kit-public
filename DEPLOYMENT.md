@@ -1,6 +1,7 @@
-# SMP3 2.0.0 Deployment and Usage
+# SMP3 2.0.1 Deployment and Usage
 
-This guide deploys the independent SMP3 product. The server side does **not**
+This guide deploys the independent SMP3 product and its 2.0.1 installer layer.
+The server side does **not**
 require sing-box: it uses `smp3-server`, the standalone host for the canonical
 SMP3 Core. sing-box is only an optional compatibility client; Mihomo is the
 other supported client integration.
@@ -25,7 +26,7 @@ terminate them itself.
 
 ## 2. Download and verify
 
-Download the assets from the [v2.0.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.0):
+Download the assets from the [v2.0.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.1):
 
 - Server: `smp3-server-linux-amd64` or `smp3-server-windows-amd64.exe`.
 - Mihomo client: `mihomo-smp3-linux-amd64` or `mihomo-smp3-windows-amd64.exe`.
@@ -64,14 +65,20 @@ Validate and install on Linux:
 
 ```bash
 ./dist/smp3-server-linux-amd64 -c config/server.json -check
-sudo ./install-server.sh config/server.json
+sudo ./scripts/install-smp3-server.sh --config config/server.json
 sudo systemctl status smp3-standalone
 sudo ss -ltnp | grep 24444
 ```
 
-`install-server.sh` installs only `/opt/smp3-standalone/smp3-server` and
-`smp3-standalone.service`; it does not overwrite a legacy `smp3-proxy`
-installation.
+`scripts/install-smp3-server.sh` installs only
+`/opt/smp3-standalone/smp3-server` and `smp3-standalone.service`; it does not
+overwrite a legacy `smp3-proxy` installation. After installation, use:
+
+```bash
+sudo smp3ctl status
+sudo smp3ctl logs
+sudo smp3ctl restart
+```
 
 Run directly on Windows when a service wrapper is not desired:
 
@@ -126,6 +133,23 @@ Start and validate a disposable Mihomo process:
 ./dist/mihomo-smp3-linux-amd64 -t -f config/mihomo.yaml
 ./dist/mihomo-smp3-linux-amd64 -f config/mihomo.yaml
 ```
+
+To replace an existing Mihomo executable safely, download the installer and
+provide the exact path. It verifies the stable Release `SHA256SUMS`, creates a
+sibling `smp3-backup` directory, stops only that path, and refuses to continue
+if a supervisor relaunches the selected core:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Superbias/smp3-multipath-kit-public/main/scripts/install-mihomo-smp3.ps1 -OutFile install-mihomo-smp3.ps1
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe"
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Check
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Update
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Restore
+```
+
+With no `-CorePath`, the Windows installer uses running `mihomo.exe` process
+evidence and a small finite set of common paths. Multiple candidates fail
+closed and require an explicit path; it never scans the whole `C:\` drive.
 
 On Windows, run the corresponding `.exe`. Set applications to the configured
 Mihomo mixed/SOCKS port, for example `127.0.0.1:7890`. For UDP, the application
@@ -205,10 +229,19 @@ Look for server session creation, `leg joined/rejoined`, and datagram leg-down
 messages. Do not interpret a single UDP timeout during a process replacement
 as a protocol guarantee; validate steady state after the new listener is up.
 
-For an upgrade, preserve the current binary and config, validate the new
-binary with `-check`, then replace only the standalone installation. Keep the
-old service disabled but recoverable until the new version has passed its
-smoke checks. A rollback is:
+For a Linux upgrade, preserve the current config, then let the installer fetch
+the latest stable Release and verify its exact asset checksum. Use the
+installed operations tool for status, logs, update, and rollback:
+
+```bash
+sudo smp3ctl check
+sudo smp3ctl update
+sudo smp3ctl rollback
+```
+
+The installer keeps at most five verified binary backup generations and does
+not change config during a normal binary update. A manual rollback to a
+separately preserved legacy service is:
 
 ```bash
 sudo systemctl disable --now smp3-standalone
