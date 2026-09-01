@@ -10,6 +10,7 @@ python3 -m json.tool "$ROOT/config/client-legacy.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/client-adaptive.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/server.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/server-hy2-snell.example.json" >/dev/null
+python3 -m json.tool "$ROOT/config/standalone-server.example.json" >/dev/null
 
 echo '[+] Test* count'
 python3 "$ROOT/scripts/check-test-count.py" "$ROOT"

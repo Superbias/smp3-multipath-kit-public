@@ -1,0 +1,53 @@
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+
+proxies:
+  - name: line-path
+    type: snell
+    server: YOUR_LINE_ENTRY
+    port: 12345
+    version: 4
+    psk: YOUR_LINE_SNELL_PSK
+
+  - name: public-hy2
+    type: hysteria2
+    server: YOUR_LANDING_PUBLIC_IP
+    port: 23457
+    password: YOUR_PUBLIC_HY2_PASSWORD
+    sni: YOUR_HY2_SERVER_NAME
+    skip-cert-verify: false
+
+  - name: public-snell
+    type: snell
+    server: YOUR_LANDING_PUBLIC_IP
+    port: 23456
+    version: 4
+    psk: YOUR_PUBLIC_SNELL_PSK
+
+  - name: MP-SMP3
+    type: smp3
+    server: YOUR_LANDING_PRIVATE_AGGREGATION_IP
+    port: 24444
+    password: YOUR_SMP3_PASSWORD
+    legs:
+      - proxy: line-path
+      - proxy: public-hy2
+    leg1-fallback: public-snell
+    scheduler-mode: adaptive
+    udp:
+      enabled: true
+      mode: adaptive
+      max-datagram-size: 16384
+      idle-timeout: 2m
+
+proxy-groups:
+  - name: SMP3-SELECT
+    type: select
+    proxies:
+      - MP-SMP3
+      - DIRECT
+
+rules:
+  - MATCH,SMP3-SELECT
