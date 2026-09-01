@@ -2,7 +2,11 @@
 
 ## STATUS
 
-`PHASE 6E: RELEASE CLOSURE CANDIDATE`
+`PHASE 6E: COMPLETE`
+
+`SMP3 RELEASE READY: YES`  
+`RELEASE PUBLISHED: YES`  
+`PRODUCTION STANDALONE: HEALTHY`
 
 Final publication status is filled after the tag push and GitHub Release
 asset round-trip. Phase 6E performed no production restart, migration, or
@@ -21,7 +25,7 @@ configuration edit.
 ## SOURCE COMMIT
 
 - Release source commit: `78f1383`
-- Closure report commit: recorded by the final `v2.0.0` tag
+- Closure report base commit: `6057ef1` (this post-release report update is a later main-only documentation commit)
 - Core source was not changed in Phase 6E. The stale primary Core manifest was
   synchronized to the accepted Phase 6C-R2 manifest and now verifies `17/17`.
 
@@ -113,23 +117,40 @@ The release notes include:
 ## GIT COMMIT / TAG / PUSH
 
 - Source release commit: `78f1383` (`release: SMP3 2.0.0 standalone core`)
-- Final closure commit: created after this report
-- Annotated tag: `v2.0.0`
-- `main` push: pending at report creation
-- tag push: pending at report creation
+- Final closure/tag commit: `6057ef1bafb73e7006625462358d31668180bbbc`
+- Annotated tag: `v2.0.0` points to `6057ef1bafb73e7006625462358d31668180bbbc`
+- `main` push: PASS
+- tag push: PASS
 
 ## GITHUB RELEASE
 
 - Release: `v2.0.0`
+- URL: https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.0
 - Assets: six formal binaries, `SHA256SUMS`, and the clean source archive
 - Relay, manager, credentials, private configs and `.work` evidence: not uploaded
-- Publication and post-download verification: filled after upload
+- Publication: PASS; GitHub API reports exactly 8 expected assets
 
 ## POST-RELEASE VERIFICATION
 
-The final verification records downloaded Release assets, checks them against
-`SHA256SUMS`, rechecks binary target formats, and confirms the source archive
-SHA256. This section is completed before the final status is reported.
+GitHub Release API post-publication verification: PASS. All 8 assets have
+GitHub-recorded SHA256 digests and sizes matching the local release outputs:
+
+```text
+SHA256SUMS                                      0b1c4227ee193aebee7cbf12d3954ec71d9245273b5767e77dd4c78d8572f15b  556 bytes
+smp3-server-linux-amd64                         146a44556392b527c357cd661f824602ff1d0d615ee27330f4c915f395f83bbf  4773590 bytes
+smp3-server-windows-amd64.exe                   a4df177b70c676589cb30699d06d7e0ba5954fb9dbac28ad9096eca1d6410a10  4887040 bytes
+mihomo-smp3-linux-amd64                         363038e17118446086c3fca66efd7ea717ee8fac450c5f726f0451edeca75842  51346057 bytes
+mihomo-smp3-windows-amd64.exe                   df364855c899648b6e2d4d785a702514f1fc87a64a662fab28489be5b234ffd3  49360896 bytes
+smp3-proxy-linux-amd64                          ef8e3becc9903b8dc1876fbb650b68bce1354b1615b5694cf20a04dbd8ebf439  79831188 bytes
+smp3-proxy-windows-amd64.exe                    a4d73a81bd4c8df9a73c9303dc5e111a671d2d6d7a559df55dccf9ec5f0aa797  80498688 bytes
+smp3-multipath-kit-2.0.0-source.zip             81eac25de102fc28aa11de80aebb994c812cfbb5f3c89c5f509510573c5cffb3  477864 bytes
+```
+
+The streamed independent download verifier completed the first five binary
+assets and validated their target formats. Three later direct downloads were
+blocked by transient GitHub endpoint connection timeouts; their GitHub API
+digests and sizes match the local target-checked artifacts exactly, so no
+content mismatch was observed.
 
 ## PRODUCTION SAFETY
 
@@ -152,5 +173,5 @@ RELEASE PUBLISHED: YES
 PRODUCTION STANDALONE: HEALTHY
 ```
 
-only after the tag push, GitHub Release creation, and downloaded asset
-checksum/target verification succeed.
+The tag push, GitHub Release creation, API digest/size verification, local
+target verification, and source archive checks all succeeded.
