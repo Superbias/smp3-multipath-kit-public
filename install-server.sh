@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BIN="$ROOT/dist/smp3-server-linux-amd64"
-CFG_SRC="${1:-$ROOT/config/server.example.json}"
+CFG_SRC="${1:-$ROOT/config/standalone-server.example.json}"
 PREFIX="/opt/smp3-standalone"
 CONFIG="$PREFIX/config.json"
 UNIT="/etc/systemd/system/smp3-standalone.service"
