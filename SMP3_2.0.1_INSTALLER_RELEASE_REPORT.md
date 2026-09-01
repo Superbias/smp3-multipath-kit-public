@@ -96,7 +96,6 @@ script filenames, Release URLs, and example config paths match the repository.
 - `main`: PASS (`37bc9dd..ff252a2` release-tree fast-forward, followed by report-only `ff252a2..50e0834`)
 - `v2.0.1` tag: PASS
 - force push: not used
-
 Earlier remote documentation synchronization used authenticated GitHub Contents
 API commits because Git transport was temporarily unavailable. The final 2.0.1
 release tree, including dist binaries, was then pushed through normal Git from
