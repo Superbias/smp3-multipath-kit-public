@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="2.0.0"
+RELEASE_VERSION="2.0.1"
+RUNTIME_SING_VERSION="1.14.0-beta.14-smp3-2.0.0"
 SING_TAG="v1.14.0-beta.14"
 SING_REV="4902660f8424fef3c2a60dfcdce7aeadfe3f3b88"
 MIHOMO_TAG="v1.19.28"
@@ -54,7 +55,7 @@ build_workspace_target() {
   local goos="$1" goarch="$2" output="$3" package_path="$4"
   echo "[+] build target=$goos/$goarch output=$output"
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOWORK="$ROOT/go.work" \
-    go build -trimpath -o "$output" "$package_path"
+    go build -trimpath -ldflags "-buildid=" -o "$output" "$package_path"
 }
 
 prepare_checkout "$SING_ROOT" https://github.com/SagerNet/sing-box.git "$SING_TAG" "$SING_REV"
@@ -75,7 +76,9 @@ echo '[+] injecting and building pinned sing targets'
 python3 "$ROOT/scripts/apply_source.py" "$SING_ROOT" "$WORK/sing-source-work"
 SING_TAGS="$(cat "$SING_ROOT/release/DEFAULT_BUILD_TAGS_OTHERS")"
 SING_LDFLAGS_SHARED="$(cat "$SING_ROOT/release/LDFLAGS")"
-SING_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=1.14.0-beta.14-smp3-$VERSION $SING_LDFLAGS_SHARED -s -w -buildid="
+# 2.0.1 is an installer/operations release. Keep the accepted runtime client
+# identity byte-stable because no runtime source or protocol behavior changed.
+SING_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$RUNTIME_SING_VERSION $SING_LDFLAGS_SHARED -s -w -buildid="
 (
   cd "$SING_ROOT"
   GOWORK=off go test -tags "$SING_TAGS" ./protocol/multipath
