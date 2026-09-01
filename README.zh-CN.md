@@ -2,15 +2,15 @@
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
-基于固定 sing-box 版本的实验性应用层多路径传输方案。
+围绕可复用 SMP3 Core 和 standalone server 构建的独立应用层多路径传输产品。
 
 - **版本：** `2.0.0`
-- **固定 sing-box：** `v1.14.0-beta.14`
-- **固定 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
+- **可选 sing-box 兼容 client 构建输入：** `v1.14.0-beta.14`
+- **兼容构建 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **预期 sing client 二进制版本：** `1.14.0-beta.14-smp3-2.0.0`
 - **预期 standalone server 二进制版本：** `2.0.0`
 - **TCP Stream HELLO：** v4（继续兼容 r10 TCP）
-- **UDP Datagram HELLO：** v5（MP-UDP 需要 r11 两端）
+- **UDP Datagram HELLO：** v5（MP-UDP 需要 2.0.0 两端）
 
 > 本项目是独立的 SMP3 发布版，不是 SagerNet / sing-box 或 MetaCubeX/Mihomo 官方发布。
 
@@ -33,7 +33,7 @@ Hysteria2，这些加密 carrier 在客户端或外围部署中终止后连接 S
 
 ## 2.0.0 提供什么
 
-2.0.0 保留已经验证的 r11 wire 行为，并正式打包抽离后的 Core、standalone
+2.0.0 保留已经验证的 wire 行为，并正式打包抽离后的 Core、standalone
 server、Mihomo adapter 与 sing-box compatibility integration：
 
 1. **TCP 带宽感知 Adaptive Scheduler**：根据每条 leg 的有效 ACK/写入吞吐、写入延迟和队列压力动态修正 `bandwidth_mbps` 权重，尽量减少慢路径拿到过多早期 sequence 后造成 HOL。
