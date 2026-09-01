@@ -138,8 +138,8 @@ passed local and GitHub digest verification.
 path: C:\Program Files\Clash Party\resources\sidecar\mihomo.exe
 old SHA256: 6b3d4ccb058440d14f869bc5bc1d285e5f310a8f9beb8c5dfb3fb3ac767c6e6e
 new SHA256: 5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db
-new PID: 35624
-parent Clash Party PID: 44508
+new PID: 19860
+parent Clash Party PID: 27244
 backup: sidecar\smp3-backup\mihomo.exe.20260901T122340122Z.bak
 backup SHA256: 6b3d4ccb058440d14f869bc5bc1d285e5f310a8f9beb8c5dfb3fb3ac767c6e6e
 ```
@@ -148,7 +148,8 @@ The post-restart process path matches the replaced file and its SHA matches
 the v2.1.1 Release asset. The original binary remains recoverable from the
 verified backup.
 
-The temporary diagnostic threshold was restored to:
+The temporary diagnostic threshold was restored in the active Clash Party
+profile `profiles/19f5fb50a64.yaml` and regenerated work config to:
 
 ```text
 activation-threshold-mbps: 50
