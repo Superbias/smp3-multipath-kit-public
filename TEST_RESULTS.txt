@@ -1,10 +1,19 @@
-SMP3 2.0.0 release closure verification
+SMP3 2.0.1 installer release closure verification
 ========================================
 
-This document freezes the Phase 6C/6D live evidence for the 2.0.0 source and
-artifact closure. Phase 6E does not repeat live fault injection or production
-migration. Results marked inherited are from the immutable accepted source or
-artifact identified in the phase report named by the test.
+This document freezes the Phase 6C/6D live evidence for the 2.0.1 installer
+release. Runtime evidence is inherited from the accepted 2.0.0 artifacts;
+this release adds installer/operations validation only. No live fault injection
+or production migration is performed here.
+
+INSTALLER / OPERATIONS
+======================
+
+Windows PowerShell installer             PASS   install/check/update/restore/checksum/multiple-core/supervisor tests
+Linux standalone installer               PASS   install/update/rollback/uninstall/permissions/rotation tests
+smp3ctl                                  PASS   status/start/stop/restart/logs/check/update/rollback/version
+Public script paths                      PASS   scripts/install-mihomo-smp3.ps1; scripts/install-smp3-server.sh; scripts/smp3ctl.sh
+ShellCheck                               NOT AVAILABLE in the validation environment
 
 FINAL CONFIGURATION
 ===================
@@ -17,6 +26,8 @@ release package.
 
 AUTOMATED / STATIC GATES
 ========================
+
+Installer/operations packaging             PASS   PowerShell and Linux lifecycle tests
 
 validate-kit.sh                         PASS   smp3core=39, legacy_semantic=105, sing_adapter=16, total=160
 Canonical Core normal/race/vet         PASS   CORE 17/17 unchanged
