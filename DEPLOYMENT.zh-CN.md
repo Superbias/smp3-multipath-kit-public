@@ -10,18 +10,30 @@
 应用
   ↓ SOCKS5 / mixed proxy
 Mihomo custom core 或可选 sing-box client
-  ↓ 两条支持可靠 TCP dial 的 child carrier
-已配置的 carrier 终止端（Snell / Hysteria2 / VLESS / Trojan / direct）
-  ↓ 私有 SMP3 listener
+  ↓ SMP3 adapter：两个独立的 child outbound
+  ↓ 各自的可靠 TCP-capable carrier（Snell / Hysteria2 / VLESS / Trojan / direct）
+外部 carrier 服务端/终止端
+  ↓ 原始 TCP carrier stream（承载 SMP3 HELLO 和 frames）
 standalone SMP3 server（:24444）
+  ↓
+canonical SMP3 Core
   ↓
 Internet destination
 ```
 
-standalone server 只处理 SMP3，不负责终止任何 child carrier 协议；两条 child
-carrier 最终必须到达同一个 SMP3 listener。SMP3 不要求特定代理协议，只要 child
-outbound 提供所需的可靠 TCP dial capability 即可。IPv4/IPv6 选择继续交给 child
-outbound；实际可达性取决于 host outbound。
+这里的 carrier 服务端/终止端位于 standalone server 之外，可以与其同机，
+也可以位于另一台中转主机。它负责终止 Snell、Hysteria2 等外层 carrier，
+再把解封装后的原始 TCP stream 转交给 `smp3-server`；它不是 SMP3 Core。
+standalone server 只认证和处理 SMP3 HELLO、Stream frame、Datagram frame，
+不实现或监听任何 Snell/Hysteria2/VLESS 等 child carrier 协议。
+
+客户端的两个 child outbound 必须分别能够把可靠 TCP stream 建立到同一个
+SMP3 listener `:24444`。两条 leg 共享的是 SMP3 logical session，不是共享
+同一个底层 carrier 连接。MP-UDP 也以 Datagram frame 运行在这些 child
+stream 之上，并不是要求 standalone 直接接收原生 UDP carrier。SMP3 不要求
+特定代理协议，只要求 child outbound 提供所需的可靠 TCP dial capability；
+IPv4/IPv6 选择和具体 carrier 的可达性继续由 host outbound/外部 carrier
+部署负责。
 
 ## 2. 下载与校验
 
