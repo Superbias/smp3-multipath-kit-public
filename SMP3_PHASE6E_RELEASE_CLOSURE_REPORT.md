@@ -71,7 +71,7 @@ are validation/tools artifacts and are not end-user release assets.
 ## SOURCE ARCHIVE
 
 - Filename: `smp3-multipath-kit-2.0.0-source.zip`
-- SHA256: `81eac25de102fc28aa11de80aebb994c812cfbb5f3c89c5f509510573c5cffb3`
+- SHA256: `2b8bd93cc607a9b8cab5c8c6e0ba218878badb44fd0289dab718c0472f2f74e3`
 - Contents: source, canonical Core, standalone server, adapters, tests,
   configs with placeholders, build scripts, target checker and docs.
 - Excludes: `.git`, `.work`, `.release-stage`, graphify output, binaries,
@@ -143,7 +143,7 @@ mihomo-smp3-linux-amd64                         363038e17118446086c3fca66efd7ea7
 mihomo-smp3-windows-amd64.exe                   df364855c899648b6e2d4d785a702514f1fc87a64a662fab28489be5b234ffd3  49360896 bytes
 smp3-proxy-linux-amd64                          ef8e3becc9903b8dc1876fbb650b68bce1354b1615b5694cf20a04dbd8ebf439  79831188 bytes
 smp3-proxy-windows-amd64.exe                    a4d73a81bd4c8df9a73c9303dc5e111a671d2d6d7a559df55dccf9ec5f0aa797  80498688 bytes
-smp3-multipath-kit-2.0.0-source.zip             81eac25de102fc28aa11de80aebb994c812cfbb5f3c89c5f509510573c5cffb3  477864 bytes
+smp3-multipath-kit-2.0.0-source.zip             2b8bd93cc607a9b8cab5c8c6e0ba218878badb44fd0289dab718c0472f2f74e3  477918 bytes
 ```
 
 The streamed independent download verifier completed the first five binary
