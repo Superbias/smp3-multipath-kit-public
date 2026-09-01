@@ -1,10 +1,11 @@
-# SMP3 Multipath Kit 2.0.0
+# SMP3 Multipath Kit 2.0.1
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 围绕可复用 SMP3 Core 和 standalone server 构建的独立应用层多路径传输产品。
 
-- **版本：** `2.0.0`
+- **版本：** `2.0.1`（installer/operations patch）
+- **Runtime baseline：** `2.0.0`（未改变且 byte-identical）
 - **可选 sing-box 兼容 client 构建输入：** `v1.14.0-beta.14`
 - **兼容构建 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **预期 sing client 二进制版本：** `1.14.0-beta.14-smp3-2.0.0`
@@ -21,7 +22,44 @@
 再配置 `config/mihomo.example.yaml` 或可选的 sing-box client。standalone
 server 不是 sing-box server，也不负责终止 Snell/Hysteria2。
 
-## 2.0.0 架构
+Windows Mihomo 一键安装：
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Superbias/smp3-multipath-kit-public/main/scripts/install-mihomo-smp3.ps1 -OutFile install-mihomo-smp3.ps1
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe"
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Check
+```
+
+Linux standalone 一键安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Superbias/smp3-multipath-kit-public/main/scripts/install-smp3-server.sh -o install-smp3-server.sh
+chmod +x install-smp3-server.sh
+sudo ./install-smp3-server.sh --config ./config.json
+smp3ctl status
+```
+
+Installer 操作：
+
+```powershell
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Check
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Update
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Restore
+```
+
+```bash
+sudo ./scripts/install-smp3-server.sh --check
+sudo smp3ctl status
+sudo smp3ctl logs -f
+sudo smp3ctl update
+sudo smp3ctl rollback
+```
+
+Windows installer 只替换明确指定的 Mihomo executable；Linux installer 只
+管理 standalone server，卸载时默认保留 config，只有显式 `--purge` 才删除。
+两者都会用 `SHA256SUMS` 校验 GitHub stable Release 的精确 asset。
+
+## 2.0.0 / 2.0.1 架构
 
 本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：
 
@@ -38,10 +76,11 @@ Internet destination
 standalone server 是生产 landing endpoint；它本身不实现 Snell 或
 Hysteria2，这些加密 carrier 在客户端或外围部署中终止后连接 SMP3 listener。
 
-## 2.0.0 提供什么
+## 2.0.1 打包什么
 
-2.0.0 保留已经验证的 wire 行为，并正式打包抽离后的 Core、standalone
-server、Mihomo adapter 与 sing-box compatibility integration：
+2.0.1 保留已经验证的 2.0.0 wire/runtime 行为，并正式打包抽离后的
+Core、standalone server、Mihomo adapter、sing-box compatibility integration
+与 installer/operations 工具：
 
 1. **TCP 带宽感知 Adaptive Scheduler**：根据每条 leg 的有效 ACK/写入吞吐、写入延迟和队列压力动态修正 `bandwidth_mbps` 权重，尽量减少慢路径拿到过多早期 sequence 后造成 HOL。
 2. **Bootstrap Failover**：leg0 先获得一个可配置的抢跑时间；如果硬失败，立即拨 leg1；如果超过 `bootstrap_fallback_delay` 仍未完成，则并行拨 leg1，谁先完成认证 HELLO 谁先建立逻辑 session。
@@ -194,7 +233,7 @@ Linux 检查和安装：
 
 ```bash
 ./dist/smp3-server-linux-amd64 -c config/server.json -check
-sudo ./install-server.sh config/server.json
+sudo ./scripts/install-smp3-server.sh --config config/server.json
 sudo systemctl status smp3-standalone
 ```
 
