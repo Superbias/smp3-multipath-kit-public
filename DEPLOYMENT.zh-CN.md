@@ -1,6 +1,6 @@
-# SMP3 2.0.0 部署与使用教程
+# SMP3 2.0.1 部署与使用教程
 
-本教程针对独立 SMP3 产品。服务端不需要 sing-box，使用
+本教程针对独立 SMP3 产品及其 2.0.1 installer 层。服务端不需要 sing-box，使用
 `smp3-server` 运行 canonical SMP3 Core 的 standalone server。sing-box
 只是可选的兼容 client，另一个 client 集成是 Mihomo custom core。
 
@@ -23,7 +23,7 @@ carrier 最终必须到达同一个 SMP3 listener。
 
 ## 2. 下载与校验
 
-从 [v2.0.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.0)
+从 [v2.0.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.1)
 下载：
 
 - 服务端：`smp3-server-linux-amd64` 或 Windows 版本；
@@ -58,13 +58,19 @@ Linux：
 
 ```bash
 ./dist/smp3-server-linux-amd64 -c config/server.json -check
-sudo ./install-server.sh config/server.json
+sudo ./scripts/install-smp3-server.sh --config config/server.json
 sudo systemctl status smp3-standalone
 sudo ss -ltnp | grep 24444
 ```
 
-安装脚本只写入 `/opt/smp3-standalone/` 和
-`smp3-standalone.service`，不会覆盖旧的 `smp3-proxy` 安装。
+`scripts/install-smp3-server.sh` 只写入 `/opt/smp3-standalone/` 和
+`smp3-standalone.service`，不会覆盖旧的 `smp3-proxy` 安装。安装后可使用：
+
+```bash
+sudo smp3ctl status
+sudo smp3ctl logs
+sudo smp3ctl restart
+```
 
 Windows 可直接运行：
 
@@ -112,6 +118,22 @@ HELLO 协商。
 ./dist/mihomo-smp3-linux-amd64 -t -f config/mihomo.yaml
 ./dist/mihomo-smp3-linux-amd64 -f config/mihomo.yaml
 ```
+
+替换现有 Mihomo 时，下载 installer 并指定精确路径。它只停止该路径的
+进程，校验 stable Release 的 `SHA256SUMS`，在同目录创建 `smp3-backup`；
+如果 supervisor 自动拉起同一路径，则立即安全停止：
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Superbias/smp3-multipath-kit-public/main/scripts/install-mihomo-smp3.ps1 -OutFile install-mihomo-smp3.ps1
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe"
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Check
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Update
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Restore
+```
+
+不指定 `-CorePath` 时，Windows installer 只根据正在运行的 `mihomo.exe`
+和少量有限常见路径检测；发现多个候选会 fail-closed，不会全盘扫描
+`C:\`。
 
 应用可连接 Mihomo 的 `127.0.0.1:7890` mixed/SOCKS 端口。UDP 应用必须真
 正使用 SOCKS5 UDP ASSOCIATE；只支持 HTTP 的应用不会覆盖 MP-UDP。
@@ -169,8 +191,17 @@ sudo systemctl restart smp3-standalone
 sudo ss -ltnp | grep 24444
 ```
 
-升级前保留旧 binary/config，先对新 binary 执行 `-check`，只替换
-standalone 安装；旧服务保持 disabled 但可恢复。
+Linux 升级时保留现有 config，由 installer 获取最新 stable Release 并校验
+精确 asset。通过 `smp3ctl` 管理状态、日志、升级和回滚：
+
+```bash
+sudo smp3ctl check
+sudo smp3ctl update
+sudo smp3ctl rollback
+```
+
+installer 最多保留五代已校验 binary backup，普通 binary update 不修改
+config。手动回滚到单独保留的旧服务：
 
 ```bash
 sudo systemctl disable --now smp3-standalone
