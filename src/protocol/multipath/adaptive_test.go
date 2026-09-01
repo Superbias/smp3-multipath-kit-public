@@ -250,36 +250,6 @@ func TestAdaptiveLongNormalTrafficAndShortGapsDoNotFallback(t *testing.T) {
 	}
 }
 
-func TestRxGapTrackerContinuousPendingStartsNewTimerForEachExpectedGap(t *testing.T) {
-	start := time.Unix(3000, 0)
-	tracker := rxGapTracker{}
-	pending := map[uint64]dataFrame{103: {seq: 103, receivedAt: start}}
-	tracker.refresh(100, pending, start)
-	if tracker.gapExpectedSeq != 100 || !tracker.since.Equal(start) {
-		t.Fatalf("initial gap=%+v", tracker)
-	}
-
-	// The pending map never becomes empty. Each repaired expected sequence still
-	// starts a fresh timer for the next unresolved gap.
-	for i, gapAge := range []time.Duration{200 * time.Millisecond, 150 * time.Millisecond, 300 * time.Millisecond} {
-		now := start.Add(30*time.Second + time.Duration(i)*time.Second)
-		expected := uint64(100 + i + 1)
-		pending = map[uint64]dataFrame{expected + 2: {seq: expected + 2, receivedAt: now}}
-		tracker.refresh(expected, pending, now)
-		if tracker.gapExpectedSeq != expected || !tracker.since.Equal(now) {
-			t.Fatalf("gap %d retained stale timer: %+v", i, tracker)
-		}
-		if now.Add(gapAge).Sub(tracker.since) != gapAge {
-			t.Fatalf("gap %d age calculation is not current-gap based", i)
-		}
-	}
-	pending = map[uint64]dataFrame{}
-	tracker.refresh(104, pending, start.Add(33*time.Second))
-	if !tracker.since.IsZero() {
-		t.Fatalf("continuous pending tracker did not clear: %+v", tracker)
-	}
-}
-
 func TestGlobalInitialHy2FailureLearningUsesWindow(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	settings.InitialFailureThreshold = 3

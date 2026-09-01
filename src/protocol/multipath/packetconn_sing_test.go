@@ -32,10 +32,7 @@ func TestSingDatagramPacketConnReaderMTUAndHeadroom(t *testing.T) {
 			if maxRoutedDatagramSize+test.header > (1<<16)-1 {
 				t.Fatalf("payload plus %s header exceeds scoped UDP buffer", test.name)
 			}
-			core.incoming <- datagramPacket{
-				address: "198.51.100.8:53",
-				data:    make([]byte, maxRoutedDatagramSize),
-			}
+			core.injectDatagram("198.51.100.8:53", make([]byte, maxRoutedDatagramSize))
 			buffer := buf.NewSize(maxRoutedDatagramSize + test.header)
 			buffer.Resize(test.header, 0)
 			destination, err := adapter.ReadPacket(buffer)
@@ -56,7 +53,7 @@ func TestSingDatagramPacketConnShortBufferDoesNotCloseCore(t *testing.T) {
 	core, packetConn := newDatagramCore(datagramConfig{MaxDatagramSize: maxRoutedDatagramSize})
 	defer core.Close()
 	adapter := newSingDatagramPacketConn(packetConn)
-	core.incoming <- datagramPacket{address: "198.51.100.8:53", data: make([]byte, maxRoutedDatagramSize)}
+	core.injectDatagram("198.51.100.8:53", make([]byte, maxRoutedDatagramSize))
 	buffer := buf.NewSize(1200)
 	_, err := adapter.ReadPacket(buffer)
 	buffer.Release()
@@ -125,7 +122,7 @@ func TestSingDatagramPacketConnOversizeIsolatedOnSameAssociation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for valid datagrams after oversize")
 	}
-	if got := core.txSeq.Load(); got != 2 {
+	if got := core.txSequence(); got != 2 {
 		t.Fatalf("tx sequence after valid/oversize/valid = %d, want 2", got)
 	}
 }

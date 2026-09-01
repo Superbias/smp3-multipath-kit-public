@@ -1,0 +1,33 @@
+{
+  "protocol": "SMP3",
+  "freeze": "alpha2.3-r11",
+  "hello": [
+    {"name":"v4_leg0_ipv4","version":4,"leg":0,"mode":"stream","destination":"192.0.2.1:443","fixture":"hello_v4/v4_leg0_ipv4.hex","wireSha256":"d2d9a315f814942dc9cf050e5b40dba3baadfa7396bc9ad5ff09b5c343ca63a3"},
+    {"name":"v4_leg1_ipv6","version":4,"leg":1,"mode":"stream","destination":"[2001:db8::1]:8443","fixture":"hello_v4/v4_leg1_ipv6.hex","wireSha256":"52d2cad94bb324aac671e5c3f347e76f1a5fd68379f690e2f92eba3850738be8"},
+    {"name":"v4_leg0_domain","version":4,"leg":0,"mode":"stream","destination":"example.com:443","fixture":"hello_v4/v4_leg0_domain.hex","wireSha256":"d77d7651dfce0ed8c9f5991abd4eb6f557c731c6dcba7a13318e06a34506cb72"},
+    {"name":"v5_leg0_ipv4","version":5,"leg":0,"mode":"datagram","destination":"192.0.2.1:443","fixture":"hello_v5/v5_leg0_ipv4.hex","wireSha256":"a78ac6bd5097fcec2c8b5be0a1d9934e9d5149fe9b9b8ade13a06a91e1443097"},
+    {"name":"v5_leg1_ipv6","version":5,"leg":1,"mode":"datagram","destination":"[2001:db8::1]:8443","fixture":"hello_v5/v5_leg1_ipv6.hex","wireSha256":"bb8ad5f6140ce09a3effbb2968bc2a3d7e3a8336a3b50d77056503f4480c6c9e"},
+    {"name":"v5_leg0_domain","version":5,"leg":0,"mode":"datagram","destination":"example.com:443","fixture":"hello_v5/v5_leg0_domain.hex","wireSha256":"9082c6d946e234e8835eae156391bc4f80703b983791c891b6115d8ca933ef3e"}
+  ],
+  "streamFrames": [
+    {"name":"data","type":1,"seq":72623859790382856,"fixture":"stream_frames/data.hex","wireSha256":"b3413a64e32a957db924369babf94abf48ec4f092f47a8228c468208c6bc2897"},
+    {"name":"activate","type":2,"seq":1234605616436508552,"fixture":"stream_frames/activate.hex","wireSha256":"009d64433b9651197976a7a8a9b4f730947f2df945e2f9447932e709b7a8d2da"},
+    {"name":"ack","type":3,"seq":42,"fixture":"stream_frames/ack.hex","wireSha256":"b76c10133e4020b14ec420783cafc16a2bc081324e8dfd96908797eeadd20d8f"},
+    {"name":"close","type":4,"seq":3735928559,"fixture":"stream_frames/close.hex","wireSha256":"37173fba9be2e9ccfe346a6c3e6dcd62071a6ecbc50b3cd04d6fd59897f498f1"}
+  ],
+  "datagramFrames": [
+    {"name":"ipv4_empty","id":"0x1020304050607080","address":"192.0.2.1:53","payloadSize":0,"fixture":"datagram_frames/ipv4_empty.hex","wireSha256":"9cae13b517629af81be2d2a3c3893e02c70ab60ff346d7c27156eebeba180946"},
+    {"name":"ipv6_hello","id":"0x2030405060708090","address":"[2001:db8::1]:443","payloadSize":5,"fixture":"datagram_frames/ipv6_hello.hex","wireSha256":"ab1d97c2771baa09db1ed4cb782ecb8bbabf66d9020f3c179512b0898b2ea3b3"},
+    {"name":"domain_hello","id":"0x30405060708090a0","address":"example.com:443","payloadSize":5,"fixture":"datagram_frames/domain_hello.hex","wireSha256":"633b316f61864a8cee32ae185bfa27171de840f3eebdb40516eb6b01ae1b432c"},
+    {"name":"payload_boundaries","payloadSizes":[0,1200,16383,16384],"pattern":"byte(i % 251)","fixture":"datagram_frames/payload_boundaries.json"}
+  ],
+  "invalid": [
+    "invalid/stream_unknown_type.hex",
+    "invalid/stream_invalid_control_length.hex",
+    "invalid/stream_oversized_length.hex",
+    "invalid/stream_truncated_header.hex",
+    "invalid/stream_truncated_payload.hex",
+    "invalid/datagram_payload_16385_header.hex",
+    "invalid/datagram_payload_20480_header.hex"
+  ]
+}

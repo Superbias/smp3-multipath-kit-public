@@ -1,39 +1,45 @@
-# alpha2.3-r11 build status
+# SMP3 2.0.0 build status
 
-Status: **final closeout artifact (not published)**.
+Status: **release closure candidate**.
 
-Completed in the artifact environment:
-
-- 101 standalone multipath tests / 101 injected multipath tests / 441 generated source-tree `Test*` cases
-- standalone normal Go test PASS
-- standalone normal stress (`-count=20`) PASS
-- standalone race gate (`-race -count=5`) PASS
-- TCP core/protocol race stress (`-race -count=20`) PASS
-- adaptive-controller race stress (`-race -count=20`) PASS
-- Datagram race stress (`-race -count=100`) PASS
-- standalone go vet PASS
-- gofmt PASS
-- JSON examples / source injector / shell syntax PASS via `validate-kit.sh`
-
-The pinned source was injected and rebuilt from scratch after the r11 PacketConn integration changes. Both Linux/amd64 and Windows/amd64 binaries were produced; no older binary was reused or mislabeled as r11. The resulting binaries report `1.14.0-beta.14-smp3-alpha2.3-r11`.
-
-The required integration build is:
+## Pinned inputs
 
 - sing-box `v1.14.0-beta.14`
-- commit `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
+- sing-box commit `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
+- Mihomo `v1.19.28`
+- Mihomo commit `cbd11db1e13a75d8e680e0fe7742c95be4cba2be`
 - Go `1.25.5`
 
-The reproducible build commands are:
+## Build workflow
+
+The explicit-target pipeline is:
 
 ```bash
 ./validate-kit.sh
-./build.sh
+./scripts/build-phase6-artifacts.sh
 ```
 
-Both binaries report:
+It builds and checks these six release targets:
 
 ```text
-1.14.0-beta.14-smp3-alpha2.3-r11
+dist/smp3-server-linux-amd64
+dist/smp3-server-windows-amd64.exe
+dist/mihomo-smp3-linux-amd64
+dist/mihomo-smp3-windows-amd64.exe
+dist/smp3-proxy-linux-amd64
+dist/smp3-proxy-windows-amd64.exe
 ```
 
-Final live TCP/UDP acceptance is recorded in `TEST_RESULTS.txt`. The H3 100 MiB diagnostic is explicitly inconclusive because it reproduces on direct aioquic without SMP3. A full generated-tree `go test ./...` has non-SMP3 failures caused by namespace permissions, a current-Go runtime linkname incompatibility, and internet-dependent TLS tests; the SMP3 package gates pass.
+The sing client reports `1.14.0-beta.14-smp3-2.0.0`; the standalone server
+reports `2.0.0`.
+
+## Verified gates
+
+The extracted Core, legacy semantic tests, sing adapter tests, source injector,
+target checker, and release scans are run by the Phase 6E closure. The locked
+Phase 6C/6D live evidence remains the basis for the network acceptance matrix;
+Phase 6E does not repeat live fault injection or production migration.
+
+The H3 100 MiB result remains `INCONCLUSIVE / EXTERNAL HARNESS-INTEROP ISSUE`:
+the same failure reproduces on direct official aioquic without bridge, SOCKS5,
+or SMP3 and is not an SMP3 release blocker.

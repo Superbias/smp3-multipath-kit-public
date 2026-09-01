@@ -5,5 +5,5 @@ proxies:
     port: 2080
     udp: true
 
-# r11 can carry both TCP stream and UDP datagram traffic through SMP3.
+# 2.0.0 can carry both TCP stream and UDP datagram traffic through SMP3.
 # Add MP-JP to the proxy-group used by your traffic rules.

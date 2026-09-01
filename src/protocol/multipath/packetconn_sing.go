@@ -36,11 +36,11 @@ func (c *singDatagramPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	destination, err := parsePacketDestination(packet.address)
+	destination, err := parsePacketDestination(packet.Address)
 	if err != nil {
 		return 0, nil, err
 	}
-	n := copy(p, packet.data)
+	n := copy(p, packet.Payload)
 	return n, destination, nil
 }
 
@@ -90,14 +90,14 @@ func (c *singDatagramPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, er
 	if err != nil {
 		return M.Socksaddr{}, err
 	}
-	destination, err := parsePacketDestination(packet.address)
+	destination, err := parsePacketDestination(packet.Address)
 	if err != nil {
 		return M.Socksaddr{}, err
 	}
-	if buffer.FreeLen() < len(packet.data) {
+	if buffer.FreeLen() < len(packet.Payload) {
 		return M.Socksaddr{}, io.ErrShortBuffer
 	}
-	copy(buffer.Extend(len(packet.data)), packet.data)
+	copy(buffer.Extend(len(packet.Payload)), packet.Payload)
 	return destination, nil
 }
 

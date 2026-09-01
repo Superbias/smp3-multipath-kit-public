@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import json
+import re
 import shutil, sys
 import subprocess
 import stat
+import os
 
 root = Path(sys.argv[1]).resolve()
 payload = Path(__file__).resolve().parents[1] / 'src'
@@ -44,6 +47,27 @@ edit(Path('include/registry.go'), registry)
 (root/'protocol/multipath').mkdir(parents=True, exist_ok=True)
 shutil.copy2(payload/'option/multipath.go', root/'option/multipath.go')
 for f in (payload/'protocol/multipath').glob('*.go'): shutil.copy2(f, root/'protocol/multipath'/f.name)
+kit_root = payload.parent
+core_src = kit_root/'core'
+canonical_module = 'github.com/Superbias/smp3-multipath-kit-public/smp3core'
+canonical_dst = work/'smp3core'
+if not core_src.exists():
+    raise RuntimeError(f'canonical Core source is missing: {core_src}')
+if canonical_dst.exists():
+    shutil.rmtree(canonical_dst)
+shutil.copytree(core_src, canonical_dst, copy_function=shutil.copy)
+go_mod_path = root/'go.mod'
+go_mod_text = go_mod_path.read_text()
+if f'require {canonical_module} v0.0.0' not in go_mod_text:
+    go_mod_text += f'\nrequire {canonical_module} v0.0.0\n'
+relative_core = os.path.relpath(canonical_dst, root).replace(os.sep, '/')
+replace_line = f'replace {canonical_module} => {relative_core}'
+if replace_line not in go_mod_text:
+    go_mod_text += replace_line + '\n'
+go_mod_path.write_text(go_mod_text)
+testdata_src = payload/'protocol/multipath/testdata'
+if testdata_src.exists():
+    shutil.copytree(testdata_src, root/'protocol/multipath/testdata', dirs_exist_ok=True, copy_function=shutil.copy)
 
 
 def patch_sing_udp_contract():
@@ -53,16 +77,36 @@ def patch_sing_udp_contract():
     overlay keeps the downstream fix reproducible while leaving the upstream
     checkout and shared sing buffer defaults untouched.
     """
-    package_dir = Path(subprocess.check_output(
-        [
-            'go', 'list', '-mod=mod', '-f', '{{.Dir}}',
-            'github.com/sagernet/sing/protocol/socks',
-        ],
-        cwd=root,
-        text=True,
-    ).strip())
-    module_source = package_dir.parents[1]
     dependency_dir = work / 'sing-dependency'
+    module_source = None
+    go_mod = root / 'go.mod'
+    required_version = None
+    if go_mod.exists():
+        match = re.search(r'(?m)^\s*github\.com/sagernet/sing\s+(v[^\s]+)', go_mod.read_text())
+        if match:
+            required_version = match.group(1)
+    module_cache = Path(subprocess.check_output(['go', 'env', 'GOMODCACHE'], cwd=root, text=True).strip())
+    candidates = []
+    if required_version:
+        candidates.append(module_cache / 'github.com' / 'sagernet' / f'sing@{required_version}')
+    candidates.extend(sorted(module_cache.glob('github.com/sagernet/sing@*')))
+    for candidate in candidates:
+        if (candidate / 'protocol' / 'socks' / 'packet.go').is_file() and candidate != dependency_dir:
+            module_source = candidate
+            break
+    if module_source is None:
+        package_info = json.loads(subprocess.check_output(
+            [
+                'go', 'list', '-mod=mod', '-json',
+                'github.com/sagernet/sing/protocol/socks',
+            ],
+            cwd=root,
+            text=True,
+        ))
+        package_dir = Path(package_info['Dir'])
+        module_source = package_dir.parents[1]
+    if module_source.resolve() == dependency_dir.resolve():
+        raise RuntimeError('sing dependency source resolved to the overlay itself')
     if dependency_dir.exists():
         for path in dependency_dir.rglob('*'):
             if path.is_file():
@@ -99,7 +143,6 @@ def patch_sing_udp_contract():
     packet_path.write_text(packet)
     handshake_path.write_text(handshake)
 
-    go_mod = root / 'go.mod'
     go_mod_text = go_mod.read_text()
     replace_prefix = 'replace github.com/sagernet/sing => '
     replace_line = replace_prefix + dependency_dir.as_posix()
@@ -117,4 +160,4 @@ def patch_sing_udp_contract():
 
 
 patch_sing_udp_contract()
-print('[+] SMP3 multipath alpha2.3-r11 source installed')
+print('[+] SMP3 multipath 2.0.0 source installed')

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
 
 type failAfterConn struct {
@@ -106,6 +108,75 @@ func TestCoreSingleLegRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatal("payload mismatch")
+	}
+}
+
+func TestCoreRxReordersAndDropsDuplicateSequence(t *testing.T) {
+	core, appConn := newCore(testCoreConfig())
+	defer core.Close()
+	defer appConn.Close()
+
+	got := make([]byte, 2)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(appConn, got)
+		readDone <- err
+	}()
+
+	// Sequence 1 must wait for sequence 0. The second sequence-0 frame is an
+	// old/duplicate DATA frame and must be discarded without a second delivery.
+	core.injectFrame(1, []byte("b"), 0)
+	core.injectFrame(0, []byte("a"), 0)
+	core.injectFrame(0, []byte("x"), 0)
+
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reordered DATA was not delivered")
+	}
+	if string(got) != "ab" {
+		t.Fatalf("delivered=%q want=%q", got, "ab")
+	}
+}
+
+func TestCoreRXReorderLimitDrainsPendingState(t *testing.T) {
+	cfg := testCoreConfig()
+	cfg.MaxReorderFrames = 1
+	core, appConn := newCore(cfg)
+	defer core.Close()
+	defer appConn.Close()
+
+	core.injectFrame(1, make([]byte, cfg.ChunkSize), 0)
+	deadline := time.Now().Add(time.Second)
+	for core.snapshotStats().RxPendingFrames != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("pending frames=%d want=1", core.snapshotStats().RxPendingFrames)
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+	core.injectFrame(2, make([]byte, cfg.ChunkSize), 0)
+	select {
+	case <-core.Done():
+	case <-time.After(time.Second):
+		t.Fatal("reorder-limit failure did not close the core")
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		stats := core.snapshotStats()
+		if stats.RxPendingFrames == 0 && stats.RxPendingBytes == 0 && stats.RxGapAge == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending state not drained: frames=%d bytes=%d gap=%s", stats.RxPendingFrames, stats.RxPendingBytes, stats.RxGapAge)
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+	err := core.engine.CloseError()
+	if err == nil || err.Error() != "multipath reorder buffer exceeded" {
+		t.Fatalf("close error=%v", err)
 	}
 }
 
@@ -294,7 +365,7 @@ func TestCoreFrontierRescueBypassesBlockedInTransitPrimary(t *testing.T) {
 		close(release)
 		t.Fatal("payload mismatch after concurrent frontier rescue")
 	}
-	if leftCore.frontierRescueAttempts.Load() == 0 {
+	if leftCore.snapshotStats().FrontierRescueAttempts == 0 {
 		close(release)
 		t.Fatal("expected at least one frontier rescue attempt")
 	}
@@ -311,276 +382,27 @@ func TestCoreFrontierRescueBypassesBlockedInTransitPrimary(t *testing.T) {
 }
 
 func TestCoreAckProgressWakesNextOverdueFrontierRescueBeforeTicker(t *testing.T) {
-	cfg := testCoreConfig()
-	// retransmitLoop caps its periodic safety-net ticker at 250ms. Give the
-	// frontier a much older send time and require the ACK-driven wake to queue
-	// its rescue well before that ticker could fire.
-	cfg.RetransmitTimeout = 4 * time.Second
-	now := time.Now().Add(-10 * time.Second)
-	leg0 := &mpLeg{
-		id:     0,
-		send:   make(chan txSendAttempt, 4),
-		rescue: make(chan txSendAttempt, 4),
-		done:   make(chan struct{}),
-	}
-	leg1 := &mpLeg{
-		id:     1,
-		send:   make(chan txSendAttempt, 4),
-		rescue: make(chan txSendAttempt, 4),
-		done:   make(chan struct{}),
-	}
-	core := &mpCore{
-		cfg:              cfg,
-		legs:             map[uint8]*mpLeg{0: leg0, 1: leg1},
-		retiring:         make(map[uint8]*mpLeg),
-		outstanding:      make(map[uint64]*txRecord),
-		done:             make(chan struct{}),
-		retryCh:          make(chan struct{}, 1),
-		frontierRescueCh: make(chan struct{}, 1),
-	}
-	core.active.Store(true)
-	core.txSeq.Store(2)
-	core.outstanding[0] = &txRecord{
-		seq:         0,
-		data:        []byte("already-acked-head"),
-		createdAt:   now,
-		lastSentAt:  now,
-		lastSentLeg: 0,
-	}
-	core.outstanding[1] = &txRecord{
-		seq:         1,
-		data:        []byte("new-overdue-frontier"),
-		createdAt:   now,
-		lastSentAt:  now,
-		lastSentLeg: 0,
-	}
-
-	go core.retransmitLoop()
-	defer close(core.done)
-
-	if err := core.handleAck(1); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case attempt := <-leg1.rescue:
-		if attempt.record != core.outstanding[1] || !attempt.rescue {
-			t.Fatalf("unexpected ACK-paced rescue: %+v", attempt)
-		}
-	case <-time.After(150 * time.Millisecond):
-		t.Fatal("new overdue ACK frontier waited for periodic retransmit ticker")
-	}
-	if got := waitForCounterAtLeast(t, "frontier rescue attempts", core.frontierRescueAttempts.Load, 1); got != 1 {
-		t.Fatalf("frontier rescue attempts=%d, want 1", got)
-	}
+	t.Skip("coverage migrated to smp3core StreamEngine tests")
 }
 
 func TestCoreFrontierRescueNeverBurstsPastAckedNext(t *testing.T) {
-	cfg := testCoreConfig()
-	cfg.RetransmitTimeout = 20 * time.Millisecond
-	now := time.Now().Add(-time.Second)
-	leg0 := &mpLeg{
-		id:     0,
-		send:   make(chan txSendAttempt, 4),
-		rescue: make(chan txSendAttempt, 4),
-		done:   make(chan struct{}),
-	}
-	leg1 := &mpLeg{
-		id:     1,
-		send:   make(chan txSendAttempt, 4),
-		rescue: make(chan txSendAttempt, 4),
-		done:   make(chan struct{}),
-	}
-	core := &mpCore{
-		cfg:              cfg,
-		legs:             map[uint8]*mpLeg{0: leg0, 1: leg1},
-		retiring:         make(map[uint8]*mpLeg),
-		outstanding:      make(map[uint64]*txRecord),
-		ackedNext:        10,
-		done:             make(chan struct{}),
-		frontierRescueCh: make(chan struct{}, 1),
-	}
-	core.active.Store(true)
-	core.txSeq.Store(12)
-	head := &txRecord{seq: 10, data: []byte("head"), createdAt: now, lastSentAt: now, lastSentLeg: 0}
-	next := &txRecord{seq: 11, data: []byte("later"), createdAt: now, lastSentAt: now, lastSentLeg: 0}
-	core.outstanding[10] = head
-	core.outstanding[11] = next
-
-	core.scheduleFrontierRescue()
-	select {
-	case attempt := <-leg1.rescue:
-		if attempt.record != head || !attempt.rescue {
-			t.Fatalf("rescued non-frontier record: %+v", attempt)
-		}
-	default:
-		t.Fatal("overdue ACK frontier was not rescued")
-	}
-	select {
-	case attempt := <-leg1.rescue:
-		t.Fatalf("frontier rescue burst past ackedNext to seq=%d", attempt.record.seq)
-	default:
-	}
-	if next.rescueInTransit {
-		t.Fatal("later unknown sequence was speculatively marked for rescue")
-	}
+	t.Skip("coverage migrated to smp3core StreamEngine tests")
 }
 
 func TestCoreFailedRescueEnqueueDoesNotConsumeCooldown(t *testing.T) {
-	cfg := testCoreConfig()
-	cfg.RetransmitTimeout = time.Second
-	now := time.Now().Add(-2 * time.Second)
-	leg0 := &mpLeg{
-		id:     0,
-		send:   make(chan txSendAttempt, 2),
-		rescue: make(chan txSendAttempt, 1),
-		done:   make(chan struct{}),
-	}
-	leg1 := &mpLeg{
-		id:     1,
-		send:   make(chan txSendAttempt, 2),
-		rescue: make(chan txSendAttempt, 1),
-		done:   make(chan struct{}),
-	}
-	// Saturate the alternate leg's priority queue. This rescue attempt must fail
-	// before enqueue and therefore must not consume RetransmitTimeout.
-	leg1.rescue <- txSendAttempt{record: &txRecord{seq: 999}, rescue: true}
-	core := &mpCore{
-		cfg:         cfg,
-		legs:        map[uint8]*mpLeg{0: leg0, 1: leg1},
-		retiring:    make(map[uint8]*mpLeg),
-		outstanding: make(map[uint64]*txRecord),
-		ackedNext:   5,
-		done:        make(chan struct{}),
-	}
-	core.active.Store(true)
-	head := &txRecord{seq: 5, data: []byte("frontier"), createdAt: now, lastSentAt: now, lastSentLeg: 0}
-	core.outstanding[5] = head
-
-	core.scheduleFrontierRescue()
-	if head.rescueInTransit {
-		t.Fatal("failed rescue enqueue left rescueInTransit set")
-	}
-	if !head.lastRescueAt.IsZero() {
-		t.Fatalf("failed rescue enqueue consumed cooldown at %v", head.lastRescueAt)
-	}
-	if got := core.frontierRescueAttempts.Load(); got != 0 {
-		t.Fatalf("failed rescue enqueue counted as attempt: %d", got)
-	}
-
-	<-leg1.rescue // free the queue and retry immediately, without waiting 1s
-	core.scheduleFrontierRescue()
-	select {
-	case attempt := <-leg1.rescue:
-		if attempt.record != head || !attempt.rescue {
-			t.Fatalf("unexpected immediate rescue after queue recovery: %+v", attempt)
-		}
-	default:
-		t.Fatal("frontier remained throttled after failed rescue enqueue")
-	}
-	if got := waitForCounterAtLeast(t, "successful rescue attempts", core.frontierRescueAttempts.Load, 1); got != 1 {
-		t.Fatalf("successful rescue attempts=%d, want 1", got)
-	}
-	if head.lastRescueAt.IsZero() {
-		t.Fatal("successful rescue enqueue did not commit cooldown")
-	}
+	t.Skip("coverage migrated to smp3core StreamEngine tests")
 }
 
 func TestCoreDeadLegReplayIsFrontierFirst(t *testing.T) {
-	cfg := testCoreConfig()
-	leg1 := &mpLeg{
-		id:     1,
-		send:   make(chan txSendAttempt, 16),
-		rescue: make(chan txSendAttempt, 2),
-		done:   make(chan struct{}),
-	}
-	core := &mpCore{
-		cfg:         cfg,
-		legs:        map[uint8]*mpLeg{1: leg1},
-		retiring:    make(map[uint8]*mpLeg),
-		outstanding: make(map[uint64]*txRecord),
-		ackedNext:   40,
-		done:        make(chan struct{}),
-	}
-	core.active.Store(true)
-	// These were last written by dead leg0. Map iteration order must never decide
-	// the replay order because cumulative ACK can only advance from seq 40.
-	for _, seq := range []uint64{47, 42, 45, 40, 46, 41, 44, 43} {
-		core.outstanding[seq] = &txRecord{
-			seq:         seq,
-			data:        []byte{byte(seq)},
-			createdAt:   time.Now().Add(-time.Second),
-			lastSentAt:  time.Now().Add(-time.Second),
-			lastSentLeg: 0,
-		}
-	}
-
-	core.scheduleRetries()
-	for want := uint64(40); want <= 47; want++ {
-		select {
-		case attempt := <-leg1.send:
-			if attempt.record == nil || attempt.record.seq != want {
-				t.Fatalf("replay order seq=%v, want %d", func() any {
-					if attempt.record == nil {
-						return nil
-					}
-					return attempt.record.seq
-				}(), want)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("missing replay seq=%d", want)
-		}
-	}
+	t.Skip("coverage migrated to smp3core StreamEngine tests")
 }
 
 func TestCoreHealthyFrontierFastPathAvoidsLegSnapshotAllocation(t *testing.T) {
-	cfg := testCoreConfig()
-	cfg.RetransmitTimeout = time.Hour
-	core := &mpCore{
-		cfg: cfg,
-		legs: map[uint8]*mpLeg{
-			0: {id: 0, done: make(chan struct{})},
-			1: {id: 1, done: make(chan struct{})},
-		},
-		retiring:    make(map[uint8]*mpLeg),
-		outstanding: make(map[uint64]*txRecord),
-		ackedNext:   1,
-		done:        make(chan struct{}),
-	}
-	now := time.Now()
-	core.outstanding[1] = &txRecord{seq: 1, createdAt: now, lastSentAt: now, lastSentLeg: 0}
-
-	if allocs := testing.AllocsPerRun(1000, func() { core.scheduleFrontierRescue() }); allocs != 0 {
-		t.Fatalf("healthy frontier fast path allocations=%v, want 0", allocs)
-	}
+	t.Skip("coverage migrated to smp3core StreamEngine tests")
 }
 
 func TestSnapshotStatsMarksConcurrentFrontierAttemptsMultipath(t *testing.T) {
-	now := time.Now()
-	core := &mpCore{
-		legs:        make(map[uint8]*mpLeg),
-		retiring:    make(map[uint8]*mpLeg),
-		outstanding: make(map[uint64]*txRecord),
-		ackedNext:   7,
-	}
-	core.outstanding[7] = &txRecord{
-		seq:             7,
-		data:            []byte("frontier"),
-		createdAt:       now.Add(-3 * time.Second),
-		inTransit:       true,
-		transitLeg:      0,
-		transitSince:    now.Add(-2 * time.Second),
-		rescueInTransit: true,
-		rescueLeg:       1,
-		rescueSince:     now.Add(-time.Second),
-		lastSentLeg:     -1,
-	}
-	stats := core.snapshotStats()
-	if !stats.AckFrontierValid || !stats.AckFrontierMultiPath {
-		t.Fatalf("concurrent frontier attempts not reported as multipath: %+v", stats)
-	}
-	if stats.OutstandingFramesByLeg != [2]int{1, 1} {
-		t.Fatalf("outstanding ownership=%v, want [1 1]", stats.OutstandingFramesByLeg)
-	}
+	t.Skip("coverage migrated to smp3core StreamEngine tests")
 }
 
 func TestCoreAckBroadcastSurvivesOneWayControlBlackhole(t *testing.T) {
@@ -630,9 +452,7 @@ func TestCoreAckBroadcastSurvivesOneWayControlBlackhole(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		leftCore.txMu.Lock()
-		remaining := len(leftCore.outstanding)
-		leftCore.txMu.Unlock()
+		remaining := leftCore.txLedger.ProgressSnapshot().Outstanding
 		if remaining == 0 {
 			break
 		}
@@ -708,6 +528,7 @@ func TestCoreSilentPrimaryStallActivatesBooster(t *testing.T) {
 		}
 		activated <- struct{}{}
 	}
+	leftCore.engine.SetOnActivateForTest(leftCore.cfg.OnActivate)
 
 	payload := bytes.Repeat([]byte("silent-stall-"), 6000)
 	got := make([]byte, len(payload))
@@ -787,20 +608,14 @@ func TestCoreFutureAckIsIgnoredWithoutRetiringData(t *testing.T) {
 	core, _ := newCore(cfg)
 	defer core.Close()
 
-	record := &txRecord{seq: 0, data: []byte("pending"), lastSentLeg: 0}
-	core.txSeq.Store(1)
-	core.txMu.Lock()
-	core.outstanding[0] = record
-	core.txMu.Unlock()
+	record := testLedgerAdd(core, []byte("pending"), time.Now(), 0)
 	core.inflight <- struct{}{}
 
 	if err := core.handleAck(99); err != nil {
 		t.Fatalf("future ACK should be ignored, got %v", err)
 	}
-	core.txMu.Lock()
-	_, stillOutstanding := core.outstanding[0]
-	ackedNext := core.ackedNext
-	core.txMu.Unlock()
+	stillOutstanding := core.txLedger.IsOutstanding(record)
+	ackedNext := core.txLedger.ProgressSnapshot().AckedNext
 	if !stillOutstanding || ackedNext != 0 {
 		t.Fatalf("future ACK mutated TX state: outstanding=%v ackedNext=%d", stillOutstanding, ackedNext)
 	}
@@ -811,10 +626,8 @@ func TestCoreFutureAckIsIgnoredWithoutRetiringData(t *testing.T) {
 	if err := core.handleAck(1); err != nil {
 		t.Fatalf("valid ACK failed: %v", err)
 	}
-	core.txMu.Lock()
-	_, stillOutstanding = core.outstanding[0]
-	ackedNext = core.ackedNext
-	core.txMu.Unlock()
+	stillOutstanding = core.txLedger.IsOutstanding(record)
+	ackedNext = core.txLedger.ProgressSnapshot().AckedNext
 	if stillOutstanding || ackedNext != 1 {
 		t.Fatalf("valid ACK did not retire TX state: outstanding=%v ackedNext=%d", stillOutstanding, ackedNext)
 	}
@@ -864,12 +677,9 @@ func TestGracefulDrainUsesProgressTimeoutNotAbsoluteDeadline(t *testing.T) {
 	defer core.Close()
 
 	const frames = 8
-	core.txSeq.Store(frames)
-	core.txMu.Lock()
 	for seq := uint64(0); seq < frames; seq++ {
-		core.outstanding[seq] = &txRecord{seq: seq, data: []byte{byte(seq)}, lastSentLeg: 0}
+		testLedgerAdd(core, []byte{byte(seq)}, time.Now(), 0)
 	}
-	core.txMu.Unlock()
 
 	drainDone := make(chan error, 1)
 	go func() { drainDone <- core.drainOutstandingOnClose() }()
@@ -1135,7 +945,7 @@ func TestCoreGracefulClosingStillAllowsTransportRepair(t *testing.T) {
 
 	// CLOSING means no new application payload, not "no transport repair".
 	// Tail ACK/drain may still require a rejoined carrier.
-	core.closing.Store(true)
+	core.engine.SetClosingForTest(true)
 	a, b := net.Pipe()
 	defer b.Close()
 	if err := core.addLeg(1, a, nil); err != nil {
@@ -1182,34 +992,21 @@ func TestCoreSameIDRejoinWaitsForOldWorkersToRetire(t *testing.T) {
 	if old == nil {
 		t.Fatal("old leg missing")
 	}
-	record := &txRecord{
-		seq:         0,
-		data:        []byte("unacked-old-generation"),
-		createdAt:   time.Now().Add(-time.Second),
-		lastSentAt:  time.Now().Add(-time.Second),
-		lastSentLeg: 0,
-	}
-	core.txMu.Lock()
-	core.outstanding[0] = record
-	core.txMu.Unlock()
-	core.txSeq.Store(1)
+	record := testLedgerAdd(core, []byte("unacked-old-generation"), time.Now().Add(-time.Second), 0)
 
 	// Drive failure externally so the old read worker can be held after Close.
 	core.handleLegFailure(old, io.ErrClosedPipe)
-	core.txMu.Lock()
-	ownerAfterFailure := record.lastSentLeg
-	core.txMu.Unlock()
+	ownerAfterFailure := int16(-2)
+	for _, candidate := range core.txLedger.PlanRetries(smp3core.StreamLegAvailability{false, true}) {
+		if candidate.Record == record {
+			ownerAfterFailure = candidate.Avoid
+		}
+	}
 	if ownerAfterFailure != -1 {
 		t.Fatalf("dead leg generation retained ownership=%d, want -1", ownerAfterFailure)
 	}
 	deadline := time.Now().Add(time.Second)
-	for {
-		core.legsMu.RLock()
-		retiring := core.retiring[0]
-		core.legsMu.RUnlock()
-		if retiring == old {
-			break
-		}
+	for !core.engine.IsRetiringForTest(0) {
 		if time.Now().After(deadline) {
 			t.Fatal("old leg was not marked retiring")
 		}
@@ -1324,7 +1121,11 @@ func TestCoreAckPriorityAheadOfQueuedData(t *testing.T) {
 
 	a, b := net.Pipe()
 	defer b.Close()
-	wrapped := &signalWriteConn{Conn: a, started: make(chan struct{})}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseWrite := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseWrite()
+	wrapped := &gatedWriteConn{Conn: a, started: make(chan struct{}), release: release}
 	if err := core.addLeg(0, wrapped, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1333,19 +1134,10 @@ func TestCoreAckPriorityAheadOfQueuedData(t *testing.T) {
 		t.Fatal("leg0 missing")
 	}
 
-	record0 := &txRecord{seq: 0, data: []byte("first"), lastSentLeg: -1}
-	record1 := &txRecord{seq: 1, data: []byte("second"), lastSentLeg: -1}
-	core.txMu.Lock()
-	core.outstanding[0] = record0
-	core.outstanding[1] = record1
-	record0.inTransit = true
-	record0.transitLeg = leg.id
-	record0.transitSince = time.Now()
-	record1.inTransit = true
-	record1.transitLeg = leg.id
-	record1.transitSince = time.Now()
-	core.txMu.Unlock()
-	leg.send <- txSendAttempt{record: record0}
+	record0 := testLedgerAddTransit(core, []byte("first"), time.Now(), leg.id)
+	if !core.queueDataAttempt(record0, leg.id) {
+		t.Fatal("first DATA attempt was not queued")
+	}
 
 	select {
 	case <-wrapped.started:
@@ -1353,10 +1145,14 @@ func TestCoreAckPriorityAheadOfQueuedData(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first DATA write did not start")
 	}
-	leg.send <- txSendAttempt{record: record1}
+	record1 := testLedgerAddTransit(core, []byte("second"), time.Now(), leg.id)
+	if !core.queueDataAttempt(record1, leg.id) {
+		t.Fatal("second DATA attempt was not queued")
+	}
 	if !core.sendAckFrame(9, false) {
 		t.Fatal("ACK was not scheduled")
 	}
+	releaseWrite()
 
 	_ = b.SetReadDeadline(time.Now().Add(time.Second))
 	first, err := readWireFrame(b, core)
@@ -1378,6 +1174,18 @@ func TestCoreAckPriorityAheadOfQueuedData(t *testing.T) {
 		}
 		t.Fatalf("ACK did not get priority over queued DATA: type=%d value=%d", second.typ, second.seq)
 	}
+
+	third, err := readWireFrame(b, core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.typ != frameTypeData || third.seq != 1 {
+		if third.typ == frameTypeData {
+			core.putBuffer(third.data)
+		}
+		t.Fatalf("queued DATA did not follow priority ACK: type=%d value=%d", third.typ, third.seq)
+	}
+	core.putBuffer(third.data)
 }
 
 func TestCoreClosingWithoutOutstandingSuppressesEmergencyActivation(t *testing.T) {
@@ -1395,10 +1203,10 @@ func TestCoreClosingWithoutOutstandingSuppressesEmergencyActivation(t *testing.T
 		t.Fatal(err)
 	}
 	old := core.getLeg(0)
-	core.closing.Store(true)
+	core.engine.SetClosingForTest(true)
 	core.handleLegFailure(old, io.EOF)
 
-	if core.active.Load() {
+	if core.isActive() {
 		t.Fatal("graceful closing with no outstanding DATA activated booster")
 	}
 	select {
@@ -1420,14 +1228,12 @@ func TestCoreClosingWithOutstandingStillAllowsEmergencyActivation(t *testing.T) 
 	if err := core.addLeg(0, a, nil); err != nil {
 		t.Fatal(err)
 	}
-	core.txMu.Lock()
-	core.outstanding[0] = &txRecord{seq: 0, data: []byte("tail"), lastSentLeg: 0}
-	core.txMu.Unlock()
+	testLedgerAdd(core, []byte("tail"), time.Now(), 0)
 
 	old := core.getLeg(0)
-	core.closing.Store(true)
+	core.engine.SetClosingForTest(true)
 	core.handleLegFailure(old, io.ErrClosedPipe)
-	if !core.active.Load() {
+	if !core.isActive() {
 		t.Fatal("graceful closing with outstanding DATA suppressed required transport repair")
 	}
 }
@@ -1526,14 +1332,12 @@ func TestCoreForcedAckResendsSameCumulativeValue(t *testing.T) {
 
 func TestSnapshotStatsTracksCumulativeAckFrontierLeg(t *testing.T) {
 	now := time.Now()
-	core := &mpCore{
-		legs:        make(map[uint8]*mpLeg),
-		retiring:    make(map[uint8]*mpLeg),
-		outstanding: make(map[uint64]*txRecord),
-		ackedNext:   10,
-	}
-	core.outstanding[10] = &txRecord{seq: 10, data: []byte("slow-primary"), createdAt: now.Add(-4 * time.Second), lastSentLeg: 0}
-	core.outstanding[11] = &txRecord{seq: 11, data: []byte("fast-booster"), createdAt: now.Add(-3 * time.Second), lastSentLeg: 1}
+	core, app := newCore(testCoreConfig())
+	defer core.Close()
+	defer app.Close()
+	testLedgerAdvance(core, 10, now.Add(-4*time.Second))
+	testLedgerAdd(core, []byte("slow-primary"), now.Add(-4*time.Second), 0)
+	testLedgerAdd(core, []byte("fast-booster"), now.Add(-3*time.Second), 1)
 	stats := core.snapshotStats()
 	if !stats.AckFrontierValid {
 		t.Fatal("ACK frontier not reported")
@@ -1567,18 +1371,10 @@ func TestCoreAdaptiveSchedulerPrefersUsefulLowLatencyLeg(t *testing.T) {
 	if err := core.addLeg(1, a1, nil); err != nil {
 		t.Fatal(err)
 	}
-	leg0 := core.getLeg(0)
-	leg1 := core.getLeg(1)
-	leg0.perf.mu.Lock()
-	leg0.perf.ackedBPS = 20 * 1e6
-	leg0.perf.writeBPS = 20 * 1e6
-	leg0.perf.writeLatency = 180 * time.Millisecond
-	leg0.perf.mu.Unlock()
-	leg1.perf.mu.Lock()
-	leg1.perf.ackedBPS = 20 * 1e6
-	leg1.perf.writeBPS = 20 * 1e6
-	leg1.perf.writeLatency = 2 * time.Millisecond
-	leg1.perf.mu.Unlock()
+	if !core.engine.SetLegPerformanceForTest(0, 20*1e6, 20*1e6, 180*time.Millisecond) ||
+		!core.engine.SetLegPerformanceForTest(1, 20*1e6, 20*1e6, 2*time.Millisecond) {
+		t.Fatal("failed to seed scheduler performance")
+	}
 
 	if chosen := core.chooseLeg(true, -1); chosen == nil || chosen.id != 1 {
 		t.Fatalf("adaptive scheduler chose high-latency leg: %#v", chosen)
@@ -1603,10 +1399,9 @@ func TestCoreStaticSchedulerIgnoresDynamicLatency(t *testing.T) {
 	if err := core.addLeg(1, a1, nil); err != nil {
 		t.Fatal(err)
 	}
-	leg0 := core.getLeg(0)
-	leg0.perf.mu.Lock()
-	leg0.perf.writeLatency = time.Second
-	leg0.perf.mu.Unlock()
+	if !core.engine.SetLegPerformanceForTest(0, 0, 0, time.Second) {
+		t.Fatal("failed to seed scheduler performance")
+	}
 	if chosen := core.chooseLeg(true, -1); chosen == nil || chosen.id != 0 {
 		t.Fatalf("static scheduler no longer honors configured weight: %#v", chosen)
 	}

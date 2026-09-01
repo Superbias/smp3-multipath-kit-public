@@ -538,7 +538,7 @@ func (s *adaptiveConn) finishProbation(core *mpCore) {
 	if !probation || s.global == nil {
 		return
 	}
-	if core.closing.Load() || core.finalizing.Load() {
+	if core.isClosing() || core.isFinalizing() {
 		s.global.releaseProbation()
 		return
 	}
@@ -563,7 +563,7 @@ func (s *adaptiveConn) healthLoop(core *mpCore) {
 		case <-core.Done():
 			return
 		case now := <-ticker.C:
-			if core.closing.Load() || core.finalizing.Load() {
+			if core.isClosing() || core.isFinalizing() {
 				return
 			}
 			stats := core.snapshotStats()
@@ -595,7 +595,7 @@ func (s *adaptiveConn) healthLoop(core *mpCore) {
 			if onHealth != nil {
 				onHealth(decision, stats)
 			}
-			if decision.Fallback && !core.closing.Load() && !core.finalizing.Load() {
+			if decision.Fallback && !core.isClosing() && !core.isFinalizing() {
 				if s.switchToSnell(decision.Reason, true) {
 					return
 				}

@@ -1,21 +1,41 @@
-# SMP3 Multipath Kit alpha2.3-r11
+# SMP3 Multipath Kit 2.0.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 Experimental application-layer multipath transport for a pinned sing-box base.
 
-- **Revision:** `alpha2.3-r11`
+- **Release:** `2.0.0`
 - **Pinned sing-box:** `v1.14.0-beta.14`
 - **Pinned commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
-- **Expected binary:** `1.14.0-beta.14-smp3-alpha2.3-r11`
+- **Expected sing client binary:** `1.14.0-beta.14-smp3-2.0.0`
+- **Expected standalone server binary:** `2.0.0`
 - **TCP stream HELLO:** v4 (compatible with r10 stream mode)
 - **UDP datagram HELLO:** v5 (r11 endpoints required)
 
-> This is an experimental downstream derivative, not an official SagerNet/sing-box release.
+> This is an independent SMP3 release. It is not an official SagerNet/sing-box or MetaCubeX/Mihomo release.
 
-## What r11 adds
+## Architecture in 2.0.0
 
-R11 keeps r10's ACK-paced frontier rescue and same-ID recovery, then adds three major capabilities:
+The release separates the reusable, standard-library-only SMP3 Core from its hosts:
+
+```text
+Mihomo / sing-box client adapters
+        ↓  Snell / Hysteria2 / direct reliable carriers
+standalone SMP3 server
+        ↓
+canonical SMP3 Core
+        ↓
+Internet destinations
+```
+
+The standalone server is the production landing endpoint. It does not implement
+Snell or Hysteria2 itself; those encrypted carriers terminate in the client or
+in the surrounding deployment and connect to the SMP3 listener.
+
+## What 2.0.0 provides
+
+2.0.0 keeps the validated r11 wire behavior and packages the extracted Core,
+standalone server, Mihomo adapter, and sing-box compatibility integration:
 
 1. **Adaptive TCP scheduler** — per-leg useful ACK/write throughput and write latency reshape static bandwidth weights so slow paths receive fewer early sequence numbers and cause less HOL pressure.
 2. **Bootstrap failover** — leg0 gets a configurable head start; if it fails or is still pending after `bootstrap_fallback_delay`, leg1 is dialed in parallel and the first authenticated HELLO establishes the logical session.
@@ -24,7 +44,7 @@ R11 keeps r10's ACK-paced frontier rescue and same-ID recovery, then adds three 
 ## Data planes
 
 ```text
-                         SMP3 r11
+                         SMP3 2.0.0
                             │
                  ┌──────────┴──────────┐
                  │                     │
@@ -40,7 +60,7 @@ R11 keeps r10's ACK-paced frontier rescue and same-ID recovery, then adds three 
 
 ### TCP stream mode
 
-R11 retains the r10 stream wire protocol (HELLO v4), including:
+The release retains the r10-compatible stream wire protocol (HELLO v4), including:
 
 - one logical byte stream over two child TCP paths;
 - bounded outstanding window;
@@ -57,7 +77,7 @@ The new `scheduler_mode: adaptive` uses observed per-leg performance in addition
 
 ### UDP datagram mode
 
-R11 introduces a separate v5 datagram HELLO and `DATAGRAM` frame. UDP does **not** reuse TCP cumulative ACK or ordered reassembly.
+The release uses a separate v5 datagram HELLO and `DATAGRAM` frame. UDP does **not** reuse TCP cumulative ACK or ordered reassembly.
 
 Each datagram carries:
 
@@ -164,23 +184,28 @@ Keep the raw aggregation listener private/internal and use encrypted carriers fo
 
 | Client | Server | TCP | MP-UDP |
 |---|---|---|---|
-| r11 | r11 | Yes | Yes |
-| r11 | r10 | Yes (v4) | No |
-| r10 | r11 | Yes (v4) | Legacy client UDP only |
-| <= alpha2.1 | r11 | No (HELLO v3) | No |
+| 2.0.0 client | 2.0.0 server | Yes | Yes |
+| r11 client | 2.0.0 server | Yes (v4) | No |
+| 2.0.0 client | r11 server | Yes (v4) | No |
+| <= alpha2.1 | 2.0.0 server | No (HELLO v3) | No |
 
-R11 deliberately continues writing HELLO v4 for TCP. Only the new Datagram mode writes v5.
+The TCP path continues writing HELLO v4. Only the Datagram mode writes v5.
 
 ## Build
 
 ```bash
 ./validate-kit.sh
-./build.sh
+./validate-kit.sh
+./scripts/build-phase6-artifacts.sh
 ```
 
 Expected outputs:
 
 ```text
+dist/smp3-server-linux-amd64
+dist/smp3-server-windows-amd64.exe
+dist/mihomo-smp3-linux-amd64
+dist/mihomo-smp3-windows-amd64.exe
 dist/smp3-proxy-linux-amd64
 dist/smp3-proxy-windows-amd64.exe
 dist/SHA256SUMS
@@ -189,14 +214,17 @@ dist/SHA256SUMS
 Expected version:
 
 ```text
-1.14.0-beta.14-smp3-alpha2.3-r11
+1.14.0-beta.14-smp3-2.0.0 (sing client)
+2.0.0 (standalone server)
 ```
 
-`build.sh` checks out the exact pinned sing-box commit, injects the SMP3 source, runs the injected package tests, then builds Linux/amd64 and Windows/amd64.
+`scripts/build-phase6-artifacts.sh` verifies the explicit Linux/amd64 and
+Windows/amd64 targets, builds the standalone server, injects the pinned
+sing-box and Mihomo sources, and builds all six formal release binaries.
 
 ## Source verification in this closeout
 
-The kit contains **101 standalone multipath `Test*` functions** and the injected multipath package contains the same 101. The generated full sing-box source tree contains 441 `Test*` functions.
+The kit contains mutually-exclusive `smp3core`, legacy semantic, and sing adapter/integration `Test*` functions. `validate-kit.sh` reports each current category and the total, and guards against losing the pre-Phase-1 test baseline; the count is intentionally not duplicated as a drifting literal in this document.
 
 Completed in the artifact environment:
 
@@ -207,7 +235,7 @@ SMP3 package go vet: PASS
 gofmt: PASS
 ```
 
-R11-specific tests include:
+The release regression includes:
 
 - TCP adaptive scheduler prefers the useful lower-latency leg;
 - static scheduler remains deterministic/config-weight based;
@@ -219,13 +247,16 @@ R11-specific tests include:
 - same-ID Datagram leg replacement succeeds;
 - intentional Datagram session close is not reported as a path failure.
 
-### Final closeout status
+### Final 2.0.0 status
 
-This archive is the **r11 closeout source package**. The pinned sing-box injection/build produced Linux and Windows binaries reporting `1.14.0-beta.14-smp3-alpha2.3-r11`, and the live TCP/UDP acceptance matrix is recorded in `TEST_RESULTS.txt`.
+This archive is the **2.0.0 source package**. The pinned sing-box injection/build
+produces Linux and Windows clients reporting `1.14.0-beta.14-smp3-2.0.0`, while
+the standalone server reports `2.0.0`. The live TCP/UDP acceptance matrix is
+recorded in `TEST_RESULTS.txt`.
 
 The full generated-tree test command still has non-SMP3 environment/toolchain failures (namespace permission, current-Go runtime linkname compatibility, and internet-dependent TLS-fragment tests). Full-tree vet likewise reports only upstream unsafe-pointer diagnostics; the SMP3 multipath package gates pass. The H3 100 MiB case remains INCONCLUSIVE because direct aioquic reproduces the same failure without SMP3.
 
-## Recommended r11 acceptance matrix
+## Recommended 2.0.0 acceptance matrix
 
 For future deployments, after building both endpoints, validate at least:
 

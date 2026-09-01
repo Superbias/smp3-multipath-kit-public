@@ -19,6 +19,7 @@ func newTestInboundForSessionCreation() *Inbound {
 	return &Inbound{
 		sessions:   make(map[[16]byte]*serverSession),
 		tombstones: make(map[[16]byte]time.Time),
+		nonces:     make(map[[16]byte]time.Time),
 		cfg:        cfg,
 	}
 }
@@ -310,5 +311,49 @@ func TestInboundDatagramSecondLegJoinsSameSession(t *testing.T) {
 	}
 	if !session.datagramCore.hasLeg(0) || !session.datagramCore.hasLeg(1) {
 		t.Fatal("datagram session does not contain both legs")
+	}
+}
+
+func TestInboundDatagramSessionRejectsDestinationMismatch(t *testing.T) {
+	inbound := newTestInboundForSessionCreation()
+	inbound.udpEnabled = true
+	inbound.udpCfg = datagramConfig{Mode: datagramModeAdaptive, QueueFrames: 16, DedupWindow: 64, IdleTimeout: time.Minute, RecoveryTimeout: time.Second}
+	var id [16]byte
+	id[0] = 0x83
+	firstDestination := M.ParseSocksaddr("192.0.2.1:53")
+	secondDestination := M.ParseSocksaddr("192.0.2.2:53")
+
+	leg0, peer0 := net.Pipe()
+	defer peer0.Close()
+	session, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
+		Session: id, LegID: 0, Mode: helloModeDatagram, Destination: firstDestination.String(),
+	}, firstDestination, leg0, nil)
+	if err != nil || !created {
+		t.Fatalf("create datagram session: created=%v err=%v", created, err)
+	}
+	defer session.datagramCore.Close()
+
+	leg1, peer1 := net.Pipe()
+	defer leg1.Close()
+	defer peer1.Close()
+	joined, created, err := inbound.createOrJoinSession(context.Background(), helloMessage{
+		Session: id, LegID: 1, Mode: helloModeDatagram, Destination: secondDestination.String(),
+	}, secondDestination, leg1, nil)
+	if err == nil || err.Error() != "multipath session destination mismatch" {
+		t.Fatalf("destination mismatch was not rejected: created=%v session=%p err=%v", created, joined, err)
+	}
+	if created || joined != session {
+		t.Fatalf("destination mismatch changed session registry: created=%v same=%v", created, joined == session)
+	}
+}
+
+func TestInboundRejectsReplayedHelloNonce(t *testing.T) {
+	inbound := newTestInboundForSessionCreation()
+	nonce := goldenNonce
+	if !inbound.acceptNonce(nonce) {
+		t.Fatal("first HELLO nonce was rejected")
+	}
+	if inbound.acceptNonce(nonce) {
+		t.Fatal("replayed HELLO nonce was accepted")
 	}
 }

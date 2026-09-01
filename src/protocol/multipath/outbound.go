@@ -308,7 +308,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 		// avoids an immediate reconnect. If the logical stream remains active and
 		// useful demand continues, the health loop requests a demand-driven repair.
 		if core != nil && o.adaptiveEnabled && adaptive.currentCarrier() == carrierHy2 &&
-			!core.closing.Load() && !core.finalizing.Load() && core.active.Load() &&
+			!core.isClosing() && !core.isFinalizing() && core.isActive() &&
 			!stats.LegUp[1] && decision.Demand {
 			scheduleLeg(1, o.redialInterval)
 		}
@@ -362,7 +362,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
 			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration)
 		}
-		if core == nil || core.closing.Load() || core.finalizing.Load() {
+		if core == nil || core.isClosing() || core.isFinalizing() {
 			return
 		}
 		if !core.replaceLeg(1, &adaptiveCarrierReplacementError{from: carrierHy2, reason: reason}) {
@@ -382,10 +382,10 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			return
 		default:
 		}
-		if core.finalizing.Load() {
+		if core.isFinalizing() {
 			return
 		}
-		if id == 1 && !core.active.Load() {
+		if id == 1 && !core.isActive() {
 			return
 		}
 		if core.hasLeg(id) {
@@ -426,10 +426,10 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			return
 		default:
 		}
-		if core.finalizing.Load() {
+		if core.isFinalizing() {
 			return
 		}
-		if id == 1 && !core.active.Load() {
+		if id == 1 && !core.isActive() {
 			return
 		}
 		if core.hasLeg(id) {
@@ -458,7 +458,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 				}
 				// If OnLegDown requested repair while joining was still true, honor
 				// it now. A benign EOF deliberately makes no such request.
-				if repair && !core.hasLeg(id) && (id == 0 || core.active.Load()) {
+				if repair && !core.hasLeg(id) && (id == 0 || core.isActive()) {
 					if delay <= 0 {
 						delay = o.redialInterval
 					}
@@ -471,10 +471,10 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 					return
 				default:
 				}
-				if core.finalizing.Load() {
+				if core.isFinalizing() {
 					return
 				}
-				if id == 1 && !core.active.Load() {
+				if id == 1 && !core.isActive() {
 					return
 				}
 				if core.hasLeg(id) {
@@ -492,7 +492,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 				if dialErr == nil {
 					dialErr = writeHello(conn, helloMessage{Session: sessionID, LegID: id, Destination: destinationString}, o.password)
 				}
-				if dialErr == nil && core.finalizing.Load() {
+				if dialErr == nil && core.isFinalizing() {
 					_ = conn.Close()
 					return
 				}
@@ -517,7 +517,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 				if errors.Is(dialErr, errCoreClosed) {
 					return
 				}
-				if id == 1 && o.adaptiveEnabled && !core.closing.Load() && !core.finalizing.Load() && adaptive.currentCarrier() == carrierHy2 {
+				if id == 1 && o.adaptiveEnabled && !core.isClosing() && !core.isFinalizing() && adaptive.currentCarrier() == carrierHy2 {
 					stats := core.snapshotStats()
 					if adaptive.shouldRecordCarrierFailure(dialErr, stats, false) {
 						// This attempt never became an installed SMP3 leg. Treat it as an
@@ -554,7 +554,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			return
 		default:
 		}
-		if core.finalizing.Load() {
+		if core.isFinalizing() {
 			return
 		}
 		// Preserve the carrier that actually owned leg1. Ordinary failures capture the
@@ -572,7 +572,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			}
 		}
 		benignSecondaryEOF := false
-		if id == 1 && o.adaptiveEnabled && !intentionalReplacement && !core.closing.Load() && !core.finalizing.Load() && carrierAtFailure == carrierHy2 {
+		if id == 1 && o.adaptiveEnabled && !intentionalReplacement && !core.isClosing() && !core.isFinalizing() && carrierAtFailure == carrierHy2 {
 			stats := core.snapshotStats()
 			if adaptive.shouldRecordCarrierFailure(legErr, stats, true) {
 				adaptive.recordCarrierFailure(true)
@@ -720,7 +720,7 @@ bootstrapLoop:
 				if result.conn != nil {
 					_ = result.conn.Close()
 				}
-				if expected == 0 || core.active.Load() {
+				if expected == 0 || core.isActive() {
 					scheduleLeg(expected, o.redialInterval)
 				}
 			}(otherID)

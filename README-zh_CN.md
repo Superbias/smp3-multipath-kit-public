@@ -1,21 +1,40 @@
-# SMP3 Multipath Kit alpha2.3-r11
+# SMP3 Multipath Kit 2.0.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 基于固定 sing-box 版本的实验性应用层多路径传输方案。
 
-- **版本：** `alpha2.3-r11`
+- **版本：** `2.0.0`
 - **固定 sing-box：** `v1.14.0-beta.14`
 - **固定 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
-- **预期二进制版本：** `1.14.0-beta.14-smp3-alpha2.3-r11`
+- **预期 sing client 二进制版本：** `1.14.0-beta.14-smp3-2.0.0`
+- **预期 standalone server 二进制版本：** `2.0.0`
 - **TCP Stream HELLO：** v4（继续兼容 r10 TCP）
 - **UDP Datagram HELLO：** v5（MP-UDP 需要 r11 两端）
 
-> 本项目是实验性的下游衍生版本，不是 SagerNet / sing-box 官方发布。
+> 本项目是独立的 SMP3 发布版，不是 SagerNet / sing-box 或 MetaCubeX/Mihomo 官方发布。
 
-## r11 做了什么
+## 2.0.0 架构
 
-r11 保留 r10 已经验证过的 ACK-paced frontier rescue、同 ID 重连与 session 生命周期修复，在此基础上增加三项核心能力：
+本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：
+
+```text
+Mihomo / sing-box client adapter
+        ↓  Snell / Hysteria2 / direct reliable carrier
+standalone SMP3 server
+        ↓
+canonical SMP3 Core
+        ↓
+Internet destination
+```
+
+standalone server 是生产 landing endpoint；它本身不实现 Snell 或
+Hysteria2，这些加密 carrier 在客户端或外围部署中终止后连接 SMP3 listener。
+
+## 2.0.0 提供什么
+
+2.0.0 保留已经验证的 r11 wire 行为，并正式打包抽离后的 Core、standalone
+server、Mihomo adapter 与 sing-box compatibility integration：
 
 1. **TCP 带宽感知 Adaptive Scheduler**：根据每条 leg 的有效 ACK/写入吞吐、写入延迟和队列压力动态修正 `bandwidth_mbps` 权重，尽量减少慢路径拿到过多早期 sequence 后造成 HOL。
 2. **Bootstrap Failover**：leg0 先获得一个可配置的抢跑时间；如果硬失败，立即拨 leg1；如果超过 `bootstrap_fallback_delay` 仍未完成，则并行拨 leg1，谁先完成认证 HELLO 谁先建立逻辑 session。
@@ -24,7 +43,7 @@ r11 保留 r10 已经验证过的 ACK-paced frontier rescue、同 ID 重连与 s
 ## 两套数据面
 
 ```text
-                         SMP3 r11
+                         SMP3 2.0.0
                             │
                  ┌──────────┴──────────┐
                  │                     │
@@ -40,7 +59,7 @@ r11 保留 r10 已经验证过的 ACK-paced frontier rescue、同 ID 重连与 s
 
 ### TCP Stream Mode
 
-TCP 继续使用 r10 的 HELLO v4，保留：
+TCP 继续使用兼容 r10 的 HELLO v4，保留：
 
 - 单逻辑 TCP 字节流双路径承载；
 - bounded outstanding window；
@@ -175,23 +194,28 @@ r11 关键字段：
 
 | Client | Server | TCP | MP-UDP |
 |---|---|---|---|
-| r11 | r11 | ✅ | ✅ |
-| r11 | r10 | ✅ v4 | ❌ |
-| r10 | r11 | ✅ v4 | r10 仍走旧 UDP 方式 |
-| alpha2.1 及更早 | r11 | ❌ HELLO v3 | ❌ |
+| 2.0.0 client | 2.0.0 server | ✅ | ✅ |
+| r11 client | 2.0.0 server | ✅ v4 | ❌ |
+| 2.0.0 client | r11 server | ✅ v4 | ❌ |
+| alpha2.1 及更早 | 2.0.0 server | ❌ HELLO v3 | ❌ |
 
-r11 的 TCP **仍然写 HELLO v4**；只有新的 Datagram Mode 才写 v5。
+2.0.0 的 TCP **仍然写 HELLO v4**；只有 Datagram Mode 才写 v5。
 
 ## 构建
 
 ```bash
 ./validate-kit.sh
-./build.sh
+./validate-kit.sh
+./scripts/build-phase6-artifacts.sh
 ```
 
 预期产物：
 
 ```text
+dist/smp3-server-linux-amd64
+dist/smp3-server-windows-amd64.exe
+dist/mihomo-smp3-linux-amd64
+dist/mihomo-smp3-windows-amd64.exe
 dist/smp3-proxy-linux-amd64
 dist/smp3-proxy-windows-amd64.exe
 dist/SHA256SUMS
@@ -200,12 +224,13 @@ dist/SHA256SUMS
 版本应为：
 
 ```text
-1.14.0-beta.14-smp3-alpha2.3-r11
+1.14.0-beta.14-smp3-2.0.0（sing client）
+2.0.0（standalone server）
 ```
 
 ## 当前源码验证状态
 
-当前 kit 有 **101 个 standalone multipath `Test*`**，注入后的 multipath package 也是 101 个；生成的完整 sing-box 源码树共有 441 个 `Test*`。
+当前 kit 包含 standalone/Core 与 adapter 两组 multipath `Test*` 测试。`validate-kit.sh` 会输出 standalone、adapter 和总数，并守住 Phase 1 之前的测试基线；本文不重复维护一个会漂移的硬编码数字。
 
 本次环境已完成：
 
@@ -216,7 +241,7 @@ SMP3 package go vet             PASS
 gofmt                           PASS
 ```
 
-r11 新测试覆盖：
+2.0.0 新测试覆盖：
 
 - TCP adaptive scheduler 会避开高延迟路径；
 - static scheduler 仍保持静态权重语义；
@@ -230,11 +255,13 @@ r11 新测试覆盖：
 
 ### Final Closeout 状态
 
-这个包是 **r11 closeout source package**。固定 sing-box 注入和构建已经生成 Linux/Windows 二进制，版本均为 `1.14.0-beta.14-smp3-alpha2.3-r11`；TCP/UDP 实机验收矩阵见 `TEST_RESULTS.txt`。
+这个包是 **2.0.0 source package**。固定 sing-box 注入和构建生成的
+Linux/Windows client 版本为 `1.14.0-beta.14-smp3-2.0.0`，standalone
+server 版本为 `2.0.0`；TCP/UDP 实机验收矩阵见 `TEST_RESULTS.txt`。
 
 完整生成树测试仍有与 SMP3 无关的环境/工具链问题（namespace 权限、当前 Go 的 runtime linkname 兼容性、依赖公网的 TLS fragment 测试）；完整 tree vet 也只有上游 unsafe-pointer 诊断。SMP3 multipath package 门禁通过。H3 100 MiB 仍为 INCONCLUSIVE，因为绕过 SMP3 的 direct aioquic 也能复现同一失败。
 
-## 建议 r11 验收矩阵
+## 建议 2.0.0 验收矩阵
 
 ```text
 TCP 500 MiB 完整上传
@@ -251,7 +278,7 @@ UDP same-ID leg 断线重连
 QUIC/HTTP3 或 iperf UDP 通过本地 SOCKS/TUN 实测
 ```
 
-这些矩阵用于后续部署复核；本次任务不推送 GitHub，也不发布 release。
+这些矩阵用于后续部署复核；2.0.0 Release 资产与 checksums 见 GitHub Release。
 
 ## 安全说明
 

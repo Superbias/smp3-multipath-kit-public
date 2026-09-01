@@ -232,8 +232,8 @@ func TestDatagramDedupRejectsVeryLateDuplicateOutsideWindow(t *testing.T) {
 	}
 	// A unique out-of-order ID that is still inside the active receive window must
 	// remain valid; UDP is intentionally not globally ordered.
-	inside := core.maxSeen - core.cfg.DedupWindow
-	if _, exists := core.seen[inside]; !exists {
+	inside := core.maxSeen() - core.cfg.DedupWindow
+	if !core.seenContains(inside) {
 		t.Fatalf("test setup expected active-window id %d to remain tracked", inside)
 	}
 }
@@ -345,7 +345,7 @@ func TestDatagramMaxPayloadBoundary(t *testing.T) {
 				if !errors.Is(err, errDatagramTooLarge) {
 					t.Fatalf("oversize error = %v, want errDatagramTooLarge", err)
 				}
-				if core.txSeq.Load() != 0 {
+				if core.txSequence() != 0 {
 					t.Fatal("oversize datagram consumed a datagram id")
 				}
 				return

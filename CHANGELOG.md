@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0 — canonical Core and standalone server release
+
+- Extracted the reusable standard-library-only SMP3 Stream and Datagram Core.
+- Added the standalone SMP3 server as the production landing endpoint.
+- Added Mihomo TCP/UDP integration and persistent UDP association recreation
+  after terminal DatagramEngine cleanup.
+- Added explicit Linux/amd64 and Windows/amd64 builds for standalone server,
+  Mihomo client, and sing-box compatibility client.
+- Completed Phase 6C live acceptance and Phase 6D production migration with
+  rollback validation.
+- Kept H3 100 MiB direct-aioquic interoperability as an external,
+  inconclusive harness issue rather than an SMP3 protocol failure.
+
 ## alpha2.3-r11 — adaptive scheduling, bootstrap failover and MP-UDP
 
 - Added bandwidth-aware TCP scheduling using useful ACK/write throughput and per-leg write latency while preserving static bandwidth weights as priors.

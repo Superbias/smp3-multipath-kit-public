@@ -11,12 +11,21 @@ python3 -m json.tool "$ROOT/config/client-adaptive.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/server.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/server-hy2-snell.example.json" >/dev/null
 
+echo '[+] Test* count'
+python3 "$ROOT/scripts/check-test-count.py" "$ROOT"
+
+echo '[+] Core import purity'
+python3 "$ROOT/scripts/check-core-imports.py" "$ROOT"
+
+echo '[+] Core migration parity'
+python3 "$ROOT/scripts/check-core-migration-parity.py" "$ROOT"
+
+echo '[+] canonical Core standalone tests'
+( cd "$ROOT/core" && GOTOOLCHAIN=local go test ./... && GOTOOLCHAIN=local go vet ./... )
+
 echo '[+] standalone SMP3 reliability tests'
-(
-  cd "$ROOT/src/protocol/multipath"
-  go test core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go -race -count=5
-  go vet core.go protocol.go adaptive.go datagram.go core_test.go adaptive_test.go protocol_test.go datagram_test.go
-)
+python3 "$ROOT/scripts/run-standalone-go.py" "$ROOT" test -race -count=5
+python3 "$ROOT/scripts/run-standalone-go.py" "$ROOT" vet
 
 echo '[+] source injector syntax'
 python3 - "$ROOT/scripts/apply_source.py" <<'PY'
