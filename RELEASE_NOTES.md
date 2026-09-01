@@ -29,7 +29,7 @@ encrypted carriers terminate externally and connect to the SMP3 listener.
 
 ## Validation
 
-The release source was validated with the pinned sing-box base
+The optional sing-box compatibility client was validated with the pinned
 `v1.14.0-beta.14` at commit
 `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`, pinned Mihomo `v1.19.28` at
 commit `cbd11db1e13a75d8e680e0fe7742c95be4cba2be`, and Go `1.25.5`.
