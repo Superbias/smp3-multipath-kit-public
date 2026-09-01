@@ -1,10 +1,10 @@
-SMP3 2.0.1 installer release closure verification
+SMP3 2.1.0 carrier-agnostic adapter release closure verification
 ========================================
 
-This document freezes the Phase 6C/6D live evidence for the 2.0.1 installer
-release. Runtime evidence is inherited from the accepted 2.0.0 artifacts;
-this release adds installer/operations validation only. No live fault injection
-or production migration is performed here.
+This document freezes the Phase 6C/6D live evidence for the 2.1.0 release.
+Runtime/live evidence is inherited from the accepted 2.0.0 artifacts; this
+release adds the carrier-agnostic sing adapter refactor and local validation.
+No live fault injection or production migration is performed here.
 
 INSTALLER / OPERATIONS
 ======================
@@ -29,11 +29,12 @@ AUTOMATED / STATIC GATES
 
 Installer/operations packaging             PASS   PowerShell and Linux lifecycle tests
 
-validate-kit.sh                         PASS   smp3core=39, legacy_semantic=105, sing_adapter=16, total=160
+validate-kit.sh                         PASS   smp3core=39, legacy_semantic=106, sing_adapter=17, total=162
 Canonical Core normal/race/vet         PASS   CORE 17/17 unchanged
 Wire golden fingerprint                 PASS   WIRE 22/22 unchanged
 Mihomo adapter normal/race/vet          PASS   R3 adapter and lifecycle gates
 sing adapter normal/race/vet            PASS   R2-compatible artifact gates
+Carrier-neutral primary/fallback tests  PASS   VLESS-style/Trojan-style/Direct-style fake child tags
 gofmt / diff --check                    PASS
 source injector / shell syntax          PASS
 sensitive/public-IP/forbidden scan      PASS   no credentials or private deployment data

@@ -1,6 +1,7 @@
-# SMP3 2.0.1 Deployment and Usage
+# SMP3 2.1.0 Deployment and Usage
 
-This guide deploys the independent SMP3 product and its 2.0.1 installer layer.
+This guide deploys the independent SMP3 product and its 2.1.0 carrier-agnostic
+adapter release.
 The server side does **not**
 require sing-box: it uses `smp3-server`, the standalone host for the canonical
 SMP3 Core. sing-box is only an optional compatibility client; Mihomo is the
@@ -12,21 +13,24 @@ other supported client integration.
 Applications
     ↓ SOCKS5 / mixed proxy
 Mihomo custom core or optional sing-box client
-    ↓ two reliable child carriers
-Snell / Hysteria2 / direct carrier terminators
+    ↓ two reliable TCP-capable child carriers
+configured carrier terminators (Snell / Hysteria2 / VLESS / Trojan / direct)
     ↓ private SMP3 listener
 standalone SMP3 server (:24444)
     ↓
 Internet destinations
 ```
 
-The two child carriers must eventually reach the same SMP3 listener. Snell and
-Hysteria2 are external carrier protocols; the standalone server does not
-terminate them itself.
+The two child carriers must eventually reach the same SMP3 listener. SMP3 does
+not require a specific proxy protocol: each configured child must provide the
+reliable TCP dial capability required by the adapter. Snell, Hysteria2, VLESS,
+Trojan, TUIC, Shadowsocks, VMess, and Direct are examples; actual reachability
+depends on the host outbound. IPv4/IPv6 selection is delegated to the child
+outbound. The standalone server does not terminate child carrier protocols.
 
 ## 2. Download and verify
 
-Download the assets from the [v2.0.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.1):
+Download the assets from the [v2.1.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.0):
 
 - Server: `smp3-server-linux-amd64` or `smp3-server-windows-amd64.exe`.
 - Mihomo client: `mihomo-smp3-linux-amd64` or `mihomo-smp3-windows-amd64.exe`.

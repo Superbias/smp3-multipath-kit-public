@@ -95,13 +95,13 @@ func TestAdaptiveTXBadRXGoodFallsBack(t *testing.T) {
 	}
 }
 
-func TestAdaptiveTXBlockedByLeg0FrontierDoesNotBlameHy2(t *testing.T) {
+func TestAdaptiveTXBlockedByLeg0FrontierDoesNotBlamePrimary(t *testing.T) {
 	controller, start := adaptiveTestController()
 	establishDirectionalBaseline(controller, start)
 	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 11 * time.Second, 40 * time.Second} {
 		// Model the R7 live failure: global cumulative ACK progress is old and many
 		// leg1 frames are outstanding, but the oldest unacked sequence is a slow
-		// leg0 frame. Later Hy2 frames cannot retire until that earlier gap closes.
+		// leg0 frame. Later Primary frames cannot retire until that earlier gap closes.
 		stats := adaptiveTestStats(start.Add(elapsed), uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit, uint64(elapsed/time.Second)*testGoodputUnit, 2*testGoodputUnit)
 		stats.OutstandingFrames = 128
 		stats.OutstandingFramesByLeg[0] = 32
@@ -114,12 +114,12 @@ func TestAdaptiveTXBlockedByLeg0FrontierDoesNotBlameHy2(t *testing.T) {
 		stats.LastAckProgress = start
 		decision := controller.observe(start.Add(elapsed), stats)
 		if decision.State != adaptiveHealthy || decision.Fallback || decision.TxPressure {
-			t.Fatalf("slow leg0 cumulative-ACK frontier blamed Hy2 at %s: %+v", elapsed, decision)
+			t.Fatalf("slow leg0 cumulative-ACK frontier blamed Primary at %s: %+v", elapsed, decision)
 		}
 	}
 }
 
-func TestAdaptiveConcurrentFrontierRescueDoesNotBlameHy2(t *testing.T) {
+func TestAdaptiveConcurrentFrontierRescueDoesNotBlamePrimary(t *testing.T) {
 	controller, start := adaptiveTestController()
 	establishDirectionalBaseline(controller, start)
 	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 12 * time.Second} {
@@ -133,7 +133,7 @@ func TestAdaptiveConcurrentFrontierRescueDoesNotBlameHy2(t *testing.T) {
 		stats.LastAckProgress = start
 		decision := controller.observe(start.Add(elapsed), stats)
 		if decision.TxPressure || decision.State != adaptiveHealthy || decision.Fallback {
-			t.Fatalf("concurrent leg0+leg1 frontier rescue blamed Hy2 at %s: %+v", elapsed, decision)
+			t.Fatalf("concurrent leg0+leg1 frontier rescue blamed Primary at %s: %+v", elapsed, decision)
 		}
 	}
 }
@@ -181,7 +181,7 @@ func TestAdaptiveTransientTXIssueRecoversWithIdleRX(t *testing.T) {
 	}
 }
 
-func TestAdaptiveLeg0PressureDoesNotBlameHealthyHy2(t *testing.T) {
+func TestAdaptiveLeg0PressureDoesNotBlameHealthyPrimary(t *testing.T) {
 	controller, start := adaptiveTestController()
 	establishDirectionalBaseline(controller, start)
 	for _, elapsed := range []time.Duration{3 * time.Second, 6 * time.Second, 11 * time.Second, 40 * time.Second} {
@@ -190,7 +190,7 @@ func TestAdaptiveLeg0PressureDoesNotBlameHealthyHy2(t *testing.T) {
 		stats.RxGapAge = 3 * time.Second
 		decision := controller.observe(start.Add(elapsed), stats)
 		if decision.Fallback || decision.State != adaptiveHealthy {
-			t.Fatalf("leg0-only pressure blamed healthy Hy2 at %s: %+v", elapsed, decision)
+			t.Fatalf("leg0-only pressure blamed healthy Primary at %s: %+v", elapsed, decision)
 		}
 	}
 }
@@ -250,12 +250,12 @@ func TestAdaptiveLongNormalTrafficAndShortGapsDoNotFallback(t *testing.T) {
 	}
 }
 
-func TestGlobalInitialHy2FailureLearningUsesWindow(t *testing.T) {
+func TestGlobalInitialPrimaryFailureLearningUsesWindow(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	settings.InitialFailureThreshold = 3
 	settings.InitialFailureWindow = 30 * time.Second
 	start := time.Unix(4000, 0)
-	health := hy2GlobalHealth{}
+	health := primaryCarrierHealth{}
 	if health.noteInitialFailure(start, settings) || health.cooldownActive(start) {
 		t.Fatal("one initial failure entered global cooldown")
 	}
@@ -269,7 +269,7 @@ func TestGlobalInitialHy2FailureLearningUsesWindow(t *testing.T) {
 		t.Fatal("threshold initial failures did not enter cooldown")
 	}
 
-	expiring := hy2GlobalHealth{}
+	expiring := primaryCarrierHealth{}
 	if expiring.noteInitialFailure(start, settings) {
 		t.Fatal("first expiring failure unexpectedly crossed threshold")
 	}
@@ -285,31 +285,31 @@ func TestGlobalInitialHy2FailureLearningUsesWindow(t *testing.T) {
 	}
 }
 
-func probationConnection(t *testing.T, start time.Time) (*adaptiveConn, *hy2GlobalHealth, adaptiveSettings) {
+func probationConnection(t *testing.T, start time.Time) (*adaptiveConn, *primaryCarrierHealth, adaptiveSettings) {
 	t.Helper()
 	settings := defaultAdaptiveSettings()
-	health := &hy2GlobalHealth{}
+	health := &primaryCarrierHealth{}
 	health.noteFallback(start, settings, false)
 	selection := health.selectCarrier(start.Add(settings.Cooldown))
-	if selection.carrier != carrierHy2 || !selection.probation {
-		t.Fatalf("expected Hy2 probation selection, got %+v", selection)
+	if selection.carrier != carrierPrimary || !selection.probation {
+		t.Fatalf("expected Primary probation selection, got %+v", selection)
 	}
 	conn := newAdaptiveConn(true, settings, health, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 	conn.probation = true
 	return conn, health, settings
 }
 
-func TestProbationRequiresHy2UsefulBytesAndActiveWindows(t *testing.T) {
+func TestProbationRequiresPrimaryUsefulBytesAndActiveWindows(t *testing.T) {
 	start := time.Unix(5000, 0)
 	conn, health, settings := probationConnection(t, start)
 	for second := 0; second <= 20; second++ {
 		if conn.observeCanary(start.Add(time.Duration(second)*time.Second), adaptiveDecision{State: adaptiveHealthy, Demand: true}) {
-			t.Fatal("zero Hy2 useful bytes became successful probation")
+			t.Fatal("zero Primary useful bytes became successful probation")
 		}
 	}
-	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierSnell {
+	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierFallback {
 		t.Fatalf("zero-useful canary released global owner unexpectedly: %+v", next)
 	}
 
@@ -327,12 +327,12 @@ func TestProbationRequiresHy2UsefulBytesAndActiveWindows(t *testing.T) {
 			t.Fatal("below-minimum useful canary became successful probation")
 		}
 	}
-	if next := health.selectCarrier(start.Add(121 * time.Second)); next.carrier != carrierSnell {
+	if next := health.selectCarrier(start.Add(121 * time.Second)); next.carrier != carrierFallback {
 		t.Fatalf("below-minimum canary released global owner unexpectedly: %+v", next)
 	}
 }
 
-func TestProbationRecoveryRequiresRealHy2Traffic(t *testing.T) {
+func TestProbationRecoveryRequiresRealPrimaryTraffic(t *testing.T) {
 	start := time.Unix(6000, 0)
 	conn, health, settings := probationConnection(t, start)
 	recovered := false
@@ -347,18 +347,18 @@ func TestProbationRecoveryRequiresRealHy2Traffic(t *testing.T) {
 		}
 	}
 	if !recovered || conn.probation {
-		t.Fatalf("real Hy2 useful traffic did not complete probation: recovered=%v probation=%v", recovered, conn.probation)
+		t.Fatalf("real Primary useful traffic did not complete probation: recovered=%v probation=%v", recovered, conn.probation)
 	}
 	health.noteRecovery()
-	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierHy2 || next.probation {
-		t.Fatalf("successful canary did not restore available Hy2: %+v", next)
+	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierPrimary || next.probation {
+		t.Fatalf("successful canary did not restore available Primary: %+v", next)
 	}
 }
 
 func TestAdaptiveSingleProbationCanaryWith100ConcurrentSessions(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	start := time.Unix(7000, 0)
-	health := hy2GlobalHealth{}
+	health := primaryCarrierHealth{}
 	health.noteFallback(start, settings, false)
 	var wg sync.WaitGroup
 	results := make(chan adaptiveSelection, 100)
@@ -373,32 +373,32 @@ func TestAdaptiveSingleProbationCanaryWith100ConcurrentSessions(t *testing.T) {
 	close(results)
 	canaries := 0
 	for result := range results {
-		if result.carrier == carrierHy2 && result.probation {
+		if result.carrier == carrierPrimary && result.probation {
 			canaries++
-		} else if result.carrier != carrierSnell {
+		} else if result.carrier != carrierFallback {
 			t.Fatalf("non-owner selected unexpected carrier: %+v", result)
 		}
 	}
 	if canaries != 1 {
-		t.Fatalf("got %d concurrent Hy2 canaries, want exactly one", canaries)
+		t.Fatalf("got %d concurrent Primary canaries, want exactly one", canaries)
 	}
 }
 
 func TestAdaptiveProbationFailureBacksOffAndNormalCloseReleasesOwner(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	start := time.Unix(8000, 0)
-	health := hy2GlobalHealth{}
+	health := primaryCarrierHealth{}
 	health.noteFallback(start, settings, false)
 	canary := health.selectCarrier(start.Add(settings.Cooldown))
-	if canary.carrier != carrierHy2 || !canary.probation {
+	if canary.carrier != carrierPrimary || !canary.probation {
 		t.Fatalf("expected probation canary, got %+v", canary)
 	}
 	health.releaseProbation()
-	if next := health.selectCarrier(start.Add(settings.Cooldown)); next.carrier != carrierHy2 || !next.probation {
+	if next := health.selectCarrier(start.Add(settings.Cooldown)); next.carrier != carrierPrimary || !next.probation {
 		t.Fatalf("normal close did not release canary owner: %+v", next)
 	}
 	health.noteFallback(start.Add(settings.Cooldown), settings, true)
-	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierSnell {
+	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Second)); next.carrier != carrierFallback {
 		t.Fatalf("probation failure did not re-enter cooldown: %+v", next)
 	}
 	if got := health.cooldownPenalty; got != 180*time.Second {
@@ -428,22 +428,22 @@ func TestAdaptiveCarrierSwitchKeepsLogicalCoreAndPayload(t *testing.T) {
 	}
 
 	settings := defaultAdaptiveSettings()
-	health := &hy2GlobalHealth{}
+	health := &primaryCarrierHealth{}
 	adaptive := newAdaptiveConn(true, settings, health, leftCore)
 	adaptive.selected = true
-	adaptive.carrier = carrierHy2
+	adaptive.carrier = carrierPrimary
 	var fallbacks atomic.Int32
 	adaptive.onFallback = func(string, bool, bool) {
 		fallbacks.Add(1)
-		if !leftCore.replaceLeg(1, errors.New("fake Hy2 degradation")) {
+		if !leftCore.replaceLeg(1, errors.New("fake Primary degradation")) {
 			t.Error("left leg1 was not replaced")
 		}
-		_ = rightCore.replaceLeg(1, errors.New("fake Hy2 degradation"))
+		_ = rightCore.replaceLeg(1, errors.New("fake Primary degradation"))
 	}
-	if !adaptive.switchToSnell("fake_hy2_degradation", true) {
+	if !adaptive.switchToFallback("fake_primary_degradation", true) {
 		t.Fatal("adaptive carrier did not switch")
 	}
-	if adaptive.currentCarrier() != carrierSnell || fallbacks.Load() != 1 {
+	if adaptive.currentCarrier() != carrierFallback || fallbacks.Load() != 1 {
 		t.Fatalf("unexpected fallback state: carrier=%s callbacks=%d", adaptive.currentCarrier(), fallbacks.Load())
 	}
 	if leftCore.hasLeg(1) || !leftCore.hasLeg(0) || rightCore.hasLeg(1) {
@@ -482,19 +482,19 @@ func TestAdaptiveCarrierSwitchKeepsLogicalCoreAndPayload(t *testing.T) {
 
 func TestAdaptiveCooldownUsesBackoffAndRecovery(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	health := hy2GlobalHealth{}
+	health := primaryCarrierHealth{}
 	start := time.Unix(9000, 0)
 	if got := health.noteFallback(start, settings, false); got != 90*time.Second {
 		t.Fatalf("first cooldown=%s, want 90s", got)
 	}
-	if got := health.selectCarrier(start.Add(time.Second)).carrier; got != carrierSnell {
-		t.Fatalf("cooldown selected %s, want snell", got)
+	if got := health.selectCarrier(start.Add(time.Second)).carrier; got != carrierFallback {
+		t.Fatalf("cooldown selected %s, want fallback", got)
 	}
 	if got := health.noteFallback(start.Add(90*time.Second), settings, true); got != 180*time.Second {
 		t.Fatalf("second cooldown=%s, want 180s", got)
 	}
 	health.noteRecovery()
-	if got := health.selectCarrier(start.Add(1000 * time.Second)).carrier; got != carrierHy2 {
+	if got := health.selectCarrier(start.Add(1000 * time.Second)).carrier; got != carrierPrimary {
 		t.Fatalf("recovered health selected %s, want hysteria2", got)
 	}
 }
@@ -583,11 +583,11 @@ func TestInitialFailureBurstOnlyAdvancesCooldownOnce(t *testing.T) {
 	settings.InitialFailureThreshold = 3
 	settings.InitialFailureWindow = 30 * time.Second
 	start := time.Unix(11000, 0)
-	health := hy2GlobalHealth{}
+	health := primaryCarrierHealth{}
 	for i := 0; i < 5; i++ {
 		health.noteInitialFailure(start.Add(time.Duration(i)*time.Millisecond), settings)
 	}
-	if health.state != hy2Cooldown {
+	if health.state != primaryCooldown {
 		t.Fatalf("failure burst did not enter cooldown: state=%v", health.state)
 	}
 	if health.cooldownPenalty != settings.Cooldown {
@@ -598,24 +598,24 @@ func TestInitialFailureBurstOnlyAdvancesCooldownOnce(t *testing.T) {
 	}
 }
 
-func TestActiveSuccessRequiresContinuousRealHy2Contribution(t *testing.T) {
+func TestActiveSuccessRequiresContinuousRealPrimaryContribution(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	settings.Warmup = 0
 	settings.RecoveryStableWindow = 3 * time.Second
 	settings.MinCanaryUsefulBytes = 1 << 20
 	settings.MinCanaryActiveWindows = 3
 	start := time.Unix(12000, 0)
-	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
+	conn := newAdaptiveConn(true, settings, &primaryCarrierHealth{}, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 
 	for second := 0; second <= 5; second++ {
 		if conn.observeActiveSuccess(start.Add(time.Duration(second)*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Demand: true}) {
-			t.Fatalf("leg0-only logical demand cleared Hy2 failure history at second %d", second)
+			t.Fatalf("leg0-only logical demand cleared Primary failure history at second %d", second)
 		}
 	}
 	if conn.activeSuccessSeen {
-		t.Fatal("active success was recorded without Hy2 useful contribution")
+		t.Fatal("active success was recorded without Primary useful contribution")
 	}
 
 	if conn.observeActiveSuccess(start.Add(10*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
@@ -628,15 +628,15 @@ func TestActiveSuccessRequiresContinuousRealHy2Contribution(t *testing.T) {
 		t.Fatal("active success recorded before stable duration")
 	}
 	if !conn.observeActiveSuccess(start.Add(13*time.Second), start, adaptiveDecision{State: adaptiveHealthy, Leg1RxUsefulBytes: 512 * 1024}) {
-		t.Fatal("continuous real Hy2 contribution did not record active success")
+		t.Fatal("continuous real Primary contribution did not record active success")
 	}
 }
 
-func TestShortSessionEOFWithoutHy2ContributionIsNotCarrierFailure(t *testing.T) {
+func TestShortSessionEOFWithoutPrimaryContributionIsNotCarrierFailure(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
+	conn := newAdaptiveConn(true, settings, &primaryCarrierHealth{}, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 	conn.legReadyRxUseful = 0
 	conn.legReadyTxUseful = 0
 	stats := coreStats{
@@ -646,16 +646,16 @@ func TestShortSessionEOFWithoutHy2ContributionIsNotCarrierFailure(t *testing.T) 
 		RxPendingFrames:   0,
 		OutstandingFrames: 0,
 	}
-	if conn.shouldRecordCarrierFailure(errors.New("snell: server error 101: Remote EOF"), stats, true) {
-		t.Fatal("small healthy logical session EOF was misclassified as Hy2 carrier failure")
+	if conn.shouldRecordCarrierFailure(errors.New("fallback: server error 101: Remote EOF"), stats, true) {
+		t.Fatal("small healthy logical session EOF was misclassified as Primary carrier failure")
 	}
 }
 
 func TestLargeUnpressuredZeroUsefulEOFFirstOccurrenceIsAmbiguous(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
+	conn := newAdaptiveConn(true, settings, &primaryCarrierHealth{}, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 	stats := coreStats{
 		LegUp:            [2]bool{true, false},
 		RxDeliveredBytes: 64 * settings.MinCanaryUsefulBytes,
@@ -668,10 +668,10 @@ func TestLargeUnpressuredZeroUsefulEOFFirstOccurrenceIsAmbiguous(t *testing.T) {
 
 func TestRepeatedAmbiguousEOFOnSameLiveSessionFallsBack(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	health := &hy2GlobalHealth{}
+	health := &primaryCarrierHealth{}
 	conn := newAdaptiveConn(true, settings, health, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 	var fallbackReason string
 	conn.onFallback = func(reason string, cooldown bool, probation bool) {
 		fallbackReason = reason
@@ -693,11 +693,11 @@ func TestRepeatedAmbiguousEOFOnSameLiveSessionFallsBack(t *testing.T) {
 	}
 }
 
-func TestEOFWithUsefulHy2ContributionCountsAsCarrierFailure(t *testing.T) {
+func TestEOFWithUsefulPrimaryContributionCountsAsCarrierFailure(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
+	conn := newAdaptiveConn(true, settings, &primaryCarrierHealth{}, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 	conn.legReadyRxUseful = 100
 	conn.legReadyTxUseful = 200
 	stats := coreStats{
@@ -710,15 +710,15 @@ func TestEOFWithUsefulHy2ContributionCountsAsCarrierFailure(t *testing.T) {
 		RxPendingFrames:    0,
 	}
 	if !conn.shouldRecordCarrierFailure(io.EOF, stats, true) {
-		t.Fatal("EOF after real Hy2 useful contribution was ignored")
+		t.Fatal("EOF after real Primary useful contribution was ignored")
 	}
 }
 
 func TestEOFUnderLogicalPressureCountsAsCarrierFailure(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	conn := newAdaptiveConn(true, settings, &hy2GlobalHealth{}, nil)
+	conn := newAdaptiveConn(true, settings, &primaryCarrierHealth{}, nil)
 	conn.selected = true
-	conn.carrier = carrierHy2
+	conn.carrier = carrierPrimary
 	now := time.Now()
 	stats := coreStats{
 		LegUp:             [2]bool{true, false},
@@ -733,7 +733,7 @@ func TestEOFUnderLogicalPressureCountsAsCarrierFailure(t *testing.T) {
 func TestConcurrentEstablishedFallbackBurstKeepsSingleCooldownPenalty(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	start := time.Unix(13000, 0)
-	health := hy2GlobalHealth{}
+	health := primaryCarrierHealth{}
 	if got := health.noteFallback(start, settings, false); got != settings.Cooldown {
 		t.Fatalf("first established failure cooldown=%s want=%s", got, settings.Cooldown)
 	}
@@ -751,7 +751,7 @@ func TestConcurrentEstablishedFallbackBurstKeepsSingleCooldownPenalty(t *testing
 	}
 
 	selection := health.selectCarrier(firstUntil)
-	if selection.carrier != carrierHy2 || !selection.probation {
+	if selection.carrier != carrierPrimary || !selection.probation {
 		t.Fatalf("expected single probation canary after cooldown, got %+v", selection)
 	}
 	if got := health.noteFallback(firstUntil.Add(time.Second), settings, true); got != 2*settings.Cooldown {
@@ -759,13 +759,13 @@ func TestConcurrentEstablishedFallbackBurstKeepsSingleCooldownPenalty(t *testing
 	}
 }
 
-func TestHundredShortSessionEOFsDoNotPoisonGlobalHy2Health(t *testing.T) {
+func TestHundredShortSessionEOFsDoNotPoisonGlobalPrimaryHealth(t *testing.T) {
 	settings := defaultAdaptiveSettings()
-	health := &hy2GlobalHealth{}
+	health := &primaryCarrierHealth{}
 	for i := 0; i < 100; i++ {
 		conn := newAdaptiveConn(true, settings, health, nil)
 		conn.selected = true
-		conn.carrier = carrierHy2
+		conn.carrier = carrierPrimary
 		stats := coreStats{
 			LegUp:            [2]bool{true, false},
 			RxDeliveredBytes: uint64(i+1) * 1024,
@@ -775,14 +775,14 @@ func TestHundredShortSessionEOFsDoNotPoisonGlobalHy2Health(t *testing.T) {
 			t.Fatalf("short session %d was misclassified as carrier failure", i)
 		}
 	}
-	if health.state != hy2Available || health.cooldownPenalty != 0 || len(health.initialFailures) != 0 {
-		t.Fatalf("short-session EOF burst poisoned global Hy2 health: state=%v penalty=%s failures=%d", health.state, health.cooldownPenalty, len(health.initialFailures))
+	if health.state != primaryAvailable || health.cooldownPenalty != 0 || len(health.initialFailures) != 0 {
+		t.Fatalf("short-session EOF burst poisoned global Primary health: state=%v penalty=%s failures=%d", health.state, health.cooldownPenalty, len(health.initialFailures))
 	}
 }
 
 func TestAdaptiveCarrierReplacementErrorPreservesCarrier(t *testing.T) {
-	err := &adaptiveCarrierReplacementError{from: carrierHy2, reason: "tx_ack_stall"}
-	if err.from != carrierHy2 {
+	err := &adaptiveCarrierReplacementError{from: carrierPrimary, reason: "tx_ack_stall"}
+	if err.from != carrierPrimary {
 		t.Fatalf("replacement error lost original carrier: %v", err.from)
 	}
 	if got := err.Error(); got != "multipath adaptive carrier replacement: tx_ack_stall" {
@@ -795,21 +795,21 @@ func TestUDPStyleProbationNeedsUsefulTrafficAndThenRecovers(t *testing.T) {
 	settings.Cooldown = 50 * time.Millisecond
 	settings.MaxCooldown = 200 * time.Millisecond
 	start := time.Unix(20000, 0)
-	var health hy2GlobalHealth
+	var health primaryCarrierHealth
 	health.noteFallback(start, settings, false)
 	conn := newAdaptiveConn(true, settings, &health, nil)
 	conn.onRecovery = health.noteRecovery
-	if carrier := conn.carrierForLeg1(start.Add(settings.Cooldown)); carrier != carrierHy2 {
-		t.Fatalf("expected Hy2 probation carrier, got %v", carrier)
+	if carrier := conn.carrierForLeg1(start.Add(settings.Cooldown)); carrier != carrierPrimary {
+		t.Fatalf("expected Primary probation carrier, got %v", carrier)
 	}
-	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Millisecond)); next.carrier != carrierSnell {
+	if next := health.selectCarrier(start.Add(settings.Cooldown + time.Millisecond)); next.carrier != carrierFallback {
 		t.Fatalf("probation was cleared by dial/HELLO selection alone: %+v", next)
 	}
 	if !conn.completeProbationRecovery() {
 		t.Fatal("useful UDP probation traffic did not complete recovery")
 	}
-	if next := health.selectCarrier(start.Add(settings.Cooldown + 2*time.Millisecond)); next.carrier != carrierHy2 || next.probation {
-		t.Fatalf("useful UDP probation traffic did not restore global Hy2 health: %+v", next)
+	if next := health.selectCarrier(start.Add(settings.Cooldown + 2*time.Millisecond)); next.carrier != carrierPrimary || next.probation {
+		t.Fatalf("useful UDP probation traffic did not restore global Primary health: %+v", next)
 	}
 }
 
@@ -818,73 +818,94 @@ func TestUDPStyleUnusedProbationReleasesGlobalCanarySlot(t *testing.T) {
 	settings.Cooldown = 50 * time.Millisecond
 	settings.MaxCooldown = 200 * time.Millisecond
 	start := time.Unix(21000, 0)
-	var health hy2GlobalHealth
+	var health primaryCarrierHealth
 	health.noteFallback(start, settings, false)
 	conn := newAdaptiveConn(true, settings, &health, nil)
 	conn.onProbationRelease = health.releaseProbation
-	if carrier := conn.carrierForLeg1(start.Add(settings.Cooldown)); carrier != carrierHy2 {
-		t.Fatalf("expected Hy2 probation carrier, got %v", carrier)
+	if carrier := conn.carrierForLeg1(start.Add(settings.Cooldown)); carrier != carrierPrimary {
+		t.Fatalf("expected Primary probation carrier, got %v", carrier)
 	}
 	conn.releaseUnusedProbation()
 	selection := health.selectCarrier(start.Add(settings.Cooldown + time.Millisecond))
-	if selection.carrier != carrierHy2 || !selection.probation {
+	if selection.carrier != carrierPrimary || !selection.probation {
 		t.Fatalf("unused UDP probation did not release the global canary slot: %+v", selection)
 	}
 	health.releaseProbation()
 }
 
-func TestUDPStyleEstablishedHy2FailuresEnterSnellCooldown(t *testing.T) {
+func TestUDPStyleEstablishedPrimaryFailuresEnterFallbackCooldown(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	settings.HardFailureThreshold = 2
 	settings.HardFailureWindow = time.Second
 	settings.Cooldown = 90 * time.Millisecond
 	settings.MaxCooldown = 500 * time.Millisecond
 	start := time.Now()
-	var health hy2GlobalHealth
+	var health primaryCarrierHealth
 	conn := newAdaptiveConn(true, settings, &health, nil)
 	conn.onFallback = func(_ string, cooldown bool, probation bool) {
 		if cooldown || probation {
 			health.noteFallback(time.Now(), settings, probation)
 		}
 	}
-	if carrier := conn.carrierForLeg1(start); carrier != carrierHy2 {
-		t.Fatalf("expected initial Hy2 carrier, got %v", carrier)
+	if carrier := conn.carrierForLeg1(start); carrier != carrierPrimary {
+		t.Fatalf("expected initial Primary carrier, got %v", carrier)
 	}
-	if conn.recordCarrierFailure(true) {
-		t.Fatal("single established Hy2 failure triggered hard fallback")
+	if conn.recordPrimaryFailure(true) {
+		t.Fatal("single established Primary failure triggered hard fallback")
 	}
-	if !conn.recordCarrierFailure(true) {
-		t.Fatal("repeated established Hy2 failures did not trigger fallback")
+	if !conn.recordPrimaryFailure(true) {
+		t.Fatal("repeated established Primary failures did not trigger fallback")
 	}
-	if conn.currentCarrier() != carrierSnell {
-		t.Fatalf("UDP logical session did not switch to Snell: %v", conn.currentCarrier())
+	if conn.currentCarrier() != carrierFallback {
+		t.Fatalf("UDP logical session did not switch to Fallback: %v", conn.currentCarrier())
 	}
 	if !health.cooldownActive(time.Now()) {
-		t.Fatal("UDP carrier failure did not open global Hy2 cooldown")
+		t.Fatal("UDP carrier failure did not open global Primary cooldown")
 	}
 }
 
-func TestUDPStyleInitialHy2FailureFallsBackLocally(t *testing.T) {
+func TestUDPStyleInitialPrimaryFailureFallsBackLocally(t *testing.T) {
 	settings := defaultAdaptiveSettings()
 	settings.InitialFailureThreshold = 3
 	settings.InitialFailureWindow = time.Second
-	var health hy2GlobalHealth
+	var health primaryCarrierHealth
 	conn := newAdaptiveConn(true, settings, &health, nil)
 	conn.onFallback = func(_ string, cooldown bool, probation bool) {
 		if cooldown || probation {
 			health.noteFallback(time.Now(), settings, probation)
 		}
 	}
-	if carrier := conn.carrierForLeg1(time.Now()); carrier != carrierHy2 {
-		t.Fatalf("expected initial Hy2 carrier, got %v", carrier)
+	if carrier := conn.carrierForLeg1(time.Now()); carrier != carrierPrimary {
+		t.Fatalf("expected initial Primary carrier, got %v", carrier)
 	}
-	if !conn.recordCarrierFailure(false) {
-		t.Fatal("failed initial Hy2 carrier did not switch this UDP flow to Snell")
+	if !conn.recordPrimaryFailure(false) {
+		t.Fatal("failed initial Primary carrier did not switch this UDP flow to Fallback")
 	}
-	if conn.currentCarrier() != carrierSnell {
-		t.Fatalf("initial UDP carrier failure did not select Snell: %v", conn.currentCarrier())
+	if conn.currentCarrier() != carrierFallback {
+		t.Fatalf("initial UDP carrier failure did not select Fallback: %v", conn.currentCarrier())
 	}
 	if health.cooldownActive(time.Now()) {
 		t.Fatal("one initial failure should not poison global health before threshold")
+	}
+}
+
+func TestAdaptiveUsesGenericPrimaryFallbackRoles(t *testing.T) {
+	settings := defaultAdaptiveSettings()
+	start := time.Unix(22000, 0)
+	health := primaryCarrierHealth{}
+	if selection := health.selectCarrier(start); selection.carrier != carrierPrimary || selection.probation {
+		t.Fatalf("expected healthy primary role, got %+v", selection)
+	}
+
+	conn := newAdaptiveConn(true, settings, &health, nil)
+	conn.selected = true
+	conn.carrier = carrierPrimary
+	var fallbackCalls atomic.Int32
+	conn.onFallback = func(string, bool, bool) { fallbackCalls.Add(1) }
+	if !conn.switchToFallback("primary_failure", true) {
+		t.Fatal("primary failure did not switch to fallback role")
+	}
+	if conn.currentCarrier() != carrierFallback || fallbackCalls.Load() != 1 {
+		t.Fatalf("unexpected generic fallback state: role=%v callbacks=%d", conn.currentCarrier(), fallbackCalls.Load())
 	}
 }

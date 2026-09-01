@@ -1,6 +1,6 @@
-# SMP3 2.0.1 部署与使用教程
+# SMP3 2.1.0 部署与使用教程
 
-本教程针对独立 SMP3 产品及其 2.0.1 installer 层。服务端不需要 sing-box，使用
+本教程针对独立 SMP3 产品及其 2.1.0 carrier-agnostic adapter release。服务端不需要 sing-box，使用
 `smp3-server` 运行 canonical SMP3 Core 的 standalone server。sing-box
 只是可选的兼容 client，另一个 client 集成是 Mihomo custom core。
 
@@ -10,20 +10,22 @@
 应用
   ↓ SOCKS5 / mixed proxy
 Mihomo custom core 或可选 sing-box client
-  ↓ 两条可靠 child carrier
-Snell / Hysteria2 / direct carrier 终止端
+  ↓ 两条支持可靠 TCP dial 的 child carrier
+已配置的 carrier 终止端（Snell / Hysteria2 / VLESS / Trojan / direct）
   ↓ 私有 SMP3 listener
 standalone SMP3 server（:24444）
   ↓
 Internet destination
 ```
 
-standalone server 只处理 SMP3，不负责终止 Snell/Hysteria2；两条 child
-carrier 最终必须到达同一个 SMP3 listener。
+standalone server 只处理 SMP3，不负责终止任何 child carrier 协议；两条 child
+carrier 最终必须到达同一个 SMP3 listener。SMP3 不要求特定代理协议，只要 child
+outbound 提供所需的可靠 TCP dial capability 即可。IPv4/IPv6 选择继续交给 child
+outbound；实际可达性取决于 host outbound。
 
 ## 2. 下载与校验
 
-从 [v2.0.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.0.1)
+从 [v2.1.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.0)
 下载：
 
 - 服务端：`smp3-server-linux-amd64` 或 Windows 版本；

@@ -8,18 +8,18 @@ import (
 	"time"
 )
 
-type leg1Carrier uint8
+type carrierRole uint8
 
 const (
-	carrierHy2 leg1Carrier = iota
-	carrierSnell
+	carrierPrimary carrierRole = iota
+	carrierFallback
 )
 
-func (c leg1Carrier) String() string {
-	if c == carrierSnell {
-		return "snell"
+func (c carrierRole) String() string {
+	if c == carrierFallback {
+		return "fallback"
 	}
-	return "hysteria2"
+	return "primary"
 }
 
 // adaptiveCarrierReplacementError preserves the carrier being intentionally
@@ -27,7 +27,7 @@ func (c leg1Carrier) String() string {
 // reading currentCarrier() from the later OnLegDown callback would otherwise
 // misattribute the old carrier's teardown to the newly-selected carrier.
 type adaptiveCarrierReplacementError struct {
-	from   leg1Carrier
+	from   carrierRole
 	reason string
 }
 
@@ -138,7 +138,7 @@ type adaptiveController struct {
 }
 
 type adaptiveSelection struct {
-	carrier   leg1Carrier
+	carrier   carrierRole
 	probation bool
 }
 
@@ -146,18 +146,18 @@ type adaptiveConn struct {
 	mu       sync.Mutex
 	enabled  bool
 	settings adaptiveSettings
-	global   *hy2GlobalHealth
+	global   *primaryCarrierHealth
 	core     *mpCore
 
 	selected  bool
-	carrier   leg1Carrier
+	carrier   carrierRole
 	probation bool
 	state     adaptiveState
 	readyAt   time.Time
 	ctrl      *adaptiveController
 	running   bool
 
-	hy2FailureTimes      []time.Time
+	primaryFailureTimes  []time.Time
 	healthyActiveFrom    time.Time
 	recoveryReported     bool
 	activeSuccessSeen    bool
@@ -171,7 +171,7 @@ type adaptiveConn struct {
 	legReadyTxUseful     uint64
 	ambiguousEOFFailures uint32
 
-	onSelected         func(leg1Carrier, bool)
+	onSelected         func(carrierRole, bool)
 	onHealth           func(adaptiveDecision, coreStats)
 	onFallback         func(reason string, cooldown bool, probation bool)
 	onRecovery         func()
@@ -179,7 +179,7 @@ type adaptiveConn struct {
 	onProbationRelease func()
 }
 
-func newAdaptiveConn(enabled bool, settings adaptiveSettings, global *hy2GlobalHealth, core *mpCore) *adaptiveConn {
+func newAdaptiveConn(enabled bool, settings adaptiveSettings, global *primaryCarrierHealth, core *mpCore) *adaptiveConn {
 	return &adaptiveConn{
 		enabled:  enabled,
 		settings: settings,
@@ -189,14 +189,14 @@ func newAdaptiveConn(enabled bool, settings adaptiveSettings, global *hy2GlobalH
 	}
 }
 
-func (s *adaptiveConn) carrierForLeg1(now time.Time) leg1Carrier {
+func (s *adaptiveConn) carrierForLeg1(now time.Time) carrierRole {
 	s.mu.Lock()
 	if s.selected {
 		carrier := s.carrier
 		s.mu.Unlock()
 		return carrier
 	}
-	selection := adaptiveSelection{carrier: carrierHy2}
+	selection := adaptiveSelection{carrier: carrierPrimary}
 	if s.enabled {
 		selection = s.global.selectCarrier(now)
 	}
@@ -211,7 +211,7 @@ func (s *adaptiveConn) carrierForLeg1(now time.Time) leg1Carrier {
 	return selection.carrier
 }
 
-func (s *adaptiveConn) currentCarrier() leg1Carrier {
+func (s *adaptiveConn) currentCarrier() carrierRole {
 	s.mu.Lock()
 	carrier := s.carrier
 	s.mu.Unlock()
@@ -220,7 +220,7 @@ func (s *adaptiveConn) currentCarrier() leg1Carrier {
 
 func (s *adaptiveConn) completeProbationRecovery() bool {
 	s.mu.Lock()
-	if !s.enabled || s.carrier != carrierHy2 || !s.probation {
+	if !s.enabled || s.carrier != carrierPrimary || !s.probation {
 		s.mu.Unlock()
 		return false
 	}
@@ -237,7 +237,7 @@ func (s *adaptiveConn) completeProbationRecovery() bool {
 
 func (s *adaptiveConn) releaseUnusedProbation() {
 	s.mu.Lock()
-	if !s.enabled || s.carrier != carrierHy2 || !s.probation {
+	if !s.enabled || s.carrier != carrierPrimary || !s.probation {
 		s.mu.Unlock()
 		return
 	}
@@ -271,7 +271,7 @@ func (s *adaptiveConn) markLegReady() {
 	s.mu.Lock()
 	s.legReadyRxUseful = stats.RxUniqueBytesByLeg[1]
 	s.legReadyTxUseful = stats.TxAckedUsefulByLeg[1]
-	if !s.enabled || s.carrier != carrierHy2 || s.ctrl != nil {
+	if !s.enabled || s.carrier != carrierPrimary || s.ctrl != nil {
 		s.mu.Unlock()
 		return
 	}
@@ -307,7 +307,7 @@ func isEOFLikeCarrierError(err error) bool {
 	return strings.Contains(message, "eof")
 }
 
-// shouldRecordCarrierFailure distinguishes an actual Hy2 carrier failure from
+// shouldRecordCarrierFailure distinguishes an actual primary carrier carrier failure from
 // the common secondary-leg teardown race at the end of a short logical TCP
 // session. SMP3 v4 has no explicit server-side JOIN acknowledgement, so a local
 // writeHello/addLeg success only proves that the carrier accepted bytes; the
@@ -318,7 +318,7 @@ func isEOFLikeCarrierError(err error) bool {
 // while leg0 is healthy and the logical stream is unpressured. The first such
 // EOF does not poison global health. If useful demand persists, the health loop
 // repairs leg1; repeated zero-useful EOFs on that same logical session are then
-// strong evidence of a real carrier problem. Useful Hy2 contribution, logical
+// strong evidence of a real carrier problem. Useful primary carrier contribution, logical
 // pressure, or simultaneous leg0 loss make an EOF immediately actionable.
 func (s *adaptiveConn) shouldRecordCarrierFailure(err error, stats coreStats, legWasReady bool) bool {
 	if !isEOFLikeCarrierError(err) {
@@ -351,11 +351,11 @@ func (s *adaptiveConn) shouldRecordCarrierFailure(err error, stats coreStats, le
 // session. A second occurrence is meaningful because ambiguous EOFs do not
 // trigger immediate repair: another attempt only happens after the health loop
 // observes continuing useful demand. This prevents a burst of unrelated short
-// HTTP/TLS sessions from poisoning global Hy2 health while still detecting a
+// HTTP/TLS sessions from poisoning global primary carrier health while still detecting a
 // carrier that repeatedly accepts and drops a live long-running session.
 func (s *adaptiveConn) noteAmbiguousCarrierEOF() bool {
 	s.mu.Lock()
-	if !s.enabled || s.carrier != carrierHy2 {
+	if !s.enabled || s.carrier != carrierPrimary {
 		s.mu.Unlock()
 		return false
 	}
@@ -367,14 +367,14 @@ func (s *adaptiveConn) noteAmbiguousCarrierEOF() bool {
 		threshold = 2
 	}
 	if count >= threshold {
-		return s.switchToSnell("repeated_zero_useful_eof", true)
+		return s.switchToFallback("repeated_zero_useful_eof", true)
 	}
 	return false
 }
 
-func (s *adaptiveConn) recordCarrierFailure(established bool) bool {
+func (s *adaptiveConn) recordPrimaryFailure(established bool) bool {
 	s.mu.Lock()
-	if !s.enabled || s.carrier != carrierHy2 {
+	if !s.enabled || s.carrier != carrierPrimary {
 		s.mu.Unlock()
 		return false
 	}
@@ -383,41 +383,41 @@ func (s *adaptiveConn) recordCarrierFailure(established bool) bool {
 	if !established || probation {
 		s.mu.Unlock()
 		if probation {
-			return s.switchToSnell("probation_carrier_failure", true)
+			return s.switchToFallback("probation_carrier_failure", true)
 		}
 		if s.global != nil {
 			// The global manager owns the threshold transition. The callback only
-			// switches this logical connection to Snell and must not double the
+			// switches this logical connection to fallback carrier and must not double the
 			// newly-created cooldown penalty.
 			s.global.noteInitialFailure(now, s.settings)
 		}
-		return s.switchToSnell("initial_carrier_failure", false)
+		return s.switchToFallback("initial_carrier_failure", false)
 	}
 	cutoff := now.Add(-s.settings.HardFailureWindow)
-	kept := s.hy2FailureTimes[:0]
-	for _, failureAt := range s.hy2FailureTimes {
+	kept := s.primaryFailureTimes[:0]
+	for _, failureAt := range s.primaryFailureTimes {
 		if !failureAt.Before(cutoff) {
 			kept = append(kept, failureAt)
 		}
 	}
-	s.hy2FailureTimes = append(kept, now)
-	count := len(s.hy2FailureTimes)
+	s.primaryFailureTimes = append(kept, now)
+	count := len(s.primaryFailureTimes)
 	threshold := int(s.settings.HardFailureThreshold)
 	s.mu.Unlock()
 	if count >= threshold {
-		return s.switchToSnell("repeated_carrier_failure", true)
+		return s.switchToFallback("repeated_carrier_failure", true)
 	}
 	return false
 }
 
-func (s *adaptiveConn) switchToSnell(reason string, cooldown bool) bool {
+func (s *adaptiveConn) switchToFallback(reason string, cooldown bool) bool {
 	s.mu.Lock()
-	if !s.enabled || s.carrier != carrierHy2 {
+	if !s.enabled || s.carrier != carrierPrimary {
 		s.mu.Unlock()
 		return false
 	}
 	probation := s.probation
-	s.carrier = carrierSnell
+	s.carrier = carrierFallback
 	s.probation = false
 	s.state = adaptiveFallback
 	s.ctrl = nil
@@ -446,7 +446,7 @@ func (s *adaptiveConn) continuityGrace() time.Duration {
 // intentionally separate from dial/handshake success: recovery requires real
 // leg1 useful bytes, not merely logical demand carried by leg0. Idle gaps longer
 // than continuityGrace reset the stable window so wall-clock idle time cannot
-// make a weak/unused Hy2 canary look recovered.
+// make a weak/unused primary carrier canary look recovered.
 func (s *adaptiveConn) observeCanary(now time.Time, decision adaptiveDecision) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -492,7 +492,7 @@ func (s *adaptiveConn) observeCanary(now time.Time, decision adaptiveDecision) b
 func (s *adaptiveConn) observeActiveSuccess(now time.Time, readyAt time.Time, decision adaptiveDecision) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.probation || s.activeSuccessSeen || s.carrier != carrierHy2 {
+	if s.probation || s.activeSuccessSeen || s.carrier != carrierPrimary {
 		return false
 	}
 	useful := decision.Leg1RxUsefulBytes + decision.Leg1TxUsefulBytes
@@ -532,7 +532,7 @@ func (s *adaptiveConn) observeActiveSuccess(now time.Time, readyAt time.Time, de
 
 func (s *adaptiveConn) finishProbation(core *mpCore) {
 	s.mu.Lock()
-	probation := s.probation && !s.recoveryReported && s.carrier == carrierHy2
+	probation := s.probation && !s.recoveryReported && s.carrier == carrierPrimary
 	onRelease := s.onProbationRelease
 	s.mu.Unlock()
 	if !probation || s.global == nil {
@@ -568,7 +568,7 @@ func (s *adaptiveConn) healthLoop(core *mpCore) {
 			}
 			stats := core.snapshotStats()
 			s.mu.Lock()
-			if s.carrier != carrierHy2 || s.ctrl == nil {
+			if s.carrier != carrierPrimary || s.ctrl == nil {
 				s.mu.Unlock()
 				return
 			}
@@ -596,7 +596,7 @@ func (s *adaptiveConn) healthLoop(core *mpCore) {
 				onHealth(decision, stats)
 			}
 			if decision.Fallback && !core.isClosing() && !core.isFinalizing() {
-				if s.switchToSnell(decision.Reason, true) {
+				if s.switchToFallback(decision.Reason, true) {
 					return
 				}
 			}
@@ -604,50 +604,50 @@ func (s *adaptiveConn) healthLoop(core *mpCore) {
 	}
 }
 
-type hy2HealthState uint8
+type primaryHealthState uint8
 
 const (
-	hy2Available hy2HealthState = iota
-	hy2Cooldown
-	hy2Probation
+	primaryAvailable primaryHealthState = iota
+	primaryCooldown
+	primaryProbation
 )
 
-type hy2GlobalHealth struct {
+type primaryCarrierHealth struct {
 	mu                sync.Mutex
-	state             hy2HealthState
+	state             primaryHealthState
 	cooldownUntil     time.Time
 	cooldownPenalty   time.Duration
 	probationInFlight bool
 	initialFailures   []time.Time
 }
 
-func (h *hy2GlobalHealth) selectCarrier(now time.Time) adaptiveSelection {
+func (h *primaryCarrierHealth) selectCarrier(now time.Time) adaptiveSelection {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.state == hy2Cooldown && now.Before(h.cooldownUntil) {
-		return adaptiveSelection{carrier: carrierSnell}
+	if h.state == primaryCooldown && now.Before(h.cooldownUntil) {
+		return adaptiveSelection{carrier: carrierFallback}
 	}
-	if h.state == hy2Cooldown {
-		h.state = hy2Probation
+	if h.state == primaryCooldown {
+		h.state = primaryProbation
 	}
-	if h.state == hy2Probation {
+	if h.state == primaryProbation {
 		if h.probationInFlight {
-			return adaptiveSelection{carrier: carrierSnell}
+			return adaptiveSelection{carrier: carrierFallback}
 		}
 		h.probationInFlight = true
-		return adaptiveSelection{carrier: carrierHy2, probation: true}
+		return adaptiveSelection{carrier: carrierPrimary, probation: true}
 	}
-	return adaptiveSelection{carrier: carrierHy2}
+	return adaptiveSelection{carrier: carrierPrimary}
 }
 
-func (h *hy2GlobalHealth) noteInitialFailure(now time.Time, settings adaptiveSettings) bool {
+func (h *primaryCarrierHealth) noteInitialFailure(now time.Time, settings adaptiveSettings) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	// Once one failure burst has already opened a cooldown, late failures from
 	// concurrently in-flight dials belong to the same event. They must not
 	// repeatedly double the backoff. A later probation failure is what advances
 	// the exponential penalty.
-	if h.state == hy2Cooldown {
+	if h.state == primaryCooldown {
 		return true
 	}
 	cutoff := now.Add(-settings.InitialFailureWindow)
@@ -668,27 +668,27 @@ func (h *hy2GlobalHealth) noteInitialFailure(now time.Time, settings adaptiveSet
 	return true
 }
 
-func (h *hy2GlobalHealth) noteActiveSuccess() {
+func (h *primaryCarrierHealth) noteActiveSuccess() {
 	h.mu.Lock()
 	h.initialFailures = nil
 	h.mu.Unlock()
 }
 
-func (h *hy2GlobalHealth) noteFallback(now time.Time, settings adaptiveSettings, probation bool) time.Duration {
+func (h *primaryCarrierHealth) noteFallback(now time.Time, settings adaptiveSettings, probation bool) time.Duration {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Multiple logical connections can observe the same physical Hy2 outage at
+	// Multiple logical connections can observe the same physical primary carrier outage at
 	// nearly the same time. Once the first one opens a live cooldown, residual
 	// failures from that burst must share the existing penalty instead of
 	// multiplying 90s -> 180s -> 300s. Only a later probation failure is allowed
 	// to advance the exponential backoff.
-	if h.state == hy2Cooldown && now.Before(h.cooldownUntil) && !probation {
+	if h.state == primaryCooldown && now.Before(h.cooldownUntil) && !probation {
 		return h.cooldownPenalty
 	}
 	return h.noteFallbackLocked(now, settings)
 }
 
-func (h *hy2GlobalHealth) noteFallbackLocked(now time.Time, settings adaptiveSettings) time.Duration {
+func (h *primaryCarrierHealth) noteFallbackLocked(now time.Time, settings adaptiveSettings) time.Duration {
 	penalty := settings.Cooldown
 	if h.cooldownPenalty > 0 {
 		penalty = h.cooldownPenalty * 2
@@ -698,14 +698,14 @@ func (h *hy2GlobalHealth) noteFallbackLocked(now time.Time, settings adaptiveSet
 	}
 	h.cooldownPenalty = penalty
 	h.cooldownUntil = now.Add(penalty)
-	h.state = hy2Cooldown
+	h.state = primaryCooldown
 	h.probationInFlight = false
 	return penalty
 }
 
-func (h *hy2GlobalHealth) noteRecovery() {
+func (h *primaryCarrierHealth) noteRecovery() {
 	h.mu.Lock()
-	h.state = hy2Available
+	h.state = primaryAvailable
 	h.cooldownUntil = time.Time{}
 	h.cooldownPenalty = 0
 	h.probationInFlight = false
@@ -713,18 +713,18 @@ func (h *hy2GlobalHealth) noteRecovery() {
 	h.mu.Unlock()
 }
 
-func (h *hy2GlobalHealth) releaseProbation() {
+func (h *primaryCarrierHealth) releaseProbation() {
 	h.mu.Lock()
-	if h.state == hy2Probation {
+	if h.state == primaryProbation {
 		h.probationInFlight = false
 	}
 	h.mu.Unlock()
 }
 
-func (h *hy2GlobalHealth) cooldownActive(now time.Time) bool {
+func (h *primaryCarrierHealth) cooldownActive(now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.state == hy2Cooldown && now.Before(h.cooldownUntil)
+	return h.state == primaryCooldown && now.Before(h.cooldownUntil)
 }
 
 func newAdaptiveController(settings adaptiveSettings, readyAt time.Time) *adaptiveController {
@@ -821,9 +821,9 @@ func (c *adaptiveController) observe(now time.Time, stats coreStats) adaptiveDec
 	}
 	rxPressure := stats.RxPendingFrames >= c.settings.MinRxReorder && stats.RxGapAge >= c.settings.RxGapStall
 	// SMP3 v4 has one cumulative ACK frontier. R9 requires exclusive, stable
-	// leg1 ownership before blaming Hy2: a rescue can temporarily put the same seq
+	// leg1 ownership before blaming primary carrier: a rescue can temporarily put the same seq
 	// on both carriers, and a single sampling instant can flip ownership while ACK
-	// progress is otherwise recovering. Neither case is evidence of a Hy2 fault.
+	// progress is otherwise recovering. Neither case is evidence of a primary carrier fault.
 	frontierLeg1Exclusive := stats.AckFrontierValid && !stats.AckFrontierMultiPath && stats.AckFrontierLeg == 1
 	if frontierLeg1Exclusive {
 		if c.txFrontierLeg1Since.IsZero() {

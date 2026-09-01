@@ -1,6 +1,6 @@
-# SMP3 2.0.1 installer release build and artifact note
+# SMP3 2.1.0 carrier-agnostic adapter release build and artifact note
 
-The formal `dist/` directory contains the six 2.0.1 release binaries and
+The formal `dist/` directory contains the six 2.1.0 release binaries and
 `SHA256SUMS`. They are built with explicit target settings by:
 
 ```bash
@@ -18,6 +18,6 @@ smp3-proxy-linux-amd64
 smp3-proxy-windows-amd64.exe
 ```
 
-The release is `2.0.1` and contains no runtime semantic changes. The sing
+The release is `2.1.0` and contains no runtime semantic changes. The sing
 client reports `1.14.0-beta.14-smp3-2.0.0`; the standalone server reports
 `2.0.0` because the runtime artifact is carried forward unchanged.

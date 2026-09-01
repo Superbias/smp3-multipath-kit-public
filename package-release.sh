@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-VERSION="2.0.1"
+VERSION="2.1.0"
 NAME="smp3-multipath-kit-$VERSION"
 STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
 STAGE="$STAGE_ROOT/$NAME"

@@ -85,3 +85,15 @@ func TestR11SchedulerAndDatagramOptionsParse(t *testing.T) {
 		t.Fatalf("unexpected r11 datagram config: %+v", cfg)
 	}
 }
+
+func TestAdaptiveRoleUsesConfiguredGenericChildTags(t *testing.T) {
+	if got := adaptiveRoleTag(carrierPrimary, "primary-vless", "fallback-trojan"); got != "primary-vless" {
+		t.Fatalf("primary role tag=%q, want primary-vless", got)
+	}
+	if got := adaptiveRoleTag(carrierFallback, "primary-vless", "fallback-trojan"); got != "fallback-trojan" {
+		t.Fatalf("fallback role tag=%q, want fallback-trojan", got)
+	}
+	if got := adaptiveRoleTag(carrierPrimary, "direct", "fallback-trojan"); got != "direct" {
+		t.Fatalf("direct primary role tag=%q, want direct", got)
+	}
+}

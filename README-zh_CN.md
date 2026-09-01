@@ -1,10 +1,10 @@
-# SMP3 Multipath Kit 2.0.1
+# SMP3 Multipath Kit 2.1.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 围绕可复用 SMP3 Core 和 standalone server 构建的独立应用层多路径传输产品。
 
-- **版本：** `2.0.1`（installer/operations patch）
+- **版本：** `2.1.0`（carrier-agnostic adapter release）
 - **Runtime baseline：** `2.0.0`（未改变且 byte-identical）
 - **可选 sing-box 兼容 client 构建输入：** `v1.14.0-beta.14`
 - **兼容构建 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
@@ -20,7 +20,7 @@
 完整教程见 [DEPLOYMENT.zh-CN.md](DEPLOYMENT.zh-CN.md)。基本流程是：先
 配置并检查 `config/standalone-server.example.json`，部署 `smp3-server`，
 再配置 `config/mihomo.example.yaml` 或可选的 sing-box client。standalone
-server 不是 sing-box server，也不负责终止 Snell/Hysteria2。
+server 不是 sing-box server，也不负责终止任何 child carrier 协议。
 
 Windows Mihomo 一键安装：
 
@@ -59,13 +59,13 @@ Windows installer 只替换明确指定的 Mihomo executable；Linux installer �
 管理 standalone server，卸载时默认保留 config，只有显式 `--purge` 才删除。
 两者都会用 `SHA256SUMS` 校验 GitHub stable Release 的精确 asset。
 
-## 2.0.0 / 2.0.1 架构
+## 2.1.0 架构
 
 本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：
 
 ```text
 Mihomo / sing-box client adapter
-        ↓  Snell / Hysteria2 / direct reliable carrier
+        ↓  任意已配置且支持可靠 TCP dial 的 child carrier
 standalone SMP3 server
         ↓
 canonical SMP3 Core
@@ -73,14 +73,14 @@ canonical SMP3 Core
 Internet destination
 ```
 
-standalone server 是生产 landing endpoint；它本身不实现 Snell 或
-Hysteria2，这些加密 carrier 在客户端或外围部署中终止后连接 SMP3 listener。
+standalone server 是生产 landing endpoint；它本身不实现任何 child carrier
+协议，这些 carrier 在客户端或外围部署中终止后连接 SMP3 listener。
 
-## 2.0.1 打包什么
+## 2.1.0 打包什么
 
-2.0.1 保留已经验证的 2.0.0 wire/runtime 行为，并正式打包抽离后的
-Core、standalone server、Mihomo adapter、sing-box compatibility integration
-与 installer/operations 工具：
+2.1.0 保留已经验证的 2.0.0 wire/runtime 行为，并打包 carrier-agnostic
+sing adapter policy、抽离后的 Core、standalone server、Mihomo adapter、
+sing-box compatibility integration 与 installer/operations 工具：
 
 1. **TCP 带宽感知 Adaptive Scheduler**：根据每条 leg 的有效 ACK/写入吞吐、写入延迟和队列压力动态修正 `bandwidth_mbps` 权重，尽量减少慢路径拿到过多早期 sequence 后造成 HOL。
 2. **Bootstrap Failover**：leg0 先获得一个可配置的抢跑时间；如果硬失败，立即拨 leg1；如果超过 `bootstrap_fallback_delay` 仍未完成，则并行拨 leg1，谁先完成认证 HELLO 谁先建立逻辑 session。
@@ -154,7 +154,12 @@ r11 有三个不同层次的 Adaptive：
 
 - `scheduler_mode: adaptive`：TCP DATA 在 leg0 / leg1 之间如何分配；
 - `udp_multipath.mode: adaptive`：UDP Datagram 在两条 leg 之间如何分配；
-- 原有 `leg1_adaptive`：根据持续的逻辑流健康状态决定公网 leg1 使用 Hy2 还是回退到 Snell。
+- 原有 `leg1_adaptive`：根据持续的逻辑流健康状态决定公网 leg1 使用 primary carrier 还是回退到 fallback carrier；不再假设具体协议类型。
+
+SMP3 不要求特定代理协议。每条 leg 只要使用已配置、并提供可靠 TCP
+dial capability 的 child outbound 即可。Snell、Hysteria2、VLESS、Trojan、
+TUIC、Shadowsocks、VMess 和 Direct 都可以在 child outbound 支持该能力时使用；
+IPv4/IPv6 选择继续交给 child outbound。
 
 三层分离，避免把“链路负载均衡”和“carrier 替换”塞进一个不可解释的状态机。
 
@@ -164,8 +169,8 @@ r11 有三个不同层次的 Adaptive：
 正式实机验收前的代码 Review 又补掉了一批边界问题：
 
 - 对本来会复制发送的 UDP Datagram，超出 dedup 滑动窗口后再次到达会按 stale duplicate 丢弃；纯 `stripe` Datagram 仍保持完全无序语义，不会因为“到得太晚”而误删唯一包；
-- 只有 UDP 流量时，leg1 的 Hy2 硬故障现在也会进入既有 Hy2 -> Snell carrier health/cooldown；probation Hy2 不能仅靠 Dial/HELLO 成功恢复，必须真正成功承载 UDP payload，未使用的 probation 会在关闭时释放全局 canary 槽；
-- bootstrap 阶段如果 leg1 选中的 Hy2 失败，会在同一次 bootstrap 中立即尝试 Snell，因此 `leg0 不可用 + Hy2 不可用 + Snell 正常` 仍可建 session；
+- 只有 UDP 流量时，leg1 的 primary carrier 硬故障也会进入共享的 primary/fallback health/cooldown；probation primary 不能仅靠 Dial/HELLO 成功恢复，必须真正成功承载 UDP payload，未使用的 probation 会在关闭时释放全局 canary 槽；
+- bootstrap 阶段如果 leg1 选中的 primary carrier 失败，会在同一次 bootstrap 中立即尝试配置的 fallback carrier，因此 `leg0 不可用 + primary 不可用 + fallback 正常` 仍可建 session；
 - TCP graceful drain 不再把一个已经 readable 的旧 timer channel 直接当成 stall，而是依据实际观测到的 ACK progress 判断；
 - UDP scheduler 改为按排队**字节数**而不是仅按 frame 数计算压力；
 - routed address metadata 在分配前限制为 512 bytes，单 Datagram 仍限制为 16384 bytes；

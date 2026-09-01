@@ -45,7 +45,14 @@ type Outbound struct {
 	bootstrapDelay  time.Duration
 	adaptive        adaptiveSettings
 	adaptiveEnabled bool
-	hy2Health       hy2GlobalHealth
+	primaryHealth   primaryCarrierHealth
+}
+
+func adaptiveRoleTag(role carrierRole, primaryTag, fallbackTag string) string {
+	if role == carrierFallback {
+		return fallbackTag
+	}
+	return primaryTag
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.MultipathOutboundOptions) (adapter.Outbound, error) {
@@ -245,7 +252,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
 	var core *mpCore
 	var appConn net.Conn
-	adaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.hy2Health, nil)
+	adaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.primaryHealth, nil)
 	type bootstrapResult struct {
 		id         uint8
 		conn       net.Conn
@@ -267,23 +274,23 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 
 		child := o.children[id]
 		carrierTag := o.tags[id]
-		carrier := carrierHy2
+		carrier := carrierPrimary
 		if id == 1 && o.adaptiveEnabled {
 			carrier = adaptive.carrierForLeg1(time.Now())
-			if carrier == carrierSnell {
+			if carrier == carrierFallback {
 				child = o.leg1Fallback
 				carrierTag = o.leg1FallbackTag
 			}
 		}
 		result := dial(child, carrierTag)
-		if result.err == nil || id != 1 || !o.adaptiveEnabled || carrier != carrierHy2 || sessionCtx.Err() != nil {
+		if result.err == nil || id != 1 || !o.adaptiveEnabled || carrier != carrierPrimary || sessionCtx.Err() != nil {
 			return result
 		}
 
-		// A failed bootstrap Hy2 attempt is already actionable for this logical
-		// connection. Switch locally to Snell and retry it immediately, so a healthy
+		// A failed bootstrap primary carrier attempt is already actionable for this logical
+		// connection. Switch locally to fallback carrier and retry it immediately, so a healthy
 		// fallback can still win bootstrap when leg0 is unavailable.
-		if adaptive.recordCarrierFailure(false) && adaptive.currentCarrier() == carrierSnell {
+		if adaptive.recordPrimaryFailure(false) && adaptive.currentCarrier() == carrierFallback {
 			return dial(o.leg1Fallback, o.leg1FallbackTag)
 		}
 		return result
@@ -296,18 +303,18 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	deferredDelay := [2]time.Duration{}
 	var ensureLeg func(uint8)
 	var scheduleLeg func(uint8, time.Duration)
-	adaptive.onSelected = func(carrier leg1Carrier, probation bool) {
+	adaptive.onSelected = func(carrier carrierRole, probation bool) {
 		if !o.adaptiveEnabled {
 			return
 		}
-		o.logger.InfoContext(ctx, "multipath leg1 carrier selected: ", carrier.String(), " probation=", probation)
+		o.logger.InfoContext(ctx, "multipath leg1 carrier selected: role=", carrier.String(), " tag=", adaptiveRoleTag(carrier, o.tags[1], o.leg1FallbackTag), " probation=", probation)
 	}
 	adaptive.onHealth = func(decision adaptiveDecision, stats coreStats) {
-		// A zero-useful EOF on a just-added Hy2 leg can be the normal short-session
+		// A zero-useful EOF on a just-added primary carrier leg can be the normal short-session
 		// JOIN race rather than a carrier outage. In that case OnLegDown deliberately
 		// avoids an immediate reconnect. If the logical stream remains active and
 		// useful demand continues, the health loop requests a demand-driven repair.
-		if core != nil && o.adaptiveEnabled && adaptive.currentCarrier() == carrierHy2 &&
+		if core != nil && o.adaptiveEnabled && adaptive.currentCarrier() == carrierPrimary &&
 			!core.isClosing() && !core.isFinalizing() && core.isActive() &&
 			!stats.LegUp[1] && decision.Demand {
 			scheduleLeg(1, o.redialInterval)
@@ -328,7 +335,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			}
 		}
 		if decision.Recovered {
-			o.logger.InfoContext(ctx, "multipath leg1 carrier recovered: hysteria2 remains selected")
+			o.logger.InfoContext(ctx, "multipath leg1 carrier recovered: role=primary tag=", o.tags[1])
 		}
 		o.logger.DebugContext(ctx, "mp health: carrier=", adaptive.currentCarrier(),
 			" state=", decision.State, " rx_goodput=", decision.RxLogicalGoodputBPS/1e6,
@@ -347,25 +354,25 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			" ack_progress_age=", ackProgressAge(stats))
 	}
 	adaptive.onRecovery = func() {
-		o.hy2Health.noteRecovery()
-		o.logger.InfoContext(ctx, "multipath hysteria2 cooldown cleared after healthy active canary")
+		o.primaryHealth.noteRecovery()
+		o.logger.InfoContext(ctx, "multipath primary carrier cooldown cleared after healthy active canary tag=", o.tags[1])
 	}
 	adaptive.onActiveSuccess = func() {
-		o.hy2Health.noteActiveSuccess()
+		o.primaryHealth.noteActiveSuccess()
 	}
 	adaptive.onFallback = func(reason string, cooldown bool, probation bool) {
 		// Global carrier health must be updated even during bootstrap, before a
 		// logical core exists. In particular, a failed probation dial must re-enter
 		// cooldown instead of leaving the single global canary slot stuck.
-		o.logger.InfoContext(ctx, "multipath leg1 carrier fallback: hysteria2 -> snell reason=", reason)
+		o.logger.InfoContext(ctx, "multipath leg1 carrier fallback: primary=", o.tags[1], " fallback=", o.leg1FallbackTag, " reason=", reason)
 		if cooldown || probation {
-			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
-			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration)
+			duration := o.primaryHealth.noteFallback(time.Now(), o.adaptive, probation)
+			o.logger.InfoContext(ctx, "multipath primary carrier cooldown: tag=", o.tags[1], " duration=", duration)
 		}
 		if core == nil || core.isClosing() || core.isFinalizing() {
 			return
 		}
-		if !core.replaceLeg(1, &adaptiveCarrierReplacementError{from: carrierHy2, reason: reason}) {
+		if !core.replaceLeg(1, &adaptiveCarrierReplacementError{from: carrierPrimary, reason: reason}) {
 			scheduleLeg(1, o.redialInterval)
 		}
 	}
@@ -483,7 +490,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 				child := o.children[id]
 				carrierTag := o.tags[id]
 				if id == 1 && o.adaptiveEnabled {
-					if adaptive.carrierForLeg1(time.Now()) == carrierSnell {
+					if adaptive.carrierForLeg1(time.Now()) == carrierFallback {
 						child = o.leg1Fallback
 						carrierTag = o.leg1FallbackTag
 					}
@@ -517,12 +524,12 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 				if errors.Is(dialErr, errCoreClosed) {
 					return
 				}
-				if id == 1 && o.adaptiveEnabled && !core.isClosing() && !core.isFinalizing() && adaptive.currentCarrier() == carrierHy2 {
+				if id == 1 && o.adaptiveEnabled && !core.isClosing() && !core.isFinalizing() && adaptive.currentCarrier() == carrierPrimary {
 					stats := core.snapshotStats()
 					if adaptive.shouldRecordCarrierFailure(dialErr, stats, false) {
 						// This attempt never became an installed SMP3 leg. Treat it as an
 						// initial carrier failure even if an older attempt had been ready.
-						if adaptive.recordCarrierFailure(false) {
+						if adaptive.recordPrimaryFailure(false) {
 							continue
 						}
 					} else {
@@ -561,7 +568,7 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 		// current carrier before health accounting can switch it; intentional adaptive
 		// replacement carries the old carrier explicitly because the state switch
 		// necessarily happens before core.replaceLeg().
-		carrierAtFailure := carrierHy2
+		carrierAtFailure := carrierPrimary
 		intentionalReplacement := false
 		if id == 1 && o.adaptiveEnabled {
 			carrierAtFailure = adaptive.currentCarrier()
@@ -572,10 +579,10 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			}
 		}
 		benignSecondaryEOF := false
-		if id == 1 && o.adaptiveEnabled && !intentionalReplacement && !core.isClosing() && !core.isFinalizing() && carrierAtFailure == carrierHy2 {
+		if id == 1 && o.adaptiveEnabled && !intentionalReplacement && !core.isClosing() && !core.isFinalizing() && carrierAtFailure == carrierPrimary {
 			stats := core.snapshotStats()
 			if adaptive.shouldRecordCarrierFailure(legErr, stats, true) {
-				adaptive.recordCarrierFailure(true)
+				adaptive.recordPrimaryFailure(true)
 			} else {
 				benignSecondaryEOF = true
 				if !adaptive.noteAmbiguousCarrierEOF() {
@@ -584,12 +591,12 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 			}
 		}
 		carrierTag := o.tags[id]
-		if id == 1 && o.adaptiveEnabled && carrierAtFailure == carrierSnell {
+		if id == 1 && o.adaptiveEnabled && carrierAtFailure == carrierFallback {
 			carrierTag = o.leg1FallbackTag
 		}
 		o.logger.WarnContext(ctx, "multipath leg ", id, " down via ", carrierTag, ": ", legErr)
 		// Repair the failed leg no faster than redial_interval. For an ambiguous
-		// zero-useful Hy2 EOF we intentionally do not reconnect immediately; the
+		// zero-useful primary carrier EOF we intentionally do not reconnect immediately; the
 		// adaptive health loop will request repair if useful demand persists. This
 		// prevents short HTTP/TLS sessions from creating a connect/JOIN/EOF storm.
 		if !benignSecondaryEOF {
@@ -749,26 +756,26 @@ func (o *Outbound) newDatagramPacketConn(ctx context.Context, destination M.Sock
 	}
 	destinationString := destination.String()
 	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
-	udpAdaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.hy2Health, nil)
-	udpAdaptive.onSelected = func(carrier leg1Carrier, probation bool) {
+	udpAdaptive := newAdaptiveConn(o.adaptiveEnabled, o.adaptive, &o.primaryHealth, nil)
+	udpAdaptive.onSelected = func(carrier carrierRole, probation bool) {
 		if o.adaptiveEnabled {
-			o.logger.InfoContext(ctx, "multipath UDP leg1 carrier selected: ", carrier.String(), " probation=", probation)
+			o.logger.InfoContext(ctx, "multipath UDP leg1 carrier selected: role=", carrier.String(), " tag=", adaptiveRoleTag(carrier, o.tags[1], o.leg1FallbackTag), " probation=", probation)
 		}
 	}
 	udpAdaptive.onFallback = func(reason string, cooldown bool, probation bool) {
-		o.logger.InfoContext(ctx, "multipath UDP leg1 carrier fallback: hysteria2 -> snell reason=", reason)
+		o.logger.InfoContext(ctx, "multipath UDP leg1 carrier fallback: primary=", o.tags[1], " fallback=", o.leg1FallbackTag, " reason=", reason)
 		if cooldown || probation {
-			duration := o.hy2Health.noteFallback(time.Now(), o.adaptive, probation)
-			o.logger.InfoContext(ctx, "multipath hysteria2 cooldown: duration=", duration, " source=udp")
+			duration := o.primaryHealth.noteFallback(time.Now(), o.adaptive, probation)
+			o.logger.InfoContext(ctx, "multipath primary carrier cooldown: tag=", o.tags[1], " duration=", duration, " source=udp")
 		}
 	}
 	udpAdaptive.onRecovery = func() {
-		o.hy2Health.noteRecovery()
-		o.logger.InfoContext(ctx, "multipath hysteria2 cooldown cleared after useful UDP probation traffic")
+		o.primaryHealth.noteRecovery()
+		o.logger.InfoContext(ctx, "multipath primary carrier cooldown cleared after useful UDP probation traffic tag=", o.tags[1])
 	}
-	udpAdaptive.onProbationRelease = func() { o.hy2Health.releaseProbation() }
+	udpAdaptive.onProbationRelease = func() { o.primaryHealth.releaseProbation() }
 
-	var udpHy2UsefulReported atomic.Bool
+	var udpPrimaryUsefulReported atomic.Bool
 	dialLeg := func(id uint8) (net.Conn, string, error) {
 		dial := func(child adapter.Outbound, carrierTag string) (net.Conn, string, error) {
 			conn, dialErr := child.DialContext(sessionCtx, N.NetworkTCP, o.aggregations[id])
@@ -784,19 +791,19 @@ func (o *Outbound) newDatagramPacketConn(ctx context.Context, destination M.Sock
 
 		child := o.children[id]
 		carrierTag := o.tags[id]
-		carrier := carrierHy2
+		carrier := carrierPrimary
 		if id == 1 && o.adaptiveEnabled {
 			carrier = udpAdaptive.carrierForLeg1(time.Now())
-			if carrier == carrierSnell {
+			if carrier == carrierFallback {
 				child = o.leg1Fallback
 				carrierTag = o.leg1FallbackTag
 			}
 		}
 		conn, usedTag, dialErr := dial(child, carrierTag)
-		if dialErr == nil || id != 1 || !o.adaptiveEnabled || carrier != carrierHy2 || sessionCtx.Err() != nil {
+		if dialErr == nil || id != 1 || !o.adaptiveEnabled || carrier != carrierPrimary || sessionCtx.Err() != nil {
 			return conn, usedTag, dialErr
 		}
-		if udpAdaptive.recordCarrierFailure(false) && udpAdaptive.currentCarrier() == carrierSnell {
+		if udpAdaptive.recordPrimaryFailure(false) && udpAdaptive.currentCarrier() == carrierFallback {
 			return dial(o.leg1Fallback, o.leg1FallbackTag)
 		}
 		return conn, usedTag, dialErr
@@ -868,17 +875,17 @@ udpBootstrapLoop:
 	joining := [2]bool{}
 	var ensureLeg func(uint8)
 	cfg.OnLegUseful = func(id uint8, _ int) {
-		if id != 1 || !o.adaptiveEnabled || udpAdaptive.currentCarrier() != carrierHy2 {
+		if id != 1 || !o.adaptiveEnabled || udpAdaptive.currentCarrier() != carrierPrimary {
 			return
 		}
-		if !udpHy2UsefulReported.CompareAndSwap(false, true) {
+		if !udpPrimaryUsefulReported.CompareAndSwap(false, true) {
 			return
 		}
 		// Unlike TCP, UDP has no cumulative ACK signal. A probation carrier is
 		// therefore promoted only after a real application datagram has actually
 		// traversed leg1 in either direction, not merely after HELLO/dial success.
 		if !udpAdaptive.completeProbationRecovery() {
-			o.hy2Health.noteActiveSuccess()
+			o.primaryHealth.noteActiveSuccess()
 		}
 	}
 	cfg.OnLegDown = func(id uint8, legErr error) {
@@ -887,15 +894,15 @@ udpBootstrapLoop:
 			return
 		default:
 		}
-		carrierAtFailure := carrierHy2
+		carrierAtFailure := carrierPrimary
 		if id == 1 && o.adaptiveEnabled {
 			carrierAtFailure = udpAdaptive.currentCarrier()
-			if carrierAtFailure == carrierHy2 {
-				udpAdaptive.recordCarrierFailure(true)
+			if carrierAtFailure == carrierPrimary {
+				udpAdaptive.recordPrimaryFailure(true)
 			}
 		}
 		carrierTag := o.tags[id]
-		if id == 1 && o.adaptiveEnabled && carrierAtFailure == carrierSnell {
+		if id == 1 && o.adaptiveEnabled && carrierAtFailure == carrierFallback {
 			carrierTag = o.leg1FallbackTag
 		}
 		o.logger.WarnContext(ctx, "multipath UDP leg ", id, " down via ", carrierTag, ": ", legErr)
@@ -935,8 +942,8 @@ udpBootstrapLoop:
 				}
 				conn, carrierTag, dialErr := dialLeg(id)
 				if dialErr == nil {
-					if id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierHy2 {
-						udpHy2UsefulReported.Store(false)
+					if id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierPrimary {
+						udpPrimaryUsefulReported.Store(false)
 					}
 					dialErr = core.addLeg(id, conn, nil)
 				}
@@ -959,8 +966,8 @@ udpBootstrapLoop:
 		}()
 	}
 
-	if first.id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierHy2 {
-		udpHy2UsefulReported.Store(false)
+	if first.id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierPrimary {
+		udpPrimaryUsefulReported.Store(false)
 	}
 	if err := core.addLeg(first.id, first.conn, nil); err != nil {
 		cancelSession()
@@ -996,8 +1003,8 @@ udpBootstrapLoop:
 			default:
 			}
 			if result.id == expected && result.err == nil {
-				if result.id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierHy2 {
-					udpHy2UsefulReported.Store(false)
+				if result.id == 1 && o.adaptiveEnabled && udpAdaptive.currentCarrier() == carrierPrimary {
+					udpPrimaryUsefulReported.Store(false)
 				}
 				result.err = core.addLeg(result.id, result.conn, nil)
 			}

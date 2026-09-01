@@ -1,10 +1,10 @@
-# SMP3 Multipath Kit 2.0.1
+# SMP3 Multipath Kit 2.1.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 Independent application-layer multipath transport built around a reusable SMP3 Core and standalone server.
 
-- **Release:** `2.0.1` (installer/operations patch)
+- **Release:** `2.1.0` (carrier-agnostic adapter release)
 - **Runtime baseline:** `2.0.0` (runtime semantics unchanged)
 - **Optional sing-box compatibility client build input:** `v1.14.0-beta.14`
 - **Compatibility build commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
@@ -21,7 +21,7 @@ See the complete [Deployment and Usage guide](DEPLOYMENT.md). The short path
 is: configure and validate `config/standalone-server.example.json`, install
 `smp3-server`, then configure either `config/mihomo.example.yaml` or the
 optional sing-box client profile. The standalone server is not a sing-box
-server and does not terminate Snell/Hysteria2.
+server and does not terminate any child carrier protocol.
 
 Windows Mihomo one-click install:
 
@@ -61,13 +61,13 @@ The Linux installer manages only the standalone server and preserves the
 configuration on uninstall unless `--purge` is explicitly requested. Both
 installers verify exact GitHub stable Release assets against `SHA256SUMS`.
 
-## Architecture in 2.0.0 / 2.0.1
+## Architecture in 2.1.0
 
 The release separates the reusable, standard-library-only SMP3 Core from its hosts:
 
 ```text
 Mihomo / sing-box client adapters
-        ↓  Snell / Hysteria2 / direct reliable carriers
+        ↓  any configured reliable TCP-capable child carrier
 standalone SMP3 server
         ↓
 canonical SMP3 Core
@@ -76,14 +76,15 @@ Internet destinations
 ```
 
 The standalone server is the production landing endpoint. It does not implement
-Snell or Hysteria2 itself; those encrypted carriers terminate in the client or
-in the surrounding deployment and connect to the SMP3 listener.
+any child carrier protocol; carriers terminate in the client or surrounding
+deployment and connect to the SMP3 listener.
 
-## What 2.0.1 packages
+## What 2.1.0 packages
 
-2.0.1 keeps the validated 2.0.0 wire/runtime behavior and packages the
-extracted Core, standalone server, Mihomo adapter, sing-box compatibility
-integration, and installer/operations tooling:
+2.1.0 keeps the validated 2.0.0 wire/runtime behavior and packages the
+carrier-agnostic sing adapter policy together with the extracted Core,
+standalone server, Mihomo adapter, compatibility integration, and operations
+tooling:
 
 1. **Adaptive TCP scheduler** — per-leg useful ACK/write throughput and write latency reshape static bandwidth weights so slow paths receive fewer early sequence numbers and cause less HOL pressure.
 2. **Bootstrap failover** — leg0 gets a configurable head start; if it fails or is still pending after `bootstrap_fallback_delay`, leg1 is dialed in parallel and the first authenticated HELLO establishes the logical session.
@@ -151,7 +152,13 @@ There are two different adaptive layers:
 
 - `scheduler_mode: adaptive`: TCP DATA scheduling between leg0/leg1.
 - `udp_multipath.mode: adaptive`: UDP datagram scheduling between leg0/leg1.
-- Existing `leg1_adaptive`: optional Hy2 -> Snell carrier fallback based on sustained logical-stream health. 2.0.0 keeps this mechanism.
+- Existing `leg1_adaptive`: optional primary-carrier -> fallback-carrier policy based on sustained logical-stream health. 2.1.0 keeps the same mechanism without assuming a protocol type.
+
+SMP3 does not require a specific proxy protocol. Each leg may use any
+configured child outbound that provides the required reliable TCP dial
+capability. Snell, Hysteria2, VLESS, Trojan, TUIC, Shadowsocks, VMess, and
+Direct can be used when the host outbound supports that capability. IPv4/IPv6
+selection remains delegated to the child outbound.
 
 These layers are intentionally separate so carrier replacement and path load balancing do not become one opaque state machine.
 
@@ -160,8 +167,8 @@ These layers are intentionally separate so carrier replacement and path load bal
 The pre-release review found and fixed several boundary cases before live acceptance:
 
 - replicated UDP datagrams that fall behind the dedup window are rejected as stale duplicates, while pure `stripe` datagrams remain fully unordered and are not discarded merely for arriving very late;
-- UDP-only traffic now participates in the existing Hy2 -> Snell carrier health/cooldown path on hard carrier failure; a probation Hy2 carrier is not marked recovered by Dial/HELLO alone and requires real useful UDP payload, while an unused probation slot is released on close;
-- bootstrap leg1 retries Snell immediately when its selected Hy2 carrier fails, so `leg0 down + Hy2 down + Snell healthy` can still establish the logical session;
+- UDP-only traffic now participates in the shared primary/fallback carrier health/cooldown path on hard carrier failure; a probation primary carrier is not marked recovered by Dial/HELLO alone and requires real useful UDP payload, while an unused probation slot is released on close;
+- bootstrap leg1 retries the configured fallback carrier immediately when its selected primary carrier fails, so `leg0 down + primary down + fallback healthy` can still establish the logical session;
 - graceful TCP drain determines failure from observed ACK progress instead of treating an already-readable timer channel as proof of a stall;
 - UDP scheduling accounts for queued **bytes**, not just queued frame count;
 - routed address metadata is bounded to 512 bytes and one UDP datagram to 16384 bytes before wire allocation;

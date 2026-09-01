@@ -1,16 +1,32 @@
-# SMP3 2.0.1
+# SMP3 2.1.0
 
-SMP3 2.0.1 is an installer and operations patch release. It adds Windows
-Mihomo Core replacement/update/restore tooling, Linux standalone server
-installation and lifecycle management, `smp3ctl`, examples, and deployment
-tutorials.
+SMP3 2.1.0 is the carrier-agnostic sing adapter capability release. It keeps
+the accepted 2.0.0 runtime and Wire behavior while removing concrete
+Hy2/Snell assumptions from the sing adaptive host policy.
 
 There are **no SMP3 protocol, Core, Wire, HELLO, scheduler, Stream, Datagram,
-repair, or recovery semantic changes**. The six runtime binaries retain the
-accepted 2.0.0 runtime semantics; the canonical 2.0.1 hashes are recorded in
-the release report.
+repair, or recovery semantic changes**. Existing Hy2/Snell configurations
+remain compatible; any configured child outbound with the required reliable
+TCP dial capability can fill the primary or fallback role.
 
-See `SMP3_2.0.1_INSTALLER_RELEASE_REPORT.md` for the closure matrix.
+See `SMP3_2.1.0_CARRIER_AGNOSTIC_RELEASE_REPORT.md` for the closure matrix.
+
+## 2.1.0 — carrier-agnostic sing adapter
+
+- Replaced protocol-named adaptive roles with generic primary and fallback
+  carrier roles.
+- Replaced the shared Hy2 health manager with generic primary-carrier health,
+  cooldown, probation, and recovery state.
+- Preserved Stream and Datagram adaptive state-machine behavior, thresholds,
+  timing, same-session repair, and configured `legs`/`leg1_fallback` fields.
+- Runtime logs now identify the configured outbound tags rather than guessing
+  a protocol type.
+- Added generic VLESS-style, Trojan-style, and Direct-style role coverage using
+  fake child abstractions; no public protocol deployment is implied.
+- IPv4/IPv6 selection remains delegated to the child outbound.
+
+The six release binaries are built from the same validated 2.0.0 Core/server
+runtime baseline plus the carrier-neutral sing adapter source.
 
 ## 2.0.0 runtime baseline (historical)
 

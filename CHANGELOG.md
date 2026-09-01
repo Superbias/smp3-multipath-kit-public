@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 — carrier-agnostic sing adapter
+
+- Removed Hy2/Snell runtime policy hardcoding from the sing adaptive adapter.
+- Added generic primary/fallback carrier roles and shared primary health,
+  cooldown, probation, and recovery state.
+- Kept existing `legs`, `leg1_fallback`, and adaptive configuration compatible.
+- Preserved Stream/Datagram adaptive, repair, timing, and scheduler semantics.
+- Added generic VLESS-style, Trojan-style, and Direct-style child-role tests.
+- Runtime logs report configured outbound tags; no protocol type inspection was
+  added.
+- No SMP3 Wire, HELLO, Core, standalone-server, or Mihomo semantic change.
+
 ## 2.0.1 — installer and operations release
 
 - Added Windows Mihomo SMP3 Core install, update, checksum verification,

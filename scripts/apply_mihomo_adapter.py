@@ -2,6 +2,7 @@
 """Inject the Phase 5A Mihomo skeleton into a pinned Mihomo checkout."""
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -84,11 +85,20 @@ def main() -> int:
     mod_text = go_mod.read_text(encoding="utf-8")
     if f"require {MODULE} v0.0.0" not in mod_text:
         mod_text += f"\nrequire {MODULE} v0.0.0\n"
-    replace = f"replace {MODULE} => ../../core"
-    if replace not in mod_text:
-        mod_text += replace + "\n"
-    go_mod.write_text(mod_text, encoding="utf-8")
-    print(f"mihomo skeleton injected pin={PIN} commit={COMMIT} module={MODULE} socks_udp_headroom=yes replace=../../core")
+    relative_core = os.path.relpath(kit / "core", mihomo).replace(os.sep, "/")
+    replace_prefix = f"replace {MODULE} => "
+    replace = replace_prefix + relative_core
+    lines = mod_text.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(replace_prefix):
+            lines[index] = replace
+            break
+    else:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(replace)
+    go_mod.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"mihomo skeleton injected pin={PIN} commit={COMMIT} module={MODULE} socks_udp_headroom=yes replace={relative_core}")
     return 0
 
 
