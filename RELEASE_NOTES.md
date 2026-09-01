@@ -1,17 +1,27 @@
-# SMP3 2.1.0
+# SMP3 2.1.1
 
-SMP3 2.1.0 is the carrier-agnostic sing adapter capability release. It keeps
-the accepted 2.0.0 runtime and Wire behavior while removing concrete
-Hy2/Snell assumptions from the sing adaptive host policy.
+SMP3 2.1.1 is a bugfix release for bidirectional Stream activation. It keeps
+the accepted 2.0.0 runtime and Wire behavior and the 2.1.0 carrier-agnostic
+adapter policy.
 
-There are **no SMP3 protocol, Core, Wire, HELLO, scheduler, Stream, Datagram,
-repair, or recovery semantic changes**. Existing Hy2/Snell configurations
-remain compatible; any configured child outbound with the required reliable
-TCP dial capability can fill the primary or fallback role.
+## Fixed
 
-See `SMP3_2.1.0_CARRIER_AGNOSTIC_RELEASE_REPORT.md` for the closure matrix.
+- Before 2.1.1, adaptive Stream activation observed only client/application TX
+  ingress, so download-heavy sessions did not activate leg1.
+- 2.1.1 observes application payload in both directions per logical Stream
+  session and activates when `max(txRate, rxRate)` reaches the configured
+  threshold over the existing activation window.
+- Mihomo and sing continue to consume the canonical Core `OnActivate` callback;
+  no adapter-local activation algorithm was added.
 
-## 2.1.0 — carrier-agnostic sing adapter
+There is **no Wire, HELLO, Datagram, retry, frontier, rescue, ACK, reorder,
+retransmit, carrier-policy, or recovery semantic change**. Existing 2.1.0
+carrier-agnostic configurations remain compatible.
+
+See `SMP3_2.1.1_BIDIRECTIONAL_ACTIVATION_RELEASE_REPORT.md` for the closure
+matrix.
+
+## 2.1.0 — carrier-agnostic sing adapter baseline
 
 - Replaced protocol-named adaptive roles with generic primary and fallback
   carrier roles.
@@ -76,8 +86,10 @@ standalone server interop, and production cutover/rollback evidence.
 2. UDP remains unreliable. A single-leg transition may lose a small number of
    datagrams; SMP3 intentionally does not add retransmission that would turn
    UDP into TCP.
-3. Small adaptive streams below the activation threshold may remain single-leg
-   by design.
+3. Adaptive Stream activation is evaluated per logical session from application
+   payload in both directions and uses the higher directional rate. Small
+   streams below the threshold may remain single-leg by design; throughput is
+   not aggregated across separate connections.
 4. The aioquic 1.3.0 ↔ quic-go large-transfer/control-plane interoperability
    issue remains reproducible on the direct aioquic path without SMP3. The H3
    100 MiB harness result is therefore `INCONCLUSIVE / EXTERNAL HARNESS-

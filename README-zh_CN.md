@@ -1,10 +1,10 @@
-# SMP3 Multipath Kit 2.1.0
+# SMP3 Multipath Kit 2.1.1
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 围绕可复用 SMP3 Core 和 standalone server 构建的独立应用层多路径传输产品。
 
-- **版本：** `2.1.0`（carrier-agnostic adapter release）
+- **版本：** `2.1.1`（双向 Stream activation bugfix）
 - **Runtime baseline：** `2.0.0`（未改变且 byte-identical）
 - **可选 sing-box 兼容 client 构建输入：** `v1.14.0-beta.14`
 - **兼容构建 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
@@ -59,7 +59,7 @@ Windows installer 只替换明确指定的 Mihomo executable；Linux installer �
 管理 standalone server，卸载时默认保留 config，只有显式 `--purge` 才删除。
 两者都会用 `SHA256SUMS` 校验 GitHub stable Release 的精确 asset。
 
-## 2.1.0 架构
+## 2.1.1 架构
 
 本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：
 
@@ -76,15 +76,16 @@ Internet destination
 standalone server 是生产 landing endpoint；它本身不实现任何 child carrier
 协议，这些 carrier 在客户端或外围部署中终止后连接 SMP3 listener。
 
-## 2.1.0 打包什么
+## 2.1.1 打包什么
 
-2.1.0 保留已经验证的 2.0.0 wire/runtime 行为，并打包 carrier-agnostic
+2.1.1 保留已经验证的 2.0.0 wire/runtime 行为，并打包 carrier-agnostic
 sing adapter policy、抽离后的 Core、standalone server、Mihomo adapter、
 sing-box compatibility integration 与 installer/operations 工具：
 
 1. **TCP 带宽感知 Adaptive Scheduler**：根据每条 leg 的有效 ACK/写入吞吐、写入延迟和队列压力动态修正 `bandwidth_mbps` 权重，尽量减少慢路径拿到过多早期 sequence 后造成 HOL。
 2. **Bootstrap Failover**：leg0 先获得一个可配置的抢跑时间；如果硬失败，立即拨 leg1；如果超过 `bootstrap_fallback_delay` 仍未完成，则并行拨 leg1，谁先完成认证 HELLO 谁先建立逻辑 session。
 3. **MP-UDP Datagram Mode**：UDP 不再只能走单个 `udp_outbound`，可以真正通过 leg0 + leg1，支持 `stripe`、`duplicate`、`adaptive` 三种模式。
+4. **双向 Stream activation**：每个逻辑 Stream session 同时观察 application payload 的上传和下载速率，使用 `max(txRate, rxRate)` 激活 leg1，不再只观察 client TX。
 
 ## 两套数据面
 
@@ -155,6 +156,12 @@ r11 有三个不同层次的 Adaptive：
 - `scheduler_mode: adaptive`：TCP DATA 在 leg0 / leg1 之间如何分配；
 - `udp_multipath.mode: adaptive`：UDP Datagram 在两条 leg 之间如何分配；
 - 原有 `leg1_adaptive`：根据持续的逻辑流健康状态决定公网 leg1 使用 primary carrier 还是回退到 fallback carrier；不再假设具体协议类型。
+
+对于每个 Stream session，Adaptive activation 会在同一个
+`activation_window` 内同时观察 application payload 的上传和下载速率，
+并使用两者较高值 `max(txRate, rxRate)` 与 `activation-threshold-mbps`
+比较。这个判断按单个逻辑 session 计算，不会把多个连接聚合；因此下载型
+流量也可以激活 leg1，adapter 不需要再实现第二套吞吐算法。
 
 SMP3 不要求特定代理协议。每条 leg 只要使用已配置、并提供可靠 TCP
 dial capability 的 child outbound 即可。Snell、Hysteria2、VLESS、Trojan、

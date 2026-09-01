@@ -1,6 +1,6 @@
-# SMP3 2.0.1 build status
+# SMP3 2.1.1 build status
 
-Status: **installer/operations release closure candidate**.
+Status: **bidirectional Stream activation release closure candidate**.
 
 Runtime baseline: `2.0.0`; runtime source, protocol, Core, and Wire semantics
 are unchanged. Artifact hashes are release-specific and recorded below.
@@ -39,7 +39,11 @@ dist/smp3-proxy-windows-amd64.exe
 ```
 
 The sing client reports `1.14.0-beta.14-smp3-2.0.0`; the standalone server
-reports `2.0.0`. The release/package version is `2.0.1`.
+reports `2.0.0`. The release/package version is `2.1.1`.
+
+The Stream activation fix observes application payload in both directions per
+logical session and uses `max(txRate, rxRate)`. Wire, HELLO, Datagram, retry,
+ACK, reorder, repair, recovery, and carrier policy behavior remain unchanged.
 
 ## Verified gates
 

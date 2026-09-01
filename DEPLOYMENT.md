@@ -1,6 +1,7 @@
-# SMP3 2.1.0 Deployment and Usage
+# SMP3 2.1.1 Deployment and Usage
 
-This guide deploys the independent SMP3 product and its 2.1.0 carrier-agnostic
+This guide deploys the independent SMP3 product and its 2.1.1 bidirectional
+Stream activation bugfix release and carrier-agnostic
 adapter release.
 The server side does **not**
 require sing-box: it uses `smp3-server`, the standalone host for the canonical
@@ -30,7 +31,7 @@ outbound. The standalone server does not terminate child carrier protocols.
 
 ## 2. Download and verify
 
-Download the assets from the [v2.1.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.0):
+Download the assets from the [v2.1.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.1):
 
 - Server: `smp3-server-linux-amd64` or `smp3-server-windows-amd64.exe`.
 - Mihomo client: `mihomo-smp3-linux-amd64` or `mihomo-smp3-windows-amd64.exe`.
@@ -195,9 +196,11 @@ Run checks in this order:
 
 4. Use a SOCKS5 UDP-capable DNS or application client and confirm the server
    logs show a Datagram session.
-5. For a long enough TCP/UDP flow, confirm the second leg joins. Very short
-   adaptive flows may intentionally remain on one leg below the activation
-   threshold.
+5. For a long enough TCP flow, confirm the second leg joins. Stream activation
+   measures application payload in both directions per logical session and
+   uses the higher directional rate against `activation-threshold-mbps`; it is
+   not an aggregate across connections. Very short or low-throughput flows may
+   intentionally remain on one leg below the activation threshold.
 
 A normal successful setup has one logical SMP3 session and two carrier legs;
 leg repair replaces a carrier generation without rebuilding the logical
@@ -265,7 +268,7 @@ sudo ss -ltnp | grep 24444
 |---|---|
 | HELLO rejected | SMP3 password, endpoint, port, and carrier destination match. |
 | Only TCP works | Client `udp.enabled`, app SOCKS5 UDP support, and server `udp.enabled`. |
-| Second leg never appears | The flow may be below adaptive activation threshold; check child proxy names and carrier reachability. |
+| Second leg never appears | Confirm the flow is on SMP3 and that one logical Stream session sustains either upload or download above `activation-threshold-mbps` for `activation-window`; the threshold is directional-per-session, not aggregate. Then check child proxy names and carrier reachability. |
 | Oversize UDP disappears | Expected for payloads above 16384 bytes; it must not be silently truncated. |
 | Business pauses during a leg fault | Check carrier detection time and logs; small UDP loss is allowed, prolonged steady-state failure is not. |
 | H3 100 MiB fails | The known aioquic/quic-go harness issue reproduces without SMP3 and is not an SMP3 diagnosis. |

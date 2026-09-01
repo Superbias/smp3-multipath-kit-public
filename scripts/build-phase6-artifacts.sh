@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Release-facing package version. The embedded sing/server runtime versions
-# remain on the validated 2.0.0 baseline because this release changes only the
-# host adapter policy and packaging metadata.
-RELEASE_VERSION="2.1.0"
+# remain on the validated 2.0.0 baseline because this release only fixes
+# Stream activation sampling at the canonical Core boundary.
+RELEASE_VERSION="2.1.1"
 RUNTIME_SING_VERSION="1.14.0-beta.14-smp3-2.0.0"
 SING_TAG="v1.14.0-beta.14"
 SING_REV="4902660f8424fef3c2a60dfcdce7aeadfe3f3b88"
@@ -79,8 +79,8 @@ echo '[+] injecting and building pinned sing targets'
 python3 "$ROOT/scripts/apply_source.py" "$SING_ROOT" "$WORK/sing-source-work"
 SING_TAGS="$(cat "$SING_ROOT/release/DEFAULT_BUILD_TAGS_OTHERS")"
 SING_LDFLAGS_SHARED="$(cat "$SING_ROOT/release/LDFLAGS")"
-# 2.1.0 is a carrier-agnostic adapter release. Keep the accepted runtime client
-# identity byte-stable because no runtime source or protocol behavior changed.
+# 2.1.1 is a Stream activation bugfix release. Keep the accepted embedded
+# runtime identities and Wire/HELLO versions unchanged.
 SING_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$RUNTIME_SING_VERSION $SING_LDFLAGS_SHARED -s -w -buildid="
 (
   cd "$SING_ROOT"

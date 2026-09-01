@@ -643,6 +643,22 @@ func (c *StreamEngine) drainOutstandingOnClose() error {
 	}
 }
 
+func streamActivationRateBytesPS(txDelta, rxDelta uint64, elapsed time.Duration) uint64 {
+	if elapsed <= 0 {
+		return 0
+	}
+	txRate := uint64(float64(txDelta) / elapsed.Seconds())
+	rxRate := uint64(float64(rxDelta) / elapsed.Seconds())
+	if rxRate > txRate {
+		return rxRate
+	}
+	return txRate
+}
+
+func streamActivationEligible(txDelta, rxDelta uint64, elapsed time.Duration, thresholdBytesPS uint64) bool {
+	return streamActivationRateBytesPS(txDelta, rxDelta, elapsed) >= thresholdBytesPS
+}
+
 func (c *StreamEngine) activationLoop() {
 	if c.active.Load() {
 		return
@@ -657,7 +673,8 @@ func (c *StreamEngine) activationLoop() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	windowStart := time.Now()
-	windowBase := c.ingressBytes.Load()
+	txWindowBase := c.ingressBytes.Load()
+	rxWindowBase := c.rxDeliveredBytes.Load()
 	var queueHighSince time.Time
 	for {
 		select {
@@ -675,15 +692,16 @@ func (c *StreamEngine) activationLoop() {
 				return
 			}
 			if now.Sub(windowStart) >= c.cfg.ActivationWindow {
-				bytesNow := c.ingressBytes.Load()
-				delta := bytesNow - windowBase
+				txBytesNow := c.ingressBytes.Load()
+				rxBytesNow := c.rxDeliveredBytes.Load()
 				elapsed := now.Sub(windowStart)
-				if elapsed > 0 && uint64(float64(delta)/elapsed.Seconds()) >= c.cfg.ThresholdBytesPS {
+				if streamActivationEligible(txBytesNow-txWindowBase, rxBytesNow-rxWindowBase, elapsed, c.cfg.ThresholdBytesPS) {
 					c.activate()
 					return
 				}
 				windowStart = now
-				windowBase = bytesNow
+				txWindowBase = txBytesNow
+				rxWindowBase = rxBytesNow
 			}
 			primary := c.getLeg(0)
 			if primary == nil {

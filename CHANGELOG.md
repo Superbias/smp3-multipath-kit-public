@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.1 — bidirectional Stream activation
+
+- Fixed adaptive Stream activation to observe application payload in both
+  directions and use `max(txRate, rxRate)` per logical session.
+- Download-heavy sessions can now activate leg1 through the existing
+  `OnActivate` callback without changing Mihomo or sing adapter algorithms.
+- Preserved the existing activation window, threshold conversion, one-shot
+  callback, Wire/HELLO, Datagram, retry, ACK, reorder, repair, and recovery
+  semantics.
+
 ## 2.1.0 — carrier-agnostic sing adapter
 
 - Removed Hy2/Snell runtime policy hardcoding from the sing adaptive adapter.

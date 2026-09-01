@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -332,6 +333,78 @@ func TestSMP3DialContextLocalInteropAndLeg1Rejoin(t *testing.T) {
 	}
 	if string(gotRequest) != "request-two" {
 		t.Fatalf("post-rejoin request = %q", gotRequest)
+	}
+}
+
+func TestSMP3RXActivationJoinsLeg1(t *testing.T) {
+	const password = "test-password"
+	backend := newSMP3TestBackend(password)
+	line := &smp3TestProxy{name: "line-path", backend: backend}
+	hy2 := &smp3TestProxy{name: "public-hy2", backend: backend}
+	adapter, err := NewSMP3(SMP3Option{
+		Name:                    "mp-jp",
+		Server:                  "10.66.66.1",
+		Port:                    24444,
+		Password:                password,
+		Legs:                    []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
+		ActivationThresholdMbps: 1,
+		ActivationWindow:        "100ms",
+		RedialInterval:          "100ms",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.close()
+	adapter.lookup = func(name string) (C.Proxy, bool) {
+		switch name {
+		case "line-path":
+			return line, true
+		case "public-hy2":
+			return hy2, true
+		default:
+			return nil, false
+		}
+	}
+
+	metadata := &C.Metadata{NetWork: C.TCP, Host: "download.example", DstPort: 443}
+	conn, err := adapter.DialContext(context.Background(), metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	serverApp := <-backend.appReady
+
+	payload := bytes.Repeat([]byte("download-rx-activation"), 32*1024)
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := io.CopyN(io.Discard, conn, int64(len(payload)))
+		readDone <- readErr
+	}()
+	if _, err := serverApp.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out reading RX activation payload")
+	}
+
+	backend.waitForLegs(t, 2)
+	var hellos [2]smp3core.Hello
+	seen := [2]bool{}
+	for !(seen[0] && seen[1]) {
+		hello := <-backend.helloReady
+		if hello.LegID > 1 {
+			t.Fatalf("unexpected leg id %d", hello.LegID)
+		}
+		hellos[hello.LegID] = hello
+		seen[hello.LegID] = true
+	}
+	if hellos[0].SessionID != hellos[1].SessionID {
+		t.Fatalf("RX activation changed session identity: %x/%x", hellos[0].SessionID, hellos[1].SessionID)
 	}
 }
 

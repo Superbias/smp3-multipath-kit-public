@@ -1,10 +1,9 @@
-SMP3 2.1.0 carrier-agnostic adapter release closure verification
+SMP3 2.1.1 bidirectional Stream activation release closure verification
 ========================================
 
-This document freezes the Phase 6C/6D live evidence for the 2.1.0 release.
-Runtime/live evidence is inherited from the accepted 2.0.0 artifacts; this
-release adds the carrier-agnostic sing adapter refactor and local validation.
-No live fault injection or production migration is performed here.
+This document carries forward the accepted 2.0.0/2.1.0 runtime and live
+evidence and adds the 2.1.1 canonical Stream activation fix qualification.
+No standalone server upgrade or remote production migration is performed here.
 
 INSTALLER / OPERATIONS
 ======================
@@ -29,11 +28,12 @@ AUTOMATED / STATIC GATES
 
 Installer/operations packaging             PASS   PowerShell and Linux lifecycle tests
 
-validate-kit.sh                         PASS   smp3core=39, legacy_semantic=106, sing_adapter=17, total=162
-Canonical Core normal/race/vet         PASS   CORE 17/17 unchanged
+validate-kit.sh                         PASS   smp3core=47, legacy_semantic=106, sing_adapter=17, total=170
+Canonical Core normal/race/vet         PASS   CORE 18/18 current manifest; 16 inherited files unchanged plus scoped activation fix/test
 Wire golden fingerprint                 PASS   WIRE 22/22 unchanged
-Mihomo adapter normal/race/vet          PASS   R3 adapter and lifecycle gates
-sing adapter normal/race/vet            PASS   R2-compatible artifact gates
+Mihomo adapter normal/race/vet          PASS   R3 adapter/lifecycle gates plus RX activation -> leg1
+sing adapter normal/race/vet            PASS   R2-compatible gates; canonical callback unchanged
+Bidirectional Stream activation         PASS   TX, RX, MAX-not-SUM, boundary, one-shot
 Carrier-neutral primary/fallback tests  PASS   VLESS-style/Trojan-style/Direct-style fake child tags
 gofmt / diff --check                    PASS
 source injector / shell syntax          PASS

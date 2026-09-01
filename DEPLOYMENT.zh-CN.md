@@ -1,6 +1,6 @@
-# SMP3 2.1.0 部署与使用教程
+# SMP3 2.1.1 部署与使用教程
 
-本教程针对独立 SMP3 产品及其 2.1.0 carrier-agnostic adapter release。服务端不需要 sing-box，使用
+本教程针对独立 SMP3 产品及其 2.1.1 双向 Stream activation bugfix release。服务端不需要 sing-box，使用
 `smp3-server` 运行 canonical SMP3 Core 的 standalone server。sing-box
 只是可选的兼容 client，另一个 client 集成是 Mihomo custom core。
 
@@ -25,7 +25,7 @@ outbound；实际可达性取决于 host outbound。
 
 ## 2. 下载与校验
 
-从 [v2.1.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.0)
+从 [v2.1.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.1)
 下载：
 
 - 服务端：`smp3-server-linux-amd64` 或 Windows 版本；
@@ -170,8 +170,10 @@ cp config/client-adaptive.example.json config/client.json
    ```
 
 4. 使用支持 SOCKS5 UDP 的 DNS/应用客户端测试 UDP；
-5. 较长流量中确认第二条 leg 加入。短 adaptive 流量低于 activation
-   threshold 时按设计可能只使用一条 leg。
+5. 较长 TCP 流量中确认第二条 leg 加入。Stream activation 会按单个逻辑
+   session 同时观察 application payload 的上传和下载速率，并使用较高方向
+   的速率与 `activation-threshold-mbps` 比较，不会聚合多个连接。短流量或两
+   个方向都低于 threshold 时按设计可能只使用一条 leg。
 
 正常状态是一个逻辑 SMP3 session 加两条 carrier leg；可恢复故障只替换
    carrier generation，不重建逻辑 session。Mihomo adapter 也支持在应用
@@ -217,7 +219,7 @@ sudo systemctl enable --now smp3-proxy
 |---|---|
 | HELLO rejected | 密码、endpoint、端口和 carrier 目标是否一致。 |
 | TCP 正常但 UDP 不通 | client/server 的 `udp.enabled`、应用 SOCKS5 UDP 能力。 |
-| 第二条 leg 不出现 | 流量可能太短；检查 child proxy 名称和 carrier 连通性。 |
+| 第二条 leg 不出现 | 确认流量确实经过 SMP3，并且单个逻辑 Stream session 的上传或下载速率在 `activation-window` 内达到 `activation-threshold-mbps`；该阈值按方向/单 session 判断，不是多连接聚合。然后检查 child proxy 名称和 carrier 连通性。 |
 | 大 UDP 消失 | `>16384` 属于预期安全丢弃，不应被截断转发。 |
 | 故障后长时间中断 | 检查 carrier detection 日志；少量 UDP 丢包允许，持续失败不允许。 |
 | H3 100 MiB 失败 | 已知 aioquic/quic-go harness 问题，可脱离 SMP3 复现。 |
