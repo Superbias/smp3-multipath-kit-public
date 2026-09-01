@@ -1,10 +1,11 @@
-# SMP3 Multipath Kit 2.0.0
+# SMP3 Multipath Kit 2.0.1
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 Independent application-layer multipath transport built around a reusable SMP3 Core and standalone server.
 
-- **Release:** `2.0.0`
+- **Release:** `2.0.1` (installer/operations patch)
+- **Runtime baseline:** `2.0.0` (runtime semantics unchanged)
 - **Optional sing-box compatibility client build input:** `v1.14.0-beta.14`
 - **Compatibility build commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **Expected sing client binary:** `1.14.0-beta.14-smp3-2.0.0`
@@ -22,7 +23,45 @@ is: configure and validate `config/standalone-server.example.json`, install
 optional sing-box client profile. The standalone server is not a sing-box
 server and does not terminate Snell/Hysteria2.
 
-## Architecture in 2.0.0
+Windows Mihomo one-click install:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Superbias/smp3-multipath-kit-public/main/scripts/install-mihomo-smp3.ps1 -OutFile install-mihomo-smp3.ps1
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe"
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Check
+```
+
+Linux standalone one-click install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Superbias/smp3-multipath-kit-public/main/scripts/install-smp3-server.sh -o install-smp3-server.sh
+chmod +x install-smp3-server.sh
+sudo ./install-smp3-server.sh --config ./config.json
+smp3ctl status
+```
+
+Installer operations:
+
+```powershell
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Check
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Update
+.\install-mihomo-smp3.ps1 -CorePath "C:\path\to\mihomo.exe" -Restore
+```
+
+```bash
+sudo ./scripts/install-smp3-server.sh --check
+sudo smp3ctl status
+sudo smp3ctl logs -f
+sudo smp3ctl update
+sudo smp3ctl rollback
+```
+
+The Windows installer replaces only the explicitly selected Mihomo executable.
+The Linux installer manages only the standalone server and preserves the
+configuration on uninstall unless `--purge` is explicitly requested. Both
+installers verify exact GitHub stable Release assets against `SHA256SUMS`.
+
+## Architecture in 2.0.0 / 2.0.1
 
 The release separates the reusable, standard-library-only SMP3 Core from its hosts:
 
@@ -40,10 +79,11 @@ The standalone server is the production landing endpoint. It does not implement
 Snell or Hysteria2 itself; those encrypted carriers terminate in the client or
 in the surrounding deployment and connect to the SMP3 listener.
 
-## What 2.0.0 provides
+## What 2.0.1 packages
 
-2.0.0 keeps the validated wire behavior and packages the extracted Core,
-standalone server, Mihomo adapter, and sing-box compatibility integration:
+2.0.1 keeps the validated 2.0.0 wire/runtime behavior and packages the
+extracted Core, standalone server, Mihomo adapter, sing-box compatibility
+integration, and installer/operations tooling:
 
 1. **Adaptive TCP scheduler** — per-leg useful ACK/write throughput and write latency reshape static bandwidth weights so slow paths receive fewer early sequence numbers and cause less HOL pressure.
 2. **Bootstrap failover** — leg0 gets a configurable head start; if it fails or is still pending after `bootstrap_fallback_delay`, leg1 is dialed in parallel and the first authenticated HELLO establishes the logical session.
@@ -185,7 +225,7 @@ Validate/install on Linux:
 
 ```bash
 ./dist/smp3-server-linux-amd64 -c config/server.json -check
-sudo ./install-server.sh config/server.json
+sudo ./scripts/install-smp3-server.sh --config config/server.json
 sudo systemctl status smp3-standalone
 ```
 

@@ -1,6 +1,9 @@
-# SMP3 2.0.0 build status
+# SMP3 2.0.1 build status
 
-Status: **release closure candidate**.
+Status: **installer/operations release closure candidate**.
+
+Runtime baseline: `2.0.0`; runtime source, protocol, Core, and Wire semantics
+are unchanged. Artifact hashes are release-specific and recorded below.
 
 ## Pinned inputs
 
@@ -19,6 +22,11 @@ The explicit-target pipeline is:
 ./scripts/build-phase6-artifacts.sh
 ```
 
+For this operations-only release, the deterministic pipeline is also allowed
+to reuse the verified 2.0.0 runtime artifacts after target and SHA256 checks;
+it must not introduce runtime source changes merely to change the package
+version.
+
 It builds and checks these six release targets:
 
 ```text
@@ -31,7 +39,7 @@ dist/smp3-proxy-windows-amd64.exe
 ```
 
 The sing client reports `1.14.0-beta.14-smp3-2.0.0`; the standalone server
-reports `2.0.0`.
+reports `2.0.0`. The release/package version is `2.0.1`.
 
 ## Verified gates
 

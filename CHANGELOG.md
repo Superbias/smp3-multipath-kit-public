@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.1 — installer and operations release
+
+- Added Windows Mihomo SMP3 Core install, update, checksum verification,
+  backup/restore, and supervisor fail-safe tooling.
+- Added Linux standalone server install/update/rollback/uninstall tooling and
+  `smp3ctl` status, lifecycle, log, and version commands.
+- Added placeholder-only standalone server and Mihomo examples plus bilingual
+  deployment and operations guides.
+- No SMP3 protocol, Core, Wire, HELLO, scheduler, Stream, Datagram,
+  repair, or recovery semantic changes.
+
 ## 2.0.0 — canonical Core and standalone server release
 
 - Extracted the reusable standard-library-only SMP3 Stream and Datagram Core.

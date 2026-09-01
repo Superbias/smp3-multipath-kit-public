@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-VERSION="2.0.0"
+VERSION="2.0.1"
 NAME="smp3-multipath-kit-$VERSION"
 STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
 STAGE="$STAGE_ROOT/$NAME"
@@ -10,7 +10,7 @@ OUT_ZIP="${1:-$ROOT/$NAME-source.zip}"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$STAGE/config" "$STAGE/patches" "$STAGE/scripts" \
-  "$STAGE/src" "$STAGE/core" "$STAGE/server" "$STAGE/cmd" "$STAGE/adapters" \
+  "$STAGE/src" "$STAGE/core" "$STAGE/server" "$STAGE/cmd" "$STAGE/adapters" "$STAGE/examples" \
   "$STAGE/tools/check-binary-target" "$STAGE/dist"
 
 for file in \
@@ -33,6 +33,7 @@ cp -a "$ROOT/core/." "$STAGE/core/"
 cp -a "$ROOT/server/." "$STAGE/server/"
 cp -a "$ROOT/cmd/." "$STAGE/cmd/"
 cp -a "$ROOT/adapters/." "$STAGE/adapters/"
+cp -a "$ROOT/examples/." "$STAGE/examples/"
 cp -a "$ROOT/tools/check-binary-target/." "$STAGE/tools/check-binary-target/"
 cp -a "$ROOT/dist/BUILD_REQUIRED.md" "$STAGE/dist/"
 
