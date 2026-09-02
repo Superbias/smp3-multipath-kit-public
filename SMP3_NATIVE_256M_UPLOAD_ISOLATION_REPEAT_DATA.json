@@ -1,0 +1,860 @@
+{
+  "status": "completed-isolation",
+  "branch": "qualification/standalone-sidecar-rc",
+  "base_head": "82fe101",
+  "results": {
+    "direct_sink": {
+      "256": {
+        "app_bytes_written": 268435456,
+        "target": {
+          "received": 268435456,
+          "expected": 268435456,
+          "last_progress_age": 0.0016935999738052487,
+          "complete": true
+        },
+        "completion_response": true,
+        "pass": true
+      },
+      "512": {
+        "app_bytes_written": 536870912,
+        "target": {
+          "received": 536870912,
+          "expected": 536870912,
+          "last_progress_age": 0.00020249991212040186,
+          "complete": true
+        },
+        "completion_response": true,
+        "pass": true
+      }
+    },
+    "generic_mihomo": {
+      "size": 268435456,
+      "proxy": [
+        "127.0.0.1",
+        21083
+      ],
+      "app_bytes_written": 268435456,
+      "send_error": null,
+      "completion_response": true,
+      "sink": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0004998999647796154,
+        "complete": true
+      },
+      "last_progress_at": null,
+      "pass": true,
+      "sink_final": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.000520200002938509,
+        "complete": true
+      },
+      "mode": "generic-mihomo-direct",
+      "process_alive": true
+    },
+    "core_server": {
+      "size": 268435456,
+      "proxy": [
+        "127.0.0.1",
+        21681
+      ],
+      "app_bytes_written": 268435456,
+      "send_error": null,
+      "completion_response": true,
+      "sink": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0005080000264570117,
+        "complete": true
+      },
+      "last_progress_at": null,
+      "pass": true,
+      "sink_final": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0005169000942260027,
+        "complete": true
+      },
+      "mode": "canonical-core-server",
+      "process_alive": true,
+      "server_process_alive": false
+    },
+    "native_single_leg_64": {
+      "size": 67108864,
+      "proxy": [
+        "127.0.0.1",
+        21082
+      ],
+      "app_bytes_written": 67108864,
+      "send_error": null,
+      "completion_response": true,
+      "sink": {
+        "received": 67108864,
+        "expected": 67108864,
+        "last_progress_age": 0.0004325000336393714,
+        "complete": true
+      },
+      "last_progress_at": null,
+      "pass": true,
+      "sink_final": {
+        "received": 67108864,
+        "expected": 67108864,
+        "last_progress_age": 0.0004412999842315912,
+        "complete": true
+      },
+      "mode": "native",
+      "size_mib": 64,
+      "threshold": 1000000,
+      "chunk_size": 65536,
+      "process_alive": true,
+      "relay_A": {
+        "connect_count": 1,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 67136519,
+          "right_to_left": 24690
+        },
+        "active": 1
+      },
+      "relay_B": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "relay_C": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "same_session_leg1": false,
+      "single_leg_requested": true,
+      "single_leg_method": "leg1 child endpoint closed; no leg1-fallback",
+      "leg1_endpoint_port": 51846,
+      "leg1_fallback_configured": false,
+      "single_leg_enforced": true
+    },
+    "native_single_leg_256": {
+      "size": 268435456,
+      "proxy": [
+        "127.0.0.1",
+        21082
+      ],
+      "app_bytes_written": 268435456,
+      "send_error": null,
+      "completion_response": true,
+      "sink": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0008596000261604786,
+        "complete": true
+      },
+      "last_progress_at": null,
+      "pass": true,
+      "sink_final": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0008659000741317868,
+        "complete": true
+      },
+      "mode": "native",
+      "size_mib": 256,
+      "threshold": 1000000,
+      "chunk_size": 65536,
+      "process_alive": true,
+      "relay_A": {
+        "connect_count": 1,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 268543256,
+          "right_to_left": 87116
+        },
+        "active": 1
+      },
+      "relay_B": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "relay_C": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "same_session_leg1": false,
+      "single_leg_requested": true,
+      "single_leg_method": "leg1 child endpoint closed; no leg1-fallback",
+      "leg1_endpoint_port": 58182,
+      "leg1_fallback_configured": false,
+      "single_leg_enforced": true
+    },
+    "native_exact_repeat_256": {
+      "size_mib": 256,
+      "runs_requested": 3,
+      "runs": [
+        {
+          "size": 268435456,
+          "proxy": [
+            "127.0.0.1",
+            21082
+          ],
+          "app_bytes_written": 268435456,
+          "send_error": null,
+          "completion_response": true,
+          "sink": {
+            "received": 268435456,
+            "expected": 268435456,
+            "last_progress_age": 0.00023340003099292517,
+            "complete": true
+          },
+          "last_progress_at": null,
+          "pass": true,
+          "sink_final": {
+            "received": 268435456,
+            "expected": 268435456,
+            "last_progress_age": 0.00023729994427412748,
+            "complete": true
+          },
+          "run": 1
+        },
+        {
+          "size": 268435456,
+          "proxy": [
+            "127.0.0.1",
+            21082
+          ],
+          "app_bytes_written": 268435456,
+          "send_error": null,
+          "completion_response": true,
+          "sink": {
+            "received": 268435456,
+            "expected": 268435456,
+            "last_progress_age": 0.0006339000537991524,
+            "complete": true
+          },
+          "last_progress_at": null,
+          "pass": true,
+          "sink_final": {
+            "received": 268435456,
+            "expected": 268435456,
+            "last_progress_age": 0.0006410999922081828,
+            "complete": true
+          },
+          "run": 2
+        },
+        {
+          "size": 268435456,
+          "proxy": [
+            "127.0.0.1",
+            21082
+          ],
+          "app_bytes_written": 268435456,
+          "send_error": null,
+          "completion_response": true,
+          "sink": {
+            "received": 268435456,
+            "expected": 268435456,
+            "last_progress_age": 0.000735200010240078,
+            "complete": true
+          },
+          "last_progress_at": null,
+          "pass": true,
+          "sink_final": {
+            "received": 268435456,
+            "expected": 268435456,
+            "last_progress_age": 0.0007465999806299806,
+            "complete": true
+          },
+          "run": 3
+        }
+      ],
+      "process_alive": true,
+      "relay_A": {
+        "connect_count": 3,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ],
+          [
+            "127.0.0.1",
+            21540
+          ],
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 421584082,
+          "right_to_left": 152412
+        },
+        "active": 1
+      },
+      "relay_B": {
+        "connect_count": 3,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ],
+          [
+            "127.0.0.1",
+            21540
+          ],
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 384112261,
+          "right_to_left": 164186
+        },
+        "active": 1
+      },
+      "relay_C": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "same_session_leg1": true
+    },
+    "native_two_leg_256": {
+      "size": 268435456,
+      "proxy": [
+        "127.0.0.1",
+        21082
+      ],
+      "app_bytes_written": 268435456,
+      "send_error": null,
+      "completion_response": true,
+      "sink": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0012256000190973282,
+        "complete": true
+      },
+      "last_progress_at": null,
+      "pass": true,
+      "sink_final": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0012391000054776669,
+        "complete": true
+      },
+      "mode": "native",
+      "size_mib": 256,
+      "threshold": 1,
+      "chunk_size": 65536,
+      "process_alive": true,
+      "relay_A": {
+        "connect_count": 1,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 136594501,
+          "right_to_left": 36543
+        },
+        "active": 1
+      },
+      "relay_B": {
+        "connect_count": 1,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 131983217,
+          "right_to_left": 47141
+        },
+        "active": 1
+      },
+      "relay_C": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "same_session_leg1": true,
+      "single_leg_requested": false,
+      "single_leg_method": "normal leg1 and fallback relays",
+      "leg1_endpoint_port": null,
+      "leg1_fallback_configured": true,
+      "single_leg_enforced": false
+    },
+    "native_boundary": {
+      "127": {
+        "size": 133169152,
+        "proxy": [
+          "127.0.0.1",
+          21082
+        ],
+        "app_bytes_written": 133169152,
+        "send_error": null,
+        "completion_response": true,
+        "sink": {
+          "received": 133169152,
+          "expected": 133169152,
+          "last_progress_age": 0.0007117999484762549,
+          "complete": true
+        },
+        "last_progress_at": null,
+        "pass": true,
+        "sink_final": {
+          "received": 133169152,
+          "expected": 133169152,
+          "last_progress_age": 0.0007211999036371708,
+          "complete": true
+        },
+        "mode": "native",
+        "size_mib": 127,
+        "threshold": 1,
+        "chunk_size": 65536,
+        "process_alive": true,
+        "relay_A": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 68169967,
+            "right_to_left": 20553
+          },
+          "active": 1
+        },
+        "relay_B": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 65085846,
+            "right_to_left": 22142
+          },
+          "active": 1
+        },
+        "relay_C": {
+          "connect_count": 0,
+          "targets": [],
+          "bytes": {
+            "left_to_right": 0,
+            "right_to_left": 0
+          },
+          "active": 0
+        },
+        "same_session_leg1": true,
+        "single_leg_requested": false,
+        "single_leg_method": "normal leg1 and fallback relays",
+        "leg1_endpoint_port": null,
+        "leg1_fallback_configured": true,
+        "single_leg_enforced": false
+      },
+      "128": {
+        "size": 134217728,
+        "proxy": [
+          "127.0.0.1",
+          21082
+        ],
+        "app_bytes_written": 134217728,
+        "send_error": null,
+        "completion_response": true,
+        "sink": {
+          "received": 134217728,
+          "expected": 134217728,
+          "last_progress_age": 0.0007550000445917249,
+          "complete": true
+        },
+        "last_progress_at": null,
+        "pass": true,
+        "sink_final": {
+          "received": 134217728,
+          "expected": 134217728,
+          "last_progress_age": 0.0007876000599935651,
+          "complete": true
+        },
+        "mode": "native",
+        "size_mib": 128,
+        "threshold": 1,
+        "chunk_size": 65536,
+        "process_alive": true,
+        "relay_A": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 69206477,
+            "right_to_left": 20774
+          },
+          "active": 1
+        },
+        "relay_B": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 65093131,
+            "right_to_left": 22753
+          },
+          "active": 1
+        },
+        "relay_C": {
+          "connect_count": 0,
+          "targets": [],
+          "bytes": {
+            "left_to_right": 0,
+            "right_to_left": 0
+          },
+          "active": 0
+        },
+        "same_session_leg1": true,
+        "single_leg_requested": false,
+        "single_leg_method": "normal leg1 and fallback relays",
+        "leg1_endpoint_port": null,
+        "leg1_fallback_configured": true,
+        "single_leg_enforced": false
+      },
+      "129": {
+        "size": 135266304,
+        "proxy": [
+          "127.0.0.1",
+          21082
+        ],
+        "app_bytes_written": 135266304,
+        "send_error": null,
+        "completion_response": true,
+        "sink": {
+          "received": 135266304,
+          "expected": 135266304,
+          "last_progress_age": 0.0005647999932989478,
+          "complete": true
+        },
+        "last_progress_at": null,
+        "pass": true,
+        "sink_final": {
+          "received": 135266304,
+          "expected": 135266304,
+          "last_progress_age": 0.0005737999454140663,
+          "complete": true
+        },
+        "mode": "native",
+        "size_mib": 129,
+        "threshold": 1,
+        "chunk_size": 65536,
+        "process_alive": true,
+        "relay_A": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 69926699,
+            "right_to_left": 19604
+          },
+          "active": 0
+        },
+        "relay_B": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 65427332,
+            "right_to_left": 23013
+          },
+          "active": 0
+        },
+        "relay_C": {
+          "connect_count": 0,
+          "targets": [],
+          "bytes": {
+            "left_to_right": 0,
+            "right_to_left": 0
+          },
+          "active": 0
+        },
+        "same_session_leg1": true,
+        "single_leg_requested": false,
+        "single_leg_method": "normal leg1 and fallback relays",
+        "leg1_endpoint_port": null,
+        "leg1_fallback_configured": true,
+        "single_leg_enforced": false
+      },
+      "255": {
+        "size": 267386880,
+        "proxy": [
+          "127.0.0.1",
+          21082
+        ],
+        "app_bytes_written": 267386880,
+        "send_error": null,
+        "completion_response": true,
+        "sink": {
+          "received": 267386880,
+          "expected": 267386880,
+          "last_progress_age": 0.0006145000224933028,
+          "complete": true
+        },
+        "last_progress_at": null,
+        "pass": true,
+        "sink_final": {
+          "received": 267386880,
+          "expected": 267386880,
+          "last_progress_age": 0.0006220000796020031,
+          "complete": true
+        },
+        "mode": "native",
+        "size_mib": 255,
+        "threshold": 1,
+        "chunk_size": 65536,
+        "process_alive": true,
+        "relay_A": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 130413192,
+            "right_to_left": 38766
+          },
+          "active": 1
+        },
+        "relay_B": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 137150967,
+            "right_to_left": 46413
+          },
+          "active": 1
+        },
+        "relay_C": {
+          "connect_count": 0,
+          "targets": [],
+          "bytes": {
+            "left_to_right": 0,
+            "right_to_left": 0
+          },
+          "active": 0
+        },
+        "same_session_leg1": true,
+        "single_leg_requested": false,
+        "single_leg_method": "normal leg1 and fallback relays",
+        "leg1_endpoint_port": null,
+        "leg1_fallback_configured": true,
+        "single_leg_enforced": false
+      },
+      "256": {
+        "size": 268435456,
+        "proxy": [
+          "127.0.0.1",
+          21082
+        ],
+        "app_bytes_written": 268435456,
+        "send_error": null,
+        "completion_response": true,
+        "sink": {
+          "received": 268435456,
+          "expected": 268435456,
+          "last_progress_age": 0.00047109997831285,
+          "complete": true
+        },
+        "last_progress_at": null,
+        "pass": true,
+        "sink_final": {
+          "received": 268435456,
+          "expected": 268435456,
+          "last_progress_age": 0.0004781000316143036,
+          "complete": true
+        },
+        "mode": "native",
+        "size_mib": 256,
+        "threshold": 1,
+        "chunk_size": 65536,
+        "process_alive": true,
+        "relay_A": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 140727511,
+            "right_to_left": 39260
+          },
+          "active": 1
+        },
+        "relay_B": {
+          "connect_count": 1,
+          "targets": [
+            [
+              "127.0.0.1",
+              21540
+            ]
+          ],
+          "bytes": {
+            "left_to_right": 127882793,
+            "right_to_left": 47375
+          },
+          "active": 1
+        },
+        "relay_C": {
+          "connect_count": 0,
+          "targets": [],
+          "bytes": {
+            "left_to_right": 0,
+            "right_to_left": 0
+          },
+          "active": 0
+        },
+        "same_session_leg1": true,
+        "single_leg_requested": false,
+        "single_leg_method": "normal leg1 and fallback relays",
+        "leg1_endpoint_port": null,
+        "leg1_fallback_configured": true,
+        "single_leg_enforced": false
+      }
+    },
+    "native_chunk_32k_256": {
+      "size": 268435456,
+      "proxy": [
+        "127.0.0.1",
+        21082
+      ],
+      "app_bytes_written": 268435456,
+      "send_error": null,
+      "completion_response": true,
+      "sink": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0005035999929532409,
+        "complete": true
+      },
+      "last_progress_at": null,
+      "pass": true,
+      "sink_final": {
+        "received": 268435456,
+        "expected": 268435456,
+        "last_progress_age": 0.0005096000386402011,
+        "complete": true
+      },
+      "mode": "native",
+      "size_mib": 256,
+      "threshold": 1,
+      "chunk_size": 32768,
+      "process_alive": true,
+      "relay_A": {
+        "connect_count": 1,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 133231009,
+          "right_to_left": 42653
+        },
+        "active": 1
+      },
+      "relay_B": {
+        "connect_count": 1,
+        "targets": [
+          [
+            "127.0.0.1",
+            21540
+          ]
+        ],
+        "bytes": {
+          "left_to_right": 135347372,
+          "right_to_left": 49039
+        },
+        "active": 1
+      },
+      "relay_C": {
+        "connect_count": 0,
+        "targets": [],
+        "bytes": {
+          "left_to_right": 0,
+          "right_to_left": 0
+        },
+        "active": 0
+      },
+      "same_session_leg1": true,
+      "single_leg_requested": false,
+      "single_leg_method": "normal leg1 and fallback relays",
+      "leg1_endpoint_port": null,
+      "leg1_fallback_configured": true,
+      "single_leg_enforced": false
+    }
+  }
+}

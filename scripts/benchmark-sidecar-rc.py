@@ -37,6 +37,7 @@ SIDECAR_PORTS = (21441, 21442, 21443)
 STOCK_PORT = 21080
 SIDECAR_PORT = 21081
 NATIVE_PORT = 21082
+GENERIC_PORT = 21083
 THROUGHPUT_SIZES = (64, 256, 512)
 THROUGHPUT_RUNS = 3
 CHURN_COUNT = 1000
@@ -98,6 +99,9 @@ class StreamingFixture:
         self.stop = threading.Event()
         self.active: set[socket.socket] = set()
         self.lock = threading.Lock()
+        self.received = 0
+        self.echoed = 0
+        self.last_progress = time.monotonic()
         self.thread = threading.Thread(target=self._accept, daemon=True)
         self.thread.start()
 
@@ -132,13 +136,28 @@ class StreamingFixture:
                     data = conn.recv(64 * 1024)
                     if not data:
                         return
+                    with self.lock:
+                        self.received += len(data)
+                        self.last_progress = time.monotonic()
                     conn.sendall(data)
+                    with self.lock:
+                        self.echoed += len(data)
+                        self.last_progress = time.monotonic()
         except OSError:
             return
         finally:
             with self.lock:
                 self.active.discard(conn)
             conn.close()
+
+    def snapshot(self) -> dict[str, object]:
+        with self.lock:
+            return {
+                "received": self.received,
+                "echoed": self.echoed,
+                "last_progress_age": time.monotonic() - self.last_progress,
+                "active": len(self.active),
+            }
 
     def close(self) -> None:
         self.stop.set()
@@ -161,16 +180,18 @@ def recv_repeated(conn: socket.socket, size: int, expected: int) -> None:
         remaining -= len(data)
 
 
-def send_repeated(conn: socket.socket, size: int, value: int) -> None:
+def send_repeated(conn: socket.socket, size: int, value: int, progress: dict[str, int] | None = None) -> None:
     chunk = bytes((value,)) * (1024 * 1024)
     remaining = size
     while remaining:
         part = chunk if remaining >= len(chunk) else chunk[:remaining]
         conn.sendall(part)
         remaining -= len(part)
+        if progress is not None:
+            progress["written"] = size - remaining
 
 
-def tcp_transfer(proxy: tuple[str, int], fixture: StreamingFixture, upload: bool) -> float:
+def tcp_transfer(proxy: tuple[str, int], fixture: StreamingFixture, upload: bool, progress: dict[str, int] | None = None) -> float:
     conn = FIXTURE.socks_connect(proxy, fixture.address)
     try:
         conn.settimeout(60)
@@ -186,7 +207,7 @@ def tcp_transfer(proxy: tuple[str, int], fixture: StreamingFixture, upload: bool
 
             reader = threading.Thread(target=read_upload_echo)
             reader.start()
-            send_repeated(conn, fixture.size, ord("U"))
+            send_repeated(conn, fixture.size, ord("U"), progress)
             reader.join(timeout=60)
             if reader.is_alive() or errors:
                 raise RuntimeError(f"upload echo failed: {errors}")
@@ -594,24 +615,143 @@ def run_mode(mode_process: ModeProcess, metrics: dict[str, object], sizes: tuple
         mode_metrics["resources"][str(pid)] = process_stats(pid)
 
 
+def run_native_upload_only(root: Path, native: Path, output: Path, runs: int) -> int:
+    """Rerun only the original full-duplex Native echo upload gate."""
+    size = 256 * 1024 * 1024
+    metrics: dict[str, object] = {
+        "status": "running",
+        "mode": "native",
+        "size_mib": 256,
+        "runs_requested": runs,
+        "native_sha256": __import__("hashlib").sha256(native.read_bytes()).hexdigest(),
+        "runs": [],
+    }
+    with tempfile.TemporaryDirectory(prefix="smp3-native-upload-gate-") as temp_name:
+        temp = Path(temp_name)
+        shutil.copy2(native, temp / "native.exe")
+        server_config_path = temp / "server.json"
+        write_json(server_config_path, server_config())
+        server_bin = temp / "smp3-server.exe"
+        subprocess.run(["go", "build", "-trimpath", "-o", str(server_bin), "./cmd/smp3-server"], cwd=root, check=True)
+        server = start_process([str(server_bin), "-c", str(server_config_path)], temp)
+        server_log = FIXTURE.Collector(server)
+        relays = [FIXTURE.Relay(name) for name in ("A", "B", "C")]
+        active_mode: ModeProcess | None = None
+        try:
+            for port in (LEGACY_PORT, *SIDECAR_PORTS):
+                wait_tcp(("127.0.0.1", port))
+            active_mode = start_mode("native", root, temp, server, relays, temp / "native.exe")
+            for run in range(1, runs + 1):
+                fixture = StreamingFixture("echo", size, hold=10)
+                started = time.perf_counter()
+                record: dict[str, object] = {"run": run, "bytes": size, "pass": False}
+                progress: dict[str, int] = {"written": 0}
+                try:
+                    elapsed = tcp_transfer(active_mode.proxy, fixture, upload=True, progress=progress)
+                    record.update({"seconds": elapsed, "mbps": size * 8 / elapsed / 1_000_000, "pass": True})
+                except Exception as exc:  # pragma: no cover - diagnostic failure path
+                    record.update({"seconds": time.perf_counter() - started, "error": repr(exc)})
+                finally:
+                    record["app_bytes_written_lower_bound"] = progress["written"]
+                    record["fixture"] = fixture.snapshot()
+                    record["relay_counts"] = {relay.name: relay.count for relay in relays}
+                    record["native_log_tail"] = active_mode.logs[-1].snapshot()[-20:] if active_mode.logs else []
+                    record["server_log_tail"] = server_log.snapshot()[-20:]
+                    fixture.close()
+                metrics["runs"].append(record)
+            metrics["relay_counts"] = {relay.name: relay.count for relay in relays}
+            metrics["same_session_leg1"] = FIXTURE.session_join_evidence(server_log.snapshot(), 0)
+            metrics["status"] = "completed-native-upload-only"
+        finally:
+            if active_mode is not None:
+                active_mode.stop()
+            stop_process(server)
+            for relay in relays:
+                relay.close()
+    output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print(json.dumps(metrics, indent=2))
+    return 0 if all(record.get("pass") for record in metrics["runs"]) else 1
+
+
+def run_generic_upload_only(native: Path, output: Path, runs: int) -> int:
+    """Run the same full-duplex echo gate through ordinary Mihomo DIRECT."""
+    size = 256 * 1024 * 1024
+    metrics: dict[str, object] = {
+        "status": "running",
+        "mode": "generic-mihomo-direct",
+        "size_mib": 256,
+        "runs_requested": runs,
+        "native_sha256": __import__("hashlib").sha256(native.read_bytes()).hexdigest(),
+        "runs": [],
+    }
+    with tempfile.TemporaryDirectory(prefix="smp3-generic-upload-gate-") as temp_name:
+        temp = Path(temp_name)
+        binary = temp / "native.exe"
+        shutil.copy2(native, binary)
+        config = temp / "generic.yaml"
+        config.write_text(
+            f"mixed-port: {GENERIC_PORT}\nmode: rule\nlog-level: warning\nrules:\n  - MATCH,DIRECT\n",
+            encoding="utf-8",
+        )
+        check = subprocess.run([str(binary), "-t", "-f", str(config)], cwd=temp, capture_output=True, text=True)
+        if check.returncode != 0:
+            raise RuntimeError(f"generic Mihomo config rejected: {check.stdout}{check.stderr}")
+        process = start_process([str(binary), "-d", str(temp / "profile"), "-f", str(config)], temp)
+        log = FIXTURE.Collector(process)
+        try:
+            wait_tcp(("127.0.0.1", GENERIC_PORT))
+            for run in range(1, runs + 1):
+                fixture = StreamingFixture("echo", size, hold=10)
+                started = time.perf_counter()
+                record: dict[str, object] = {"run": run, "bytes": size, "pass": False}
+                progress: dict[str, int] = {"written": 0}
+                try:
+                    elapsed = tcp_transfer(("127.0.0.1", GENERIC_PORT), fixture, upload=True, progress=progress)
+                    record.update({"seconds": elapsed, "mbps": size * 8 / elapsed / 1_000_000, "pass": True})
+                except Exception as exc:  # pragma: no cover - diagnostic failure path
+                    record.update({"seconds": time.perf_counter() - started, "error": repr(exc)})
+                finally:
+                    record["app_bytes_written_lower_bound"] = progress["written"]
+                    record["fixture"] = fixture.snapshot()
+                    record["log_tail"] = log.snapshot()[-20:]
+                    fixture.close()
+                metrics["runs"].append(record)
+            metrics["status"] = "completed-generic-upload-only"
+        finally:
+            stop_process(process)
+    output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print(json.dumps(metrics, indent=2))
+    return 0 if all(record.get("pass") for record in metrics["runs"]) else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stock", required=True)
+    parser.add_argument("--stock")
     parser.add_argument("--native", required=True, help="current disposable-copy path of SMP3-enabled Mihomo")
     parser.add_argument("--output", default="SMP3_SIDECAR_RC_BENCHMARK_DATA.json")
     parser.add_argument("--sizes", default=','.join(str(size) for size in THROUGHPUT_SIZES), help="comma-separated MiB throughput sizes")
     parser.add_argument("--runs", type=int, default=THROUGHPUT_RUNS)
     parser.add_argument("--churn", type=int, default=CHURN_COUNT)
     parser.add_argument("--persistent-seconds", type=int, default=300)
+    parser.add_argument("--native-upload-only", action="store_true", help="rerun only the Native full-duplex 256 MiB upload gate")
+    parser.add_argument("--generic-upload-only", action="store_true", help="run only the ordinary Mihomo DIRECT full-duplex 256 MiB upload gate")
     args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    native = Path(args.native).resolve()
+    if not native.is_file():
+        raise SystemExit("native fixture missing")
+    if args.native_upload_only:
+        return run_native_upload_only(root, native, Path(args.output).resolve(), args.runs)
+    if args.generic_upload_only:
+        return run_generic_upload_only(native, Path(args.output).resolve(), args.runs)
+    if not args.stock:
+        raise SystemExit("--stock is required unless --native-upload-only is used")
     sizes = tuple(int(value) for value in args.sizes.split(',') if value)
     if not sizes or args.runs <= 0 or args.churn <= 0 or args.persistent_seconds <= 0:
         raise SystemExit("sizes, runs, churn, and persistent-seconds must be positive")
-    root = Path(__file__).resolve().parents[1]
     stock = Path(args.stock).resolve()
-    native = Path(args.native).resolve()
-    if not stock.is_file() or not native.is_file():
-        raise SystemExit("stock/native fixture missing")
+    if not stock.is_file():
+        raise SystemExit("stock fixture missing")
 
     metrics: dict[str, object] = {"environment": {}, "status": "running"}
     with tempfile.TemporaryDirectory(prefix="smp3-sidecar-rc-") as temp_name:
