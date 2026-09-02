@@ -157,6 +157,8 @@ class Relay:
         self.count = 0
         self.attempts = 0
         self.targets: list[tuple[str, int]] = []
+        self.bytes = {"left_to_right": 0, "right_to_left": 0}
+        self.events: list[dict[str, object]] = []
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self._accept, daemon=True)
@@ -225,9 +227,11 @@ class Relay:
             target = (host, port)
             with self.lock:
                 self.count += 1
+                connection_id = self.count
                 self.targets.append(target)
                 allow = self.allow
                 hang = self.hang
+                self.events.append({"time": time.monotonic(), "event": "target", "connection": connection_id, "target": target})
             if hang:
                 while conn.recv(4096):
                     pass
@@ -242,7 +246,9 @@ class Relay:
             upstream.settimeout(None)
             conn.settimeout(None)
             conn.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x01")
-            bridge(conn, upstream)
+            with self.lock:
+                self.events.append({"time": time.monotonic(), "event": "socks_reply", "connection": connection_id})
+            bridge(conn, upstream, self.bytes, self.events, connection_id, self.lock)
         except (OSError, EOFError):
             return
         finally:
@@ -271,7 +277,14 @@ class Relay:
             conn.close()
 
 
-def bridge(left: socket.socket, right: socket.socket) -> None:
+def bridge(
+    left: socket.socket,
+    right: socket.socket,
+    counters: dict[str, int] | None = None,
+    events: list[dict[str, object]] | None = None,
+    connection_id: int | None = None,
+    event_lock: threading.Lock | None = None,
+) -> None:
     sockets = [left, right]
     try:
         while True:
@@ -284,6 +297,17 @@ def bridge(left: socket.socket, right: socket.socket) -> None:
                 if not data:
                     return
                 target.sendall(data)
+                if counters is not None:
+                    key = "left_to_right" if source is left else "right_to_left"
+                    counters[key] = counters.get(key, 0) + len(data)
+                if events is not None:
+                    key = "left_to_right" if source is left else "right_to_left"
+                    event = {"time": time.monotonic(), "event": key, "connection": connection_id, "bytes": len(data)}
+                    if event_lock is None:
+                        events.append(event)
+                    else:
+                        with event_lock:
+                            events.append(event)
     except (OSError, ValueError):
         return
     finally:
