@@ -153,6 +153,7 @@ class Relay:
         self.drop = False
         self.hang = False
         self.hang_greeting = False
+        self.active: set[socket.socket] = set()
         self.count = 0
         self.attempts = 0
         self.targets: list[tuple[str, int]] = []
@@ -182,8 +183,12 @@ class Relay:
                 conn.close()
                 continue
             if hang_greeting:
+                with self.lock:
+                    self.active.add(conn)
                 threading.Thread(target=self._hold, args=(conn,), daemon=True).start()
                 continue
+            with self.lock:
+                self.active.add(conn)
             threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
 
     @staticmethod
@@ -241,6 +246,11 @@ class Relay:
         except (OSError, EOFError):
             return
         finally:
+            # The handler removes the socket from the active set so an
+            # in-flight carrier can be failed deterministically by the RC
+            # harness.
+            with self.lock:
+                self.active.discard(conn)
             try:
                 conn.close()
             except OSError:
@@ -255,6 +265,10 @@ class Relay:
         self.stop.set()
         self.listener.close()
         self.thread.join(timeout=1)
+        with self.lock:
+            active = list(self.active)
+        for conn in active:
+            conn.close()
 
 
 def bridge(left: socket.socket, right: socket.socket) -> None:
@@ -270,7 +284,7 @@ def bridge(left: socket.socket, right: socket.socket) -> None:
                 if not data:
                     return
                 target.sendall(data)
-    except OSError:
+    except (OSError, ValueError):
         return
     finally:
         try:
