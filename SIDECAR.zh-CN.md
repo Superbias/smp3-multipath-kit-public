@@ -1,7 +1,8 @@
-# SMP3 独立 SOCKS5 Sidecar（开发中）
+# SMP3 2.2.0 独立 SOCKS5 Sidecar
 
-本文说明 `feature/standalone-sidecar-client` 分支中的独立 sidecar 客户端，
-当前还不是已发布的 release 产物。
+本文说明 SMP3 2.2.0 release candidate 中的独立 sidecar 客户端。它是
+面向兼容性的、与 host 无关的 client；已使用 Windows stock Mihomo
+v1.19.29 完成验收。
 
 Sidecar 是一个仅绑定本机回环地址的 SOCKS5 服务。它只通过宿主已有的
 SOCKS5 端点，使用 TCP `CONNECT` 连接两个 SMP3 route；不会使用上游的
@@ -72,8 +73,9 @@ Party、carrier 定义、防火墙规则或 standalone server。必须把 sideca
 endpoint 的 route discriminator 放在宽泛规则之前，避免宿主 SOCKS 到
 sidecar 的循环。
 
-本阶段不替换 native Mihomo 或 sing adapter；两者是独立集成，sidecar 不会
-修改它们。
+sidecar 不替换 native Mihomo 或 sing adapter；两者是独立集成，sidecar 不会
+修改它们。Native Mihomo 和 stock Mihomo Sidecar 已完成验收；sing-box、
+Xray/V2Ray 及其他 SOCKS5 host 目前仅属于架构兼容，仍需各自验收。
 
 ## SOCKS5 行为
 

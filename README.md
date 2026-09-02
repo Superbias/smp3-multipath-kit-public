@@ -1,15 +1,16 @@
-# SMP3 Multipath Kit 2.1.1
+# SMP3 Multipath Kit 2.2.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 Independent application-layer multipath transport built around a reusable SMP3 Core and standalone server.
 
-- **Release:** `2.1.1` (bidirectional Stream activation bugfix)
-- **Runtime baseline:** `2.0.0` (runtime semantics unchanged)
+- **Release candidate:** `2.2.0` (standalone Sidecar client and server host extension)
+- **Canonical runtime baseline:** `2.1.1` (wire/Core semantics unchanged)
 - **Optional sing-box compatibility client build input:** `v1.14.0-beta.14`
 - **Compatibility build commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **Expected sing client binary:** `1.14.0-beta.14-smp3-2.0.0`
-- **Expected standalone server binary:** `2.0.0`
+- **Expected standalone server binary:** `2.2.0`
+- **Expected standalone Sidecar client binary:** `2.2.0`
 - **TCP stream HELLO:** v4 (compatible with r10 stream mode)
 - **UDP datagram HELLO:** v5 (2.0.0 endpoints required)
 
@@ -61,11 +62,20 @@ The Linux installer manages only the standalone server and preserves the
 configuration on uninstall unless `--purge` is explicitly requested. Both
 installers verify exact GitHub stable Release assets against `SHA256SUMS`.
 
-## Standalone SOCKS5 sidecar client (development)
+## Client Deployment Modes
 
-This branch also contains a cross-platform standalone sidecar client. It is a
-separate local SOCKS5 endpoint for applications that need SMP3 without a
-native Mihomo or sing-box integration:
+SMP3 2.2.0 provides two client deployment modes. Native mode is the shortest
+path and is recommended for maximum performance. Standalone Sidecar mode is a
+compatibility-first, host-agnostic local SOCKS5 endpoint for applications that
+need SMP3 without a native Mihomo or sing-box integration:
+
+Native mode:
+
+```text
+application -> SMP3-enabled Mihomo -> child outbounds -> SMP3 server
+```
+
+Sidecar mode:
 
 ```text
 application -> sidecar SOCKS5 -> host SOCKS5 CONNECT
@@ -89,11 +99,12 @@ authenticated `SMP3RDY1` record only after canonical HELLO admission. A SOCKS
 CONNECT success alone is not treated as remote SMP3 readiness; legacy
 `listen`/`listeners` endpoints remain canonical-only.
 
-The sidecar is development-only on this branch. It does not replace or modify
-the native Mihomo/sing adapters, carrier definitions, Clash Party, firewall
-rules, or production configuration.
+The Sidecar is part of the 2.2.0 release candidate. It does not replace or
+modify the native Mihomo/sing adapters, carrier definitions, Clash Party,
+firewall rules, or production configuration. Its local overhead is measured in
+the RC report and is not a universal performance guarantee.
 
-## Architecture in 2.1.1
+## Architecture in 2.2.0
 
 The release separates the reusable, standard-library-only SMP3 Core from its hosts:
 
@@ -117,12 +128,12 @@ listen for those child carrier protocols. The two child outbounds independently
 reach the same listener and share one SMP3 logical session, not one carrier
 connection.
 
-## What 2.1.1 packages
+## What 2.2.0 packages
 
-2.1.1 keeps the validated 2.0.0 wire/runtime behavior and packages the
-carrier-agnostic sing adapter policy together with the extracted Core,
-standalone server, Mihomo adapter, compatibility integration, and operations
-tooling:
+2.2.0 keeps the validated 2.1.1 wire/Core behavior and adds the standalone
+Sidecar client plus the server's authenticated sidecar-listener host
+extension. The optional sing-box compatibility client and native Mihomo
+integration remain separate:
 
 1. **Adaptive TCP scheduler** — per-leg useful ACK/write throughput and write latency reshape static bandwidth weights so slow paths receive fewer early sequence numbers and cause less HOL pressure.
 2. **Bootstrap failover** — leg0 gets a configurable head start; if it fails or is still pending after `bootstrap_fallback_delay`, leg1 is dialed in parallel and the first authenticated HELLO establishes the logical session.
@@ -132,7 +143,7 @@ tooling:
 ## Data planes
 
 ```text
-                         SMP3 2.0.0
+                         SMP3 2.2.0
                             │
                  ┌──────────┴──────────┐
                  │                     │

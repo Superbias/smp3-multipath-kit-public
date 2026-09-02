@@ -1,8 +1,8 @@
-# SMP3 Standalone SOCKS5 Sidecar (development)
+# SMP3 2.2.0 Standalone SOCKS5 Sidecar
 
-This document describes the standalone sidecar client in the
-`feature/standalone-sidecar-client` branch. It is not a published release
-artifact yet.
+This document describes the standalone sidecar client included in the SMP3
+2.2.0 release candidate. It is a compatibility-first, host-agnostic client;
+the candidate has been qualified with stock Mihomo v1.19.29 on Windows.
 
 The sidecar is a small local SOCKS5 server. It uses the host's existing
 SOCKS5 endpoint only for outbound TCP `CONNECT` to each configured SMP3 route;
@@ -81,9 +81,11 @@ modify Mihomo, Clash Party, carrier definitions, firewall rules, or the
 standalone server. The route discriminator for the sidecar's own endpoints must
 precede broad rules to prevent a host-SOCKS-to-sidecar loop.
 
-This phase intentionally does not replace the native Mihomo or sing adapters.
-Those integrations remain separate products and are not changed by the
-sidecar client.
+The sidecar does not replace the native Mihomo or sing adapters. Those
+integrations remain separate products and are not changed by the sidecar
+client. Native Mihomo and stock Mihomo Sidecar are qualified; sing-box,
+Xray/V2Ray, and other SOCKS5 hosts remain architecture-compatible but require
+their own qualification.
 
 ## SOCKS5 behavior
 

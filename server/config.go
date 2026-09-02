@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const Version = "2.0.0"
+const Version = "2.2.0"
 
 type Duration time.Duration
 

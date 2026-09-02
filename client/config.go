@@ -14,7 +14,7 @@ import (
 	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
 
-const Version = "2.1.1-sidecar-dev"
+const Version = "2.2.0"
 
 type Duration time.Duration
 

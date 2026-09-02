@@ -1,8 +1,8 @@
-# SMP3 2.1.1 Deployment and Usage
+# SMP3 2.2.0 Deployment and Usage
 
-This guide deploys the independent SMP3 product and its 2.1.1 bidirectional
-Stream activation bugfix release and carrier-agnostic
-adapter release.
+This guide deploys the independent SMP3 2.2.0 product, including the
+standalone Sidecar client and authenticated server host extension. The
+canonical 2.1.1 Stream activation behavior remains part of the runtime baseline.
 The server side does **not**
 require sing-box: it uses `smp3-server`, the standalone host for the canonical
 SMP3 Core. sing-box is only an optional compatibility client; Mihomo is the
@@ -43,7 +43,9 @@ responsibilities of the host outbound and external carrier deployment.
 
 ## 2. Download and verify
 
-Download the assets from the [v2.1.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.1):
+For this release candidate, use the local staging assets prepared by the
+integration review. After publication, the same files will be available from
+the [v2.2.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.2.0):
 
 - Server: `smp3-server-linux-amd64` or `smp3-server-windows-amd64.exe`.
 - Mihomo client: `mihomo-smp3-linux-amd64` or `mihomo-smp3-windows-amd64.exe`.
@@ -173,12 +175,13 @@ Mihomo mixed/SOCKS port, for example `127.0.0.1:7890`. For UDP, the application
 must actually use SOCKS5 UDP ASSOCIATE; an HTTP-only client does not exercise
 the MP-UDP path.
 
-## 4.1 Use the standalone SOCKS5 sidecar (development)
+## 4.1 Use the standalone SOCKS5 sidecar
 
 The repository also contains a separate cross-platform `smp3-client` sidecar.
 It is useful when the application should speak directly to a local SOCKS5
 endpoint without using a native Mihomo or sing-box SMP3 adapter. It does not
-replace those adapters and is not part of the stable 2.1.1 release artifact.
+replace those adapters. It is a compatibility-first deployment mode in 2.2.0,
+while Native mode remains the shortest/highest-performance integration.
 
 Copy `examples/smp3-client-config.example.json` to a private config and replace
 all placeholders. The two `smp3.routes` values must independently reach the

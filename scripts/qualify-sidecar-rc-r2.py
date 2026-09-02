@@ -436,7 +436,7 @@ def build_artifacts(root: Path, stage: Path) -> dict[str, Any]:
             version = versions[package]
         records.append({"filename": name, "size": output.stat().st_size, "sha256": sha256(output), "version": version})
     sums = stage / "SHA256SUMS-RC"
-    sums.write_text("".join(f"{record['sha256']}  {record['filename']}\n" for record in records), encoding="utf-8")
+    sums.write_bytes("".join(f"{record['sha256']}  {record['filename']}\n" for record in records).encode("utf-8"))
     return {"files": records, "sha256s": sha256(sums), "sums": str(sums)}
 
 
@@ -450,6 +450,7 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--churn", type=int, default=1000)
     parser.add_argument("--ready-only", action="store_true")
+    parser.add_argument("--native-smoke-only", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     native = Path(args.native).resolve()
@@ -487,6 +488,25 @@ def main() -> int:
                 process_handles.extend(active.processes)
                 metrics["ready_cost"] = detailed_ready_cost(active, relays)
                 metrics["status"] = "completed-ready-only"
+                output = Path(args.output).resolve()
+                output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+                print(json.dumps(metrics, indent=2))
+                return 0
+            if args.native_smoke_only:
+                active = start_native(root, temp, server, relays)
+                process_handles.extend(active.processes)
+                before = len(server_log.snapshot())
+                upload = exact_upload(active.proxy, 8 * 1024 * 1024)
+                download = fixed_download(active.proxy, 8 * 1024 * 1024)
+                metrics["native_smoke"] = {
+                    "upload": upload,
+                    "download": download,
+                    "udp": RC.udp_case(active.proxy, 64),
+                    "leg1_same_session": wait_session_join(server_log, before),
+                    "legacy_ready_free": not any("SMP3RDY1" in line for line in server_log.snapshot()),
+                }
+                metrics["native_smoke"]["pass"] = bool(metrics["native_smoke"]["upload"]["pass"] and metrics["native_smoke"]["download"]["pass"] and metrics["native_smoke"]["udp"]["lost"] == 0 and metrics["native_smoke"]["udp"]["bad"] == 0 and metrics["native_smoke"]["leg1_same_session"] and metrics["native_smoke"]["legacy_ready_free"])
+                metrics["status"] = "completed-native-smoke-only"
                 output = Path(args.output).resolve()
                 output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
                 print(json.dumps(metrics, indent=2))

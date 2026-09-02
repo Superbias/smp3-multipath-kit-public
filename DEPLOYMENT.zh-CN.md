@@ -1,6 +1,8 @@
-# SMP3 2.1.1 部署与使用教程
+# SMP3 2.2.0 部署与使用教程
 
-本教程针对独立 SMP3 产品及其 2.1.1 双向 Stream activation bugfix release。服务端不需要 sing-box，使用
+本教程针对 SMP3 2.2.0 独立产品，包括 standalone Sidecar client 和认证的
+server host extension。2.1.1 的双向 Stream activation 行为仍是 runtime 基线。
+服务端不需要 sing-box，使用
 `smp3-server` 运行 canonical SMP3 Core 的 standalone server。sing-box
 只是可选的兼容 client，另一个 client 集成是 Mihomo custom core。
 
@@ -37,7 +39,8 @@ IPv4/IPv6 选择和具体 carrier 的可达性继续由 host outbound/外部 car
 
 ## 2. 下载与校验
 
-从 [v2.1.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.1.1)
+本 release candidate 使用 integration review 生成的本地 staging 产物；正式
+发布后从 [v2.2.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.2.0)
 下载：
 
 - 服务端：`smp3-server-linux-amd64` 或 Windows 版本；
@@ -152,11 +155,12 @@ Invoke-WebRequest https://raw.githubusercontent.com/Superbias/smp3-multipath-kit
 应用可连接 Mihomo 的 `127.0.0.1:7890` mixed/SOCKS 端口。UDP 应用必须真
 正使用 SOCKS5 UDP ASSOCIATE；只支持 HTTP 的应用不会覆盖 MP-UDP。
 
-## 4.1 使用 standalone SOCKS5 sidecar（开发中）
+## 4.1 使用 standalone SOCKS5 sidecar
 
 仓库还包含一个独立的跨平台 `smp3-client` sidecar。当应用需要直接使用
 本地 SOCKS5，而不使用 native Mihomo 或 sing-box SMP3 adapter 时，可以使用
-它。它不会替换这些 adapter，也不属于稳定的 2.1.1 release 产物。
+它。它不会替换这些 adapter；2.2.0 将其作为兼容性优先的部署模式，Native
+mode 仍是最短、性能最高的集成方式。
 
 复制 `examples/smp3-client-config.example.json` 为私有配置并替换全部占位符。
 两个 `smp3.routes` 必须经宿主 SOCKS5 独立到达同一个 standalone SMP3

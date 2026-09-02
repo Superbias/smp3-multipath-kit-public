@@ -1,15 +1,16 @@
-# SMP3 Multipath Kit 2.1.1
+# SMP3 Multipath Kit 2.2.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 围绕可复用 SMP3 Core 和 standalone server 构建的独立应用层多路径传输产品。
 
-- **版本：** `2.1.1`（双向 Stream activation bugfix）
-- **Runtime baseline：** `2.0.0`（未改变且 byte-identical）
+- **Release candidate：** `2.2.0`（standalone Sidecar client 与 server host extension）
+- **Canonical runtime baseline：** `2.1.1`（wire/Core 语义未改变）
 - **可选 sing-box 兼容 client 构建输入：** `v1.14.0-beta.14`
 - **兼容构建 commit：** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **预期 sing client 二进制版本：** `1.14.0-beta.14-smp3-2.0.0`
-- **预期 standalone server 二进制版本：** `2.0.0`
+- **预期 standalone server 二进制版本：** `2.2.0`
+- **预期 standalone Sidecar client 二进制版本：** `2.2.0`
 - **TCP Stream HELLO：** v4（继续兼容 r10 TCP）
 - **UDP Datagram HELLO：** v5（MP-UDP 需要 2.0.0 两端）
 
@@ -59,9 +60,10 @@ Windows installer 只替换明确指定的 Mihomo executable；Linux installer �
 管理 standalone server，卸载时默认保留 config，只有显式 `--purge` 才删除。
 两者都会用 `SHA256SUMS` 校验 GitHub stable Release 的精确 asset。
 
-## 独立 SOCKS5 sidecar client（开发中）
+## Client Deployment Modes
 
-本分支还包含一个跨平台的独立 sidecar client，为不使用 native Mihomo 或
+SMP3 2.2.0 提供 Native 与 Standalone Sidecar 两种 client 部署模式。Native
+mode 是最短路径，适合追求最高性能；Sidecar mode 面向兼容性，为不使用 native Mihomo 或
 sing-box 集成的应用提供本地 SOCKS5 入口：
 
 ```text
@@ -83,10 +85,10 @@ canonical HELLO admission 后才返回带认证的 `SMP3RDY1`。仅 SOCKS CONNEC
 success 不代表远端 SMP3 ready，旧的 `listen`/`listeners` 仍保持
 canonical-only 行为。
 
-sidecar 在本分支仍是开发中功能，不会替换或修改 native Mihomo/sing
+sidecar 是 2.2.0 release candidate 的一部分，不会替换或修改 native Mihomo/sing
 adapter、carrier 定义、Clash Party、防火墙规则或生产配置。
 
-## 2.1.1 架构
+## 2.2.0 架构
 
 本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：
 
@@ -109,11 +111,11 @@ listener；standalone 不实现也不监听这些 child carrier 协议。两个 
 outbound 分别连接同一个 listener，共享一个 SMP3 logical session，而不是
 共享同一个底层 carrier 连接。
 
-## 2.1.1 打包什么
+## 2.2.0 打包什么
 
-2.1.1 保留已经验证的 2.0.0 wire/runtime 行为，并打包 carrier-agnostic
-sing adapter policy、抽离后的 Core、standalone server、Mihomo adapter、
-sing-box compatibility integration 与 installer/operations 工具：
+2.2.0 保留已经验证的 2.1.1 wire/Core 行为，并增加 standalone Sidecar
+client 与认证的 sidecar listener host extension；可选 sing-box client 和
+native Mihomo 集成保持独立：
 
 1. **TCP 带宽感知 Adaptive Scheduler**：根据每条 leg 的有效 ACK/写入吞吐、写入延迟和队列压力动态修正 `bandwidth_mbps` 权重，尽量减少慢路径拿到过多早期 sequence 后造成 HOL。
 2. **Bootstrap Failover**：leg0 先获得一个可配置的抢跑时间；如果硬失败，立即拨 leg1；如果超过 `bootstrap_fallback_delay` 仍未完成，则并行拨 leg1，谁先完成认证 HELLO 谁先建立逻辑 session。
@@ -123,7 +125,7 @@ sing-box compatibility integration 与 installer/operations 工具：
 ## 两套数据面
 
 ```text
-                         SMP3 2.0.0
+                         SMP3 2.2.0
                             │
                  ┌──────────┴──────────┐
                  │                     │
