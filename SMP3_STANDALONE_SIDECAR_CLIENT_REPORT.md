@@ -17,6 +17,47 @@ STOCK MIHOMO UDP/LOOP PREVENTION: PASS
 PHASE 1 FINAL GATE: PASS
 ```
 
+## AUTHORITATIVE FINAL STATUS
+
+```text
+STANDALONE SIDECAR CLIENT PHASE 1: PASS
+
+IMPLEMENTATION: COMPLETE
+LOCAL_FUNCTIONAL_ACCEPTANCE: PASS
+STATIC_BUILD_ACCEPTANCE: PASS
+
+UPSTREAM_SOCKS_CONNECT_TIMEOUT: PASS
+
+SIDECAR_REMOTE_READY: PASS
+SIDECAR_READY_AUTH: PASS
+FALSE_SUCCESS_READY_TIMEOUT: PASS
+SIDECAR_FALSE_SUCCESS_FALLBACK: PASS
+
+STOCK_MIHOMO_FIXTURE: VERIFIED
+STOCK_MIHOMO_ROUTE_DISCRIMINATION: PASS
+STOCK_MIHOMO_SIDECAR_TCP: PASS
+STOCK_MIHOMO_SIDECAR_RX_ACTIVATION: PASS
+STOCK_MIHOMO_SIDECAR_TX_ACTIVATION: PASS
+STOCK_MIHOMO_FALSE_SUCCESS_OBSERVED: YES
+STOCK_MIHOMO_READY_TIMEOUT: PASS
+STOCK_MIHOMO_SIDECAR_FALLBACK: PASS
+LEG1_SAME_SESSION_JOIN_AFTER_FALLBACK: PASS
+STOCK_MIHOMO_SIDECAR_UDP: PASS
+SIDECAR_LOOP_PREVENTION: PASS
+
+LEGACY_LISTENER_CHANGED: NO
+NATIVE_MODE_CHANGED: NO
+MULTI_LISTENER_PORT_SEMANTICS: NONE
+
+CORE_CHANGED: NO
+CANONICAL_WIRE_CHANGED: NO
+SIDECAR_HOST_READINESS_EXTENSION: ADDED
+SERVER_PROTOCOL_SEMANTICS_CHANGED: NO
+PRODUCTION_TOUCHED: NO
+
+PHASE_1_FINAL_GATE: PASS
+```
+
 This work is on `feature/standalone-sidecar-client`, based on `origin/main`.
 R2 base head: `b172cfafeec7165845234f6f4afd55dc46e703e3`.
 R3 implementation commit: `45e95b2a3793e7c398eddfb08c642dced3ccde90`.
@@ -151,7 +192,7 @@ STOCK_MIHOMO_SIDECAR_TCP: PASS (8 MiB exact download)
 STOCK_MIHOMO_SIDECAR_RX_ACTIVATION: PASS
 STOCK_MIHOMO_SIDECAR_TX_ACTIVATION: PASS
 LEG1_SAME_SESSION_JOIN: PASS
-STOCK_MIHOMO_PRIMARY_TIMEOUT: BLOCKED (R2 historical baseline)
+STOCK_MIHOMO_PRIMARY_TIMEOUT: PASS (R3 READY timeout after false success)
 STOCK_MIHOMO_SIDECAR_FALLBACK: PASS (R3 readiness)
 STOCK_MIHOMO_SIDECAR_UDP: PASS (64/64, lost=0, bad=0)
 SIDECAR_LOOP_PREVENTION: PASS (11 relay connections, bounded)
@@ -161,6 +202,8 @@ R2 direct fake-SOCKS tests passed: a CONNECT request that never returns a reply
 is bounded by `connect_timeout=200ms`, the underlying socket closes, and a
 healthy fallback is attempted with the same SessionID and LegID=1. The 100-way
 hanging-connect test also returned with all accepted handlers closed.
+
+## R2 HISTORICAL FALLBACK BLOCKER
 
 In the R2 pre-readiness stock-host topology, B's disposable SOCKS relay was made to accept
 the upstream connection and never complete its SOCKS greeting/CONNECT path.
@@ -229,7 +272,7 @@ no recursive connection storm. The reverse-port test also passed: a listener
 receiving LegID=1 and another receiving LegID=0 still formed the expected
 logical sessions; port number did not assign leg identity.
 
-## STOCK FALLBACK REPAIR
+## R2 HISTORICAL FALLBACK REPAIR
 
 ```text
 STOCK_MIHOMO_PRIMARY_TIMEOUT: BLOCKED BY STOCK FALSE SUCCESS
@@ -244,7 +287,7 @@ observe the required timeout at the upstream boundary. The direct fake-SOCKS
 test demonstrates the intended R2 behavior, but the real stock-host fallback
 gate remains open without a host-side readiness/error signal.
 
-## STOCK UDP / LOOP ACCEPTANCE
+## R2 HISTORICAL UDP / LOOP STATUS
 
 ```text
 STOCK_MIHOMO_SIDECAR_UDP: NOT RUN
