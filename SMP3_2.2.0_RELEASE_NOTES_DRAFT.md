@@ -60,8 +60,10 @@ Those synthetic measurements are not universal performance guarantees.
 - Native users do not need to switch to `sidecar_listeners`.
 - `SMP3RDY1` is a Sidecar host-readiness extension, not a canonical SMP3 Wire
   version or a new HELLO version.
-- Keep each sidecar route pointed at the same SMP3 listener through an
-  independent reliable TCP-capable carrier path.
+- Each Sidecar discriminator route should reach an equivalent
+  `sidecar_listener` on the same logical SMP3 server through an independent
+  reliable TCP-capable carrier path. Listener ports are routing discriminators
+  only; SessionID/LegID determine logical leg identity.
 
 ## Security
 
