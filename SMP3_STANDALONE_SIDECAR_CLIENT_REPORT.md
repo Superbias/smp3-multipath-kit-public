@@ -19,6 +19,7 @@ PHASE 1 FINAL GATE: PASS
 
 This work is on `feature/standalone-sidecar-client`, based on `origin/main`.
 R2 base head: `b172cfafeec7165845234f6f4afd55dc46e703e3`.
+R3 implementation commit: `45e95b2a3793e7c398eddfb08c642dced3ccde90`.
 No remote server, production configuration, Clash Party process, native Mihomo
 adapter, native sing adapter, Core implementation, or Wire implementation was
 changed. The branch also contains the earlier minimal standalone-server host
@@ -289,6 +290,5 @@ No remote/live carrier test was run in this phase by design.
 
 ## NEXT
 
-Review the final diff and create the allowed local commits on
-`feature/standalone-sidecar-client`. Do not merge, push, tag, release, or deploy
-automatically.
+The implementation is committed locally on `feature/standalone-sidecar-client`.
+Do not merge, push, tag, release, or deploy automatically.
