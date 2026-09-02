@@ -61,6 +61,38 @@ The Linux installer manages only the standalone server and preserves the
 configuration on uninstall unless `--purge` is explicitly requested. Both
 installers verify exact GitHub stable Release assets against `SHA256SUMS`.
 
+## Standalone SOCKS5 sidecar client (development)
+
+This branch also contains a cross-platform standalone sidecar client. It is a
+separate local SOCKS5 endpoint for applications that need SMP3 without a
+native Mihomo or sing-box integration:
+
+```text
+application -> sidecar SOCKS5 -> host SOCKS5 CONNECT
+            -> two carrier routes -> standalone SMP3 server -> destination
+```
+
+It uses only upstream TCP `CONNECT` and never uses upstream SOCKS UDP. The
+sidecar's `leg0` and `leg1` routes must independently reach the same SMP3
+listener; `leg1_fallback` is optional. It supports TCP CONNECT and SOCKS5 UDP
+ASSOCIATE, with IPv4/IPv6/domain addresses. See [SIDECAR.md](SIDECAR.md),
+[SIDECAR.zh-CN.md](SIDECAR.zh-CN.md), and the placeholder-only examples
+`examples/smp3-client-config.example.json` and
+`examples/mihomo-sidecar.example.yaml`.
+
+`upstream_socks.connect_timeout` bounds the complete carrier SOCKS5 CONNECT
+transaction, including the upstream host's CONNECT reply. This prevents a
+host proxy's internal retries from indefinitely blocking leg1 fallback.
+
+Sidecar routes use the standalone server's `sidecar_listeners`, which return an
+authenticated `SMP3RDY1` record only after canonical HELLO admission. A SOCKS
+CONNECT success alone is not treated as remote SMP3 readiness; legacy
+`listen`/`listeners` endpoints remain canonical-only.
+
+The sidecar is development-only on this branch. It does not replace or modify
+the native Mihomo/sing adapters, carrier definitions, Clash Party, firewall
+rules, or production configuration.
+
 ## Architecture in 2.1.1
 
 The release separates the reusable, standard-library-only SMP3 Core from its hosts:

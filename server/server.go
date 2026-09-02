@@ -31,6 +31,8 @@ type Server struct {
 	access             sync.Mutex
 	closed             bool
 	listener           net.Listener
+	listeners          []net.Listener
+	sidecarListeners   map[net.Listener]struct{}
 	sessions           map[smp3core.SessionID]*serverSession
 	tombstones         map[smp3core.SessionID]time.Time
 	lastTombstonePrune time.Time
@@ -50,14 +52,15 @@ func New(cfg Config, logger *slog.Logger) (*Server, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
-		cfg:        cfg,
-		logger:     loggerOrDefault(logger),
-		ctx:        ctx,
-		cancel:     cancel,
-		sessions:   make(map[smp3core.SessionID]*serverSession),
-		tombstones: make(map[smp3core.SessionID]time.Time),
-		nonces:     make(map[[16]byte]time.Time),
-		closeDone:  make(chan struct{}),
+		cfg:              cfg,
+		logger:           loggerOrDefault(logger),
+		ctx:              ctx,
+		cancel:           cancel,
+		sessions:         make(map[smp3core.SessionID]*serverSession),
+		tombstones:       make(map[smp3core.SessionID]time.Time),
+		nonces:           make(map[[16]byte]time.Time),
+		sidecarListeners: make(map[net.Listener]struct{}),
+		closeDone:        make(chan struct{}),
 	}, nil
 }
 
@@ -75,21 +78,50 @@ func (s *Server) Start() error {
 	}
 	s.access.Unlock()
 
-	listener, err := net.Listen("tcp", s.cfg.Listen)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", s.cfg.Listen, err)
+	type listenerConfig struct {
+		address string
+		sidecar bool
+	}
+	addresses := []listenerConfig{{address: s.cfg.Listen}}
+	for _, address := range s.cfg.Listeners {
+		addresses = append(addresses, listenerConfig{address: address})
+	}
+	for _, address := range s.cfg.SidecarListeners {
+		addresses = append(addresses, listenerConfig{address: address, sidecar: true})
+	}
+	listeners := make([]net.Listener, 0, len(addresses))
+	sidecarListeners := make(map[net.Listener]struct{})
+	for _, configured := range addresses {
+		listener, err := net.Listen("tcp", configured.address)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
+			return fmt.Errorf("listen %s: %w", configured.address, err)
+		}
+		listeners = append(listeners, listener)
+		if configured.sidecar {
+			sidecarListeners[listener] = struct{}{}
+		}
 	}
 	s.access.Lock()
 	if s.closed {
 		s.access.Unlock()
-		_ = listener.Close()
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
 		return ErrServerClosed
 	}
-	s.listener = listener
+	s.listener = listeners[0]
+	s.listeners = listeners
+	s.sidecarListeners = sidecarListeners
 	s.access.Unlock()
-	s.logger.Info("standalone SMP3 server started", "address", listener.Addr().String())
-	s.acceptWG.Add(1)
-	go s.acceptLoop(listener)
+	s.logger.Info("standalone SMP3 server started", "address", listeners[0].Addr().String(), "listeners", len(listeners))
+	for _, listener := range listeners {
+		s.acceptWG.Add(1)
+		_, sidecar := sidecarListeners[listener]
+		go s.acceptLoop(listener, sidecar)
+	}
 	return nil
 }
 
@@ -102,7 +134,22 @@ func (s *Server) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
-func (s *Server) acceptLoop(listener net.Listener) {
+// ListenerAddrs returns all active listener addresses in config order. The
+// first address is the backward-compatible primary returned by Addr.
+func (s *Server) ListenerAddrs() []string {
+	s.access.Lock()
+	defer s.access.Unlock()
+	addresses := make([]string, 0, len(s.listeners))
+	for _, listener := range s.listeners {
+		addresses = append(addresses, listener.Addr().String())
+	}
+	if len(addresses) == 0 && s.listener != nil {
+		addresses = append(addresses, s.listener.Addr().String())
+	}
+	return addresses
+}
+
+func (s *Server) acceptLoop(listener net.Listener, sidecar bool) {
 	defer s.acceptWG.Done()
 	for {
 		conn, err := listener.Accept()
@@ -116,7 +163,7 @@ func (s *Server) acceptLoop(listener net.Listener) {
 		s.handlerWG.Add(1)
 		go func() {
 			defer s.handlerWG.Done()
-			s.handleCarrier(s.ctx, conn)
+			s.handleCarrier(s.ctx, conn, sidecar)
 		}()
 	}
 }
@@ -128,7 +175,7 @@ func (s *Server) isClosed() bool {
 	return closed
 }
 
-func (s *Server) handleCarrier(ctx context.Context, conn net.Conn) {
+func (s *Server) handleCarrier(ctx context.Context, conn net.Conn, sidecar bool) {
 	if err := conn.SetReadDeadline(time.Now().Add(s.cfg.HelloReadTimeout.Time())); err != nil {
 		s.logger.Debug("failed to set HELLO read deadline", "error", err)
 	}
@@ -151,9 +198,33 @@ func (s *Server) handleCarrier(ctx context.Context, conn net.Conn) {
 		s.rejectCarrier(conn, "destination", err)
 		return
 	}
-	session, created, err := s.createOrJoinSession(hello, destination, conn)
+	session, created, err := s.admitSession(hello, destination)
 	if err != nil {
 		s.rejectCarrier(conn, "session", err)
+		return
+	}
+	if sidecar {
+		if err := session.reserveLeg(hello.LegID); err != nil {
+			s.rejectCarrier(conn, "session", err)
+			if created {
+				session.close()
+			}
+			return
+		}
+		defer session.releaseLeg(hello.LegID)
+		if err := writeSidecarReadyV1(conn, hello, []byte(s.cfg.Password)); err != nil {
+			s.rejectCarrier(conn, "ready", err)
+			if created {
+				session.close()
+			}
+			return
+		}
+	}
+	if err := session.attachLeg(hello.LegID, conn); err != nil {
+		s.rejectCarrier(conn, "session", err)
+		if created {
+			session.close()
+		}
 		return
 	}
 	if !created {
@@ -203,6 +274,20 @@ func (s *Server) acceptNonce(nonce [16]byte) bool {
 }
 
 func (s *Server) createOrJoinSession(hello smp3core.Hello, destination string, conn net.Conn) (*serverSession, bool, error) {
+	session, created, err := s.admitSession(hello, destination)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := session.attachLeg(hello.LegID, conn); err != nil {
+		if created {
+			session.close()
+		}
+		return session, created, err
+	}
+	return session, created, nil
+}
+
+func (s *Server) admitSession(hello smp3core.Hello, destination string) (*serverSession, bool, error) {
 	s.access.Lock()
 	if s.closed {
 		s.access.Unlock()
@@ -221,18 +306,10 @@ func (s *Server) createOrJoinSession(hello smp3core.Hello, destination string, c
 		if existing.destination != destination {
 			return existing, false, errSessionDestination
 		}
-		if err := existing.attachLeg(hello.LegID, conn); err != nil {
-			return existing, false, err
-		}
 		return existing, false, nil
 	}
 
 	session := s.newSession(hello, destination)
-	if err := session.attachLeg(hello.LegID, conn); err != nil {
-		s.access.Unlock()
-		session.close()
-		return nil, true, err
-	}
 	s.sessions[hello.SessionID] = session
 	s.access.Unlock()
 	s.startSessionWatcher(session)
@@ -317,7 +394,10 @@ func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
 		s.access.Lock()
 		s.closed = true
-		listener := s.listener
+		listeners := append([]net.Listener(nil), s.listeners...)
+		if len(listeners) == 0 && s.listener != nil {
+			listeners = []net.Listener{s.listener}
+		}
 		sessions := make([]*serverSession, 0, len(s.sessions))
 		for _, session := range s.sessions {
 			sessions = append(sessions, session)
@@ -330,7 +410,7 @@ func (s *Server) Close() error {
 		for _, session := range sessions {
 			session.close()
 		}
-		if listener != nil {
+		for _, listener := range listeners {
 			_ = listener.Close()
 		}
 		s.acceptWG.Wait()

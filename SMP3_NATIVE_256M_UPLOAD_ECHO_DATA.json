@@ -1,0 +1,36 @@
+{
+  "status": "completed-native-upload-only",
+  "mode": "native",
+  "size_mib": 256,
+  "runs_requested": 3,
+  "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+  "runs": [
+    {
+      "run": 1,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 16.297048300039023,
+      "mbps": 131.77132499477577
+    },
+    {
+      "run": 2,
+      "bytes": 268435456,
+      "pass": false,
+      "seconds": 61.3194088001037,
+      "error": "TimeoutError('timed out')"
+    },
+    {
+      "run": 3,
+      "bytes": 268435456,
+      "pass": false,
+      "seconds": 65.3360185000347,
+      "error": "TimeoutError('timed out')"
+    }
+  ],
+  "relay_counts": {
+    "A": 67,
+    "B": 67,
+    "C": 0
+  },
+  "same_session_leg1": true
+}

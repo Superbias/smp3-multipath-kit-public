@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net"
 	"sync"
 
@@ -25,6 +26,8 @@ type serverSession struct {
 
 	workerWG sync.WaitGroup
 	closeOne sync.Once
+	legMu    sync.Mutex
+	reserved map[uint8]struct{}
 }
 
 type ioCloser interface {
@@ -43,6 +46,36 @@ func (s *serverSession) attachLeg(id smp3core.LegID, conn net.Conn) error {
 		return s.dgram.AttachLeg(id, conn, nil)
 	}
 	return s.stream.AttachLeg(id, conn, nil)
+}
+
+func (s *serverSession) reserveLeg(id smp3core.LegID) error {
+	if id > 1 {
+		return errors.New("invalid multipath leg id")
+	}
+	s.legMu.Lock()
+	defer s.legMu.Unlock()
+	if s.reserved == nil {
+		s.reserved = make(map[uint8]struct{})
+	}
+	id8 := uint8(id)
+	if _, exists := s.reserved[id8]; exists {
+		return errors.New("multipath leg is already being admitted")
+	}
+	if s.mode == smp3core.ModeDatagram {
+		if s.dgram.HasLeg(id) {
+			return errors.New("duplicate multipath datagram leg")
+		}
+	} else if s.stream.HasLeg(id) {
+		return errors.New("duplicate multipath stream leg")
+	}
+	s.reserved[id8] = struct{}{}
+	return nil
+}
+
+func (s *serverSession) releaseLeg(id smp3core.LegID) {
+	s.legMu.Lock()
+	delete(s.reserved, uint8(id))
+	s.legMu.Unlock()
 }
 
 func (s *serverSession) close() {

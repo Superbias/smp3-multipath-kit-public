@@ -1,5 +1,10 @@
 {
   "listen": "0.0.0.0:24444",
+  "sidecar_listeners": [
+    "0.0.0.0:24441",
+    "0.0.0.0:24442",
+    "0.0.0.0:24443"
+  ],
   "password": "CHANGE_TO_A_LONG_RANDOM_SMP3_PASSWORD",
   "hello_read_timeout": "10s",
   "recovery_timeout": "15s",

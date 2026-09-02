@@ -1,0 +1,129 @@
+{
+  "status": "completed-native-upload-only",
+  "mode": "native",
+  "size_mib": 256,
+  "runs_requested": 3,
+  "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+  "runs": [
+    {
+      "run": 1,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 15.275552400038578,
+      "mbps": 140.583043530038,
+      "app_bytes_written_lower_bound": 268435456,
+      "fixture": {
+        "received": 268435456,
+        "echoed": 268435456,
+        "last_progress_age": 0.6248711999505758,
+        "active": 1
+      },
+      "relay_counts": {
+        "A": 1,
+        "B": 1,
+        "C": 0
+      },
+      "native_log_tail": [
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:27:18.560382100+08:00\" level=info msg=\"Initial configuration complete, total time: 5ms\""
+      ],
+      "server_log_tail": [
+        "time=2026-09-02T17:27:18.114+08:00 level=INFO msg=\"standalone SMP3 server started\" address=127.0.0.1:21440 listeners=4",
+        "time=2026-09-02T17:27:18.377+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.378+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.378+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.393+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.800+08:00 level=INFO msg=\"multipath session created\" session=ed89ae17 leg=0 mode=stream destination=127.0.0.1:56688",
+        "time=2026-09-02T17:27:18.827+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=ed89ae17 leg=1 mode=stream",
+        "time=2026-09-02T17:27:19.258+08:00 level=INFO msg=\"multipath stream activated\" session=ed89ae17"
+      ]
+    },
+    {
+      "run": 2,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 19.03761660004966,
+      "mbps": 112.80212713152329,
+      "app_bytes_written_lower_bound": 268435456,
+      "fixture": {
+        "received": 268435456,
+        "echoed": 268435456,
+        "last_progress_age": 0.09560270002111793,
+        "active": 1
+      },
+      "relay_counts": {
+        "A": 2,
+        "B": 2,
+        "C": 0
+      },
+      "native_log_tail": [
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:27:18.560382100+08:00\" level=info msg=\"Initial configuration complete, total time: 5ms\""
+      ],
+      "server_log_tail": [
+        "time=2026-09-02T17:27:18.114+08:00 level=INFO msg=\"standalone SMP3 server started\" address=127.0.0.1:21440 listeners=4",
+        "time=2026-09-02T17:27:18.377+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.378+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.378+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.393+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.800+08:00 level=INFO msg=\"multipath session created\" session=ed89ae17 leg=0 mode=stream destination=127.0.0.1:56688",
+        "time=2026-09-02T17:27:18.827+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=ed89ae17 leg=1 mode=stream",
+        "time=2026-09-02T17:27:19.258+08:00 level=INFO msg=\"multipath stream activated\" session=ed89ae17",
+        "time=2026-09-02T17:27:34.081+08:00 level=INFO msg=\"multipath session created\" session=5b9cf0ac leg=0 mode=stream destination=127.0.0.1:50242",
+        "time=2026-09-02T17:27:34.166+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=5b9cf0ac leg=1 mode=stream",
+        "time=2026-09-02T17:27:35.081+08:00 level=INFO msg=\"multipath stream activated\" session=5b9cf0ac"
+      ]
+    },
+    {
+      "run": 3,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 17.910319199902005,
+      "mbps": 119.90203100410125,
+      "app_bytes_written_lower_bound": 268435456,
+      "fixture": {
+        "received": 268435456,
+        "echoed": 268435456,
+        "last_progress_age": 0.7241374000441283,
+        "active": 1
+      },
+      "relay_counts": {
+        "A": 3,
+        "B": 3,
+        "C": 0
+      },
+      "native_log_tail": [
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:27:18.555222300+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:27:18.560382100+08:00\" level=info msg=\"Initial configuration complete, total time: 5ms\""
+      ],
+      "server_log_tail": [
+        "time=2026-09-02T17:27:18.114+08:00 level=INFO msg=\"standalone SMP3 server started\" address=127.0.0.1:21440 listeners=4",
+        "time=2026-09-02T17:27:18.377+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.378+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.378+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.393+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:27:18.800+08:00 level=INFO msg=\"multipath session created\" session=ed89ae17 leg=0 mode=stream destination=127.0.0.1:56688",
+        "time=2026-09-02T17:27:18.827+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=ed89ae17 leg=1 mode=stream",
+        "time=2026-09-02T17:27:19.258+08:00 level=INFO msg=\"multipath stream activated\" session=ed89ae17",
+        "time=2026-09-02T17:27:34.081+08:00 level=INFO msg=\"multipath session created\" session=5b9cf0ac leg=0 mode=stream destination=127.0.0.1:50242",
+        "time=2026-09-02T17:27:34.166+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=5b9cf0ac leg=1 mode=stream",
+        "time=2026-09-02T17:27:35.081+08:00 level=INFO msg=\"multipath stream activated\" session=5b9cf0ac",
+        "time=2026-09-02T17:27:53.149+08:00 level=INFO msg=\"multipath session created\" session=da81b544 leg=0 mode=stream destination=127.0.0.1:57882",
+        "time=2026-09-02T17:27:53.241+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=da81b544 leg=1 mode=stream",
+        "time=2026-09-02T17:27:54.151+08:00 level=INFO msg=\"multipath stream activated\" session=da81b544"
+      ]
+    }
+  ],
+  "relay_counts": {
+    "A": 3,
+    "B": 3,
+    "C": 0
+  },
+  "same_session_leg1": true
+}
