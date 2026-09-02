@@ -26,6 +26,7 @@ REMOTE_REFRESHED: YES
 ```text
 qualification/standalone-sidecar-rc merged without conflicts
 merge commit: 053ea69
+release-preparation commit: f69a320
 ```
 
 ## DIFF CLASSIFICATION
