@@ -40,6 +40,8 @@ func (d Duration) Time() time.Duration          { return time.Duration(d) }
 
 type Config struct {
 	Listen           string        `json:"listen"`
+	Listeners        []string      `json:"listeners,omitempty"`
+	SidecarListeners []string      `json:"sidecar_listeners,omitempty"`
 	Password         string        `json:"password"`
 	HelloReadTimeout Duration      `json:"hello_read_timeout"`
 	RecoveryTimeout  Duration      `json:"recovery_timeout"`
@@ -125,16 +127,35 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c *Config) NormalizeAndValidate() error {
-	if c.Listen == "" {
-		return errors.New("invalid listen: address is empty")
+	type listenerConfig struct {
+		address string
+		field   string
 	}
-	host, portText, err := net.SplitHostPort(c.Listen)
-	if err != nil || host == "" && !strings.HasPrefix(c.Listen, ":") {
-		return fmt.Errorf("invalid listen %q: expected host:port", c.Listen)
+	addresses := []listenerConfig{{address: c.Listen, field: "listen"}}
+	for index, address := range c.Listeners {
+		addresses = append(addresses, listenerConfig{address: address, field: fmt.Sprintf("listeners[%d]", index)})
 	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 0 || port > 65535 {
-		return fmt.Errorf("invalid listen port %q", portText)
+	for index, address := range c.SidecarListeners {
+		addresses = append(addresses, listenerConfig{address: address, field: fmt.Sprintf("sidecar_listeners[%d]", index)})
+	}
+	seen := make(map[string]struct{}, len(addresses))
+	for index, configured := range addresses {
+		address := configured.address
+		canonical, err := normalizeListenAddress(address)
+		if err != nil {
+			if index == 0 {
+				return fmt.Errorf("invalid listen %q: %w", address, err)
+			}
+			return fmt.Errorf("invalid %s %q: %w", configured.field, address, err)
+		}
+		// Port zero asks the kernel for a fresh ephemeral port, so repeating it
+		// is useful for disposable tests and does not name a duplicate endpoint.
+		if !strings.HasSuffix(canonical, ":0") {
+			if _, exists := seen[canonical]; exists {
+				return fmt.Errorf("duplicate SMP3 listener %q", address)
+			}
+			seen[canonical] = struct{}{}
+		}
 	}
 	if c.Password == "" {
 		return errors.New("empty password")
@@ -154,6 +175,25 @@ func (c *Config) NormalizeAndValidate() error {
 		}
 	}
 	return nil
+}
+
+func normalizeListenAddress(address string) (string, error) {
+	if address == "" {
+		return "", errors.New("address is empty")
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || host == "" && !strings.HasPrefix(address, ":") {
+		return "", errors.New("expected host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 0 || port > 65535 {
+		return "", fmt.Errorf("invalid port %q", portText)
+	}
+	host = strings.ToLower(host)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "*"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
 func validateStream(c *StreamOptions) error {

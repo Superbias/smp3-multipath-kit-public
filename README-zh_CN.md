@@ -59,6 +59,33 @@ Windows installer 只替换明确指定的 Mihomo executable；Linux installer �
 管理 standalone server，卸载时默认保留 config，只有显式 `--purge` 才删除。
 两者都会用 `SHA256SUMS` 校验 GitHub stable Release 的精确 asset。
 
+## 独立 SOCKS5 sidecar client（开发中）
+
+本分支还包含一个跨平台的独立 sidecar client，为不使用 native Mihomo 或
+sing-box 集成的应用提供本地 SOCKS5 入口：
+
+```text
+应用 -> sidecar SOCKS5 -> 宿主 SOCKS5 CONNECT
+     -> 两条 carrier route -> standalone SMP3 server -> 目标地址
+```
+
+它只使用上游 TCP `CONNECT`，不会使用上游 SOCKS UDP。`leg0`、`leg1` 必须
+分别到达同一个 SMP3 listener，`leg1_fallback` 可选。支持 TCP CONNECT、
+SOCKS5 UDP ASSOCIATE，以及 IPv4/IPv6/domain 地址。详见
+`SIDECAR.zh-CN.md`、`SIDECAR.md` 和占位符示例
+`examples/smp3-client-config.example.json`、
+`examples/mihomo-sidecar.example.yaml`。
+
+`upstream_socks.connect_timeout` 限制完整的 carrier SOCKS5 CONNECT 事务，
+包括等待上游返回 CONNECT 回复，避免宿主代理内部重试无限阻塞 leg1 fallback。
+Sidecar route 应指向 standalone server 的 `sidecar_listeners`；只有在
+canonical HELLO admission 后才返回带认证的 `SMP3RDY1`。仅 SOCKS CONNECT
+success 不代表远端 SMP3 ready，旧的 `listen`/`listeners` 仍保持
+canonical-only 行为。
+
+sidecar 在本分支仍是开发中功能，不会替换或修改 native Mihomo/sing
+adapter、carrier 定义、Clash Party、防火墙规则或生产配置。
+
 ## 2.1.1 架构
 
 本版本把可复用的、仅依赖标准库的 SMP3 Core 与 host 解耦：

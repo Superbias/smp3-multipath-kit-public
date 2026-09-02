@@ -11,6 +11,8 @@ python3 -m json.tool "$ROOT/config/client-adaptive.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/server.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/server-hy2-snell.example.json" >/dev/null
 python3 -m json.tool "$ROOT/config/standalone-server.example.json" >/dev/null
+python3 -m json.tool "$ROOT/examples/smp3-client-config.example.json" >/dev/null
+python3 -m json.tool "$ROOT/examples/smp3-server-config.example.json" >/dev/null
 
 echo '[+] Test* count'
 python3 "$ROOT/scripts/check-test-count.py" "$ROOT"
@@ -27,6 +29,10 @@ echo '[+] canonical Core standalone tests'
 echo '[+] standalone SMP3 reliability tests'
 python3 "$ROOT/scripts/run-standalone-go.py" "$ROOT" test -race -count=5
 python3 "$ROOT/scripts/run-standalone-go.py" "$ROOT" vet
+
+echo '[+] standalone sidecar client tests'
+( cd "$ROOT/client" && GOTOOLCHAIN=local go test ./... && GOTOOLCHAIN=local go test ./... -race && GOTOOLCHAIN=local go vet ./... )
+( cd "$ROOT/cmd/smp3-client" && GOTOOLCHAIN=local go test ./... && GOTOOLCHAIN=local go vet ./... )
 
 echo '[+] source injector syntax'
 python3 - "$ROOT/scripts/apply_source.py" <<'PY'

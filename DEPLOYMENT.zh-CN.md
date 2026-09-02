@@ -152,6 +152,35 @@ Invoke-WebRequest https://raw.githubusercontent.com/Superbias/smp3-multipath-kit
 应用可连接 Mihomo 的 `127.0.0.1:7890` mixed/SOCKS 端口。UDP 应用必须真
 正使用 SOCKS5 UDP ASSOCIATE；只支持 HTTP 的应用不会覆盖 MP-UDP。
 
+## 4.1 使用 standalone SOCKS5 sidecar（开发中）
+
+仓库还包含一个独立的跨平台 `smp3-client` sidecar。当应用需要直接使用
+本地 SOCKS5，而不使用 native Mihomo 或 sing-box SMP3 adapter 时，可以使用
+它。它不会替换这些 adapter，也不属于稳定的 2.1.1 release 产物。
+
+复制 `examples/smp3-client-config.example.json` 为私有配置并替换全部占位符。
+两个 `smp3.routes` 必须经宿主 SOCKS5 独立到达同一个 standalone SMP3
+listener；它们不是 Snell 或 Hysteria2 原生配置。sidecar 对每条 route
+使用 TCP `CONNECT`，再在可靠 stream 上承载 SMP3 Stream v4 或 Datagram v5。
+如果宿主代理会重试不健康 route，可设置 `upstream_socks.connect_timeout`；
+它限制完整 SOCKS 事务，并允许按配置执行 leg1 fallback。
+这些 route 应指向 server 的 `sidecar_listeners`。Sidecar listener 在
+canonical HELLO admission 后发送带认证的 `SMP3RDY1`；旧的
+`listen`/`listeners` 保持不变，不发送 READY。
+
+```bash
+go build -o smp3-client ./cmd/smp3-client
+./smp3-client -c ./config/smp3-client.json -check
+./smp3-client -c ./config/smp3-client.json
+```
+
+本地 listener 只绑定 loopback（默认 `127.0.0.1:18080`）。应用或 stock
+Mihomo 应把该地址作为 SOCKS5 代理使用；stock Mihomo 示例见
+`examples/mihomo-sidecar.example.yaml`。sidecar endpoint 的 route
+discriminator 必须位于宽泛规则之前，避免把 sidecar 自身再路由回 sidecar。
+sidecar 不会修改 Mihomo、Clash Party、carrier 定义、防火墙策略或
+standalone server。
+
 如果使用 Clash Party，请通过其 custom-core 机制指定独立下载的 Mihomo
 文件，不要直接覆盖 `Clash Party/resources/sidecar/mihomo.exe`。
 

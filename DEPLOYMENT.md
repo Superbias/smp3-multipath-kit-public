@@ -173,6 +173,39 @@ Mihomo mixed/SOCKS port, for example `127.0.0.1:7890`. For UDP, the application
 must actually use SOCKS5 UDP ASSOCIATE; an HTTP-only client does not exercise
 the MP-UDP path.
 
+## 4.1 Use the standalone SOCKS5 sidecar (development)
+
+The repository also contains a separate cross-platform `smp3-client` sidecar.
+It is useful when the application should speak directly to a local SOCKS5
+endpoint without using a native Mihomo or sing-box SMP3 adapter. It does not
+replace those adapters and is not part of the stable 2.1.1 release artifact.
+
+Copy `examples/smp3-client-config.example.json` to a private config and replace
+all placeholders. The two `smp3.routes` values must independently reach the
+same standalone SMP3 listener through the host SOCKS5 service; they are not
+native Snell or Hysteria2 settings. The sidecar requests each route with TCP
+`CONNECT` and sends SMP3 Stream v4 or Datagram v5 over the resulting stream.
+Set `upstream_socks.connect_timeout` when the host proxy can retry unhealthy
+routes; it bounds the entire SOCKS transaction and allows the configured leg1
+fallback to run.
+
+Use the server's `sidecar_listeners` for these routes. Sidecar listeners add an
+authenticated `SMP3RDY1` confirmation after canonical HELLO admission; the
+legacy `listen`/`listeners` endpoints remain unchanged and do not emit READY.
+
+```bash
+go build -o smp3-client ./cmd/smp3-client
+./smp3-client -c ./config/smp3-client.json -check
+./smp3-client -c ./config/smp3-client.json
+```
+
+The local listener is loopback-only (default `127.0.0.1:18080`). Configure an
+application or stock Mihomo to use that address as a SOCKS5 proxy. For stock
+Mihomo, see `examples/mihomo-sidecar.example.yaml`; put the endpoint route
+discriminator before broad rules to avoid routing the sidecar back through
+itself. The sidecar does not alter Mihomo, Clash Party, carrier definitions,
+firewall policy, or the standalone server.
+
 If using Clash Party, point it at the separately downloaded custom Mihomo
 binary according to its custom-core mechanism. Do **not** overwrite
 `Clash Party/resources/sidecar/mihomo.exe` unless you have an independent
