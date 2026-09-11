@@ -937,6 +937,7 @@ type socksForwarder struct {
 	closeOne sync.Once
 	mu       sync.Mutex
 	targets  []string
+	bytes    atomic.Int64
 }
 
 func newSOCKSForwarder(t *testing.T) *socksForwarder {
@@ -1016,9 +1017,26 @@ func (s *socksForwarder) handle(conn net.Conn) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); _, _ = io.Copy(upstream, reader) }()
-	go func() { defer wg.Done(); _, _ = io.Copy(conn, upstream) }()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(countingWriter{writer: upstream, count: &s.bytes}, reader)
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(countingWriter{writer: conn, count: &s.bytes}, upstream)
+	}()
 	wg.Wait()
+}
+
+type countingWriter struct {
+	writer io.Writer
+	count  *atomic.Int64
+}
+
+func (w countingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.count.Add(int64(n))
+	return n, err
 }
 
 func (s *socksForwarder) Close() {

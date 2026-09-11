@@ -1,16 +1,18 @@
-# SMP3 Multipath Kit 2.2.0
+# SMP3 Multipath Kit 2.3.0
 
 [English](README.md) | [简体中文](README-zh_CN.md)
 
 Independent application-layer multipath transport built around a reusable SMP3 Core and standalone server.
 
-- **Release candidate:** `2.2.0` (standalone Sidecar client and server host extension)
+- **Release:** `2.3.0` (qualified Standalone, Native, and R15 Observability)
 - **Canonical runtime baseline:** `2.1.1` (wire/Core semantics unchanged)
 - **Optional sing-box compatibility client build input:** `v1.14.0-beta.14`
 - **Compatibility build commit:** `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`
 - **Expected sing client binary:** `1.14.0-beta.14-smp3-2.0.0`
 - **Expected standalone server binary:** `2.2.0`
 - **Expected standalone Sidecar client binary:** `2.2.0`
+- **R15 Panel:** read-only REST/SSE telemetry, bounded history, events, health,
+  and live Leg0/Leg1 observability.
 - **TCP stream HELLO:** v4 (compatible with r10 stream mode)
 - **UDP datagram HELLO:** v5 (2.0.0 endpoints required)
 

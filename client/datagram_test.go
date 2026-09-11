@@ -1,3 +1,5 @@
+//go:build standalone_server_integration
+
 package client
 
 import (

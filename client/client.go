@@ -13,7 +13,8 @@ import (
 var ErrClientClosed = errors.New("smp3 sidecar client closed")
 
 type Client struct {
-	cfg Config
+	cfg         Config
+	hostCarrier hostCarrierOpener
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -29,7 +30,11 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Client{cfg: cfg, ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{})}, nil
+	var hostCarrier hostCarrierOpener
+	if cfg.SMP3.CarrierMode == "host_bridge" {
+		hostCarrier = newHostCarrierOpener(cfg.SMP3.HostCarrier)
+	}
+	return &Client{cfg: cfg, hostCarrier: hostCarrier, ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{})}, nil
 }
 
 func (c *Client) Start() error {

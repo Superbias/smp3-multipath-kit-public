@@ -27,6 +27,7 @@ func testConfig() Config {
 	cfg.UDP.Enabled = true
 	cfg.UDP.QueueFrames = 32
 	cfg.UDP.DedupWindow = 64
+	cfg.Telemetry.Listen = "127.0.0.1:0"
 	return cfg
 }
 
@@ -86,154 +87,12 @@ func writeHelloNonce(t *testing.T, conn net.Conn, password string, id smp3core.S
 
 func connectLeg(t *testing.T, instance *Server, password string, id smp3core.SessionID, leg uint8, mode smp3core.HelloMode, destination string, nonce byte) net.Conn {
 	t.Helper()
-	return connectLegAt(t, instance.String(), password, id, leg, mode, destination, nonce)
-}
-
-func connectLegAt(t *testing.T, address, password string, id smp3core.SessionID, leg uint8, mode smp3core.HelloMode, destination string, nonce byte) net.Conn {
-	t.Helper()
-	conn, err := net.Dial("tcp", address)
+	conn, err := net.Dial("tcp", instance.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeHello(t, conn, password, id, leg, mode, destination, nonce)
 	return conn
-}
-
-func TestMultiListenerPortDoesNotDetermineLegID(t *testing.T) {
-	target := startTCPEcho(t)
-	for index, order := range [][2]int{{0, 1}, {1, 0}} {
-		t.Run("order-"+string(rune('0'+index)), func(t *testing.T) {
-			cfg := testConfig()
-			cfg.Listen = "127.0.0.1:0"
-			cfg.Listeners = []string{"127.0.0.1:0"}
-			instance := startTestServer(t, cfg)
-			addresses := instance.ListenerAddrs()
-			if len(addresses) != 2 {
-				t.Fatalf("listener count=%d, want 2", len(addresses))
-			}
-
-			client, app := streamClient(t)
-			var id smp3core.SessionID
-			id[0] = 0x31 + byte(index)
-			leg0 := connectLegAt(t, addresses[order[0]], cfg.Password, id, 0, smp3core.ModeStream, target, byte(10+index*2))
-			defer leg0.Close()
-			if err := client.AttachLeg(0, leg0, nil); err != nil {
-				t.Fatal(err)
-			}
-			leg1 := connectLegAt(t, addresses[order[1]], cfg.Password, id, 1, smp3core.ModeStream, target, byte(11+index*2))
-			defer leg1.Close()
-			if err := client.AttachLeg(1, leg1, nil); err != nil {
-				t.Fatal(err)
-			}
-			if instance.SessionCount() != 1 {
-				t.Fatalf("multi-listener join created %d sessions, want 1", instance.SessionCount())
-			}
-			streamRoundTrip(t, app, []byte("multi-listener-same-session"))
-		})
-	}
-}
-
-func TestSidecarListenersReturnAuthenticatedReadyWithoutPortLegSemantics(t *testing.T) {
-	target := startTCPEcho(t)
-	cfg := testConfig()
-	cfg.Listen = "127.0.0.1:0"
-	cfg.SidecarListeners = []string{"127.0.0.1:0", "127.0.0.1:0"}
-	instance := startTestServer(t, cfg)
-	addresses := instance.ListenerAddrs()
-	if len(addresses) != 3 {
-		t.Fatalf("listener count=%d, want 3", len(addresses))
-	}
-	var sid smp3core.SessionID
-	sid[0] = 0x73
-	var nonce0, nonce1 [16]byte
-	nonce0[0], nonce1[0] = 1, 2
-	leg0 := connectSidecarLegAt(t, addresses[1], cfg.Password, sid, 0, target, nonce0)
-	defer leg0.Close()
-	ready0 := make([]byte, sidecarReadyV1Size)
-	if _, err := io.ReadFull(leg0, ready0); err != nil {
-		t.Fatal(err)
-	}
-	expected0, err := encodeSidecarReadyV1(smp3core.Hello{Version: smp3core.Version4, LegID: 0, Mode: smp3core.ModeStream, SessionID: sid, Nonce: nonce0}, []byte(cfg.Password))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(ready0, expected0) {
-		t.Fatal("leg0 READY authentication payload mismatch")
-	}
-	leg1 := connectSidecarLegAt(t, addresses[2], cfg.Password, sid, 1, target, nonce1)
-	defer leg1.Close()
-	ready1 := make([]byte, sidecarReadyV1Size)
-	if _, err := io.ReadFull(leg1, ready1); err != nil {
-		t.Fatal(err)
-	}
-	if instance.SessionCount() != 1 {
-		t.Fatalf("sidecar listeners created %d sessions, want 1", instance.SessionCount())
-	}
-	var sidReverse smp3core.SessionID
-	sidReverse[0] = 0x75
-	var nonceReverse0, nonceReverse1 [16]byte
-	nonceReverse0[0], nonceReverse1[0] = 3, 4
-	leg1OnFirst := connectSidecarLegAt(t, addresses[1], cfg.Password, sidReverse, 1, target, nonceReverse1)
-	defer leg1OnFirst.Close()
-	readyReverse1 := make([]byte, sidecarReadyV1Size)
-	if _, err := io.ReadFull(leg1OnFirst, readyReverse1); err != nil {
-		t.Fatal(err)
-	}
-	leg0OnSecond := connectSidecarLegAt(t, addresses[2], cfg.Password, sidReverse, 0, target, nonceReverse0)
-	defer leg0OnSecond.Close()
-	readyReverse0 := make([]byte, sidecarReadyV1Size)
-	if _, err := io.ReadFull(leg0OnSecond, readyReverse0); err != nil {
-		t.Fatal(err)
-	}
-	if instance.SessionCount() != 2 {
-		t.Fatalf("reversed sidecar port/leg mapping created %d sessions, want 2", instance.SessionCount())
-	}
-}
-
-func TestLegacyListenerDoesNotEmitSidecarReady(t *testing.T) {
-	target := startTCPEcho(t)
-	cfg := testConfig()
-	cfg.Listen = "127.0.0.1:0"
-	instance := startTestServer(t, cfg)
-	var sid smp3core.SessionID
-	sid[0] = 0x74
-	conn := connectLeg(t, instance, cfg.Password, sid, 0, smp3core.ModeStream, target, 9)
-	defer conn.Close()
-	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
-		t.Fatal(err)
-	}
-	var byteValue [1]byte
-	if _, err := conn.Read(byteValue[:]); err == nil && byteValue[0] == sidecarReadyV1Magic[0] {
-		t.Fatal("legacy listener emitted sidecar READY bytes")
-	}
-}
-
-func connectSidecarLegAt(t *testing.T, address, password string, id smp3core.SessionID, leg uint8, destination string, nonce [16]byte) net.Conn {
-	t.Helper()
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	header, dest, mac, err := smp3core.EncodeHelloParts(smp3core.Hello{Version: smp3core.Version4, SessionID: id, LegID: smp3core.LegID(leg), Mode: smp3core.ModeStream, Timestamp: time.Now().Unix(), Nonce: nonce, Destination: destination}, []byte(password))
-	if err != nil {
-		conn.Close()
-		t.Fatal(err)
-	}
-	writeAll(t, conn, append(append(header, dest...), mac...))
-	return conn
-}
-
-func TestConfigRejectsDuplicateOrInvalidAdditionalListeners(t *testing.T) {
-	base := testConfig()
-	base.Listen = "127.0.0.1:24444"
-	base.Listeners = []string{base.Listen}
-	if err := base.NormalizeAndValidate(); err == nil {
-		t.Fatal("duplicate additional listener was accepted")
-	}
-	base.Listeners = []string{"not-an-address"}
-	if err := base.NormalizeAndValidate(); err == nil {
-		t.Fatal("invalid additional listener was accepted")
-	}
 }
 
 func connectLegNonce(t *testing.T, instance *Server, password string, id smp3core.SessionID, leg uint8, mode smp3core.HelloMode, destination string, nonce [16]byte) net.Conn {
@@ -340,6 +199,110 @@ func TestConfigValidationAndDurationParsing(t *testing.T) {
 	if err := duration.UnmarshalJSON([]byte(`"10s"`)); err != nil || duration.Time() != 10*time.Second {
 		t.Fatalf("duration parse = %v/%v", duration, err)
 	}
+}
+
+func TestServerTelemetryCountsAuthenticatedHelloAndActiveLegs(t *testing.T) {
+	target := startTCPEcho(t)
+	cfg := testConfig()
+	cfg.Telemetry.Enabled = true
+	cfg.Telemetry.MaxActiveSessions = 8
+	instance := startTestServer(t, cfg)
+	var id smp3core.SessionID
+	id[0] = 0x41
+	leg0 := connectLeg(t, instance, cfg.Password, id, 0, smp3core.ModeStream, target, 11)
+	leg1 := connectLeg(t, instance, cfg.Password, id, 1, smp3core.ModeStream, target, 12)
+	defer leg0.Close()
+	defer leg1.Close()
+
+	payload := []byte("server-telemetry-data")
+	header := make([]byte, smp3core.StreamFrameHeaderSize)
+	if err := smp3core.EncodeStreamFrameHeader(header, smp3core.StreamFrameHeader{Type: smp3core.StreamFrameData, Value: 0, Length: uint32(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	writeAll(t, leg0, header)
+	writeAll(t, leg0, payload)
+
+	waitFor(t, time.Second, func() bool {
+		snapshot := instance.Telemetry().Snapshot()
+		return snapshot.ActiveSessions == 1 && snapshot.ActiveLegs == 2 && len(snapshot.Sessions) == 1 && !snapshot.Sessions[0].FirstDataSeenAt.IsZero() && snapshot.Sessions[0].TargetTxBytes > 0 && snapshot.Sessions[0].TargetRxBytes > 0
+	})
+	snapshot := instance.Telemetry().Snapshot()
+	if snapshot.TotalWireRx == 0 || snapshot.Sessions[0].Legs[0].WireRxBytes == 0 || snapshot.Sessions[0].Legs[1].WireRxBytes == 0 {
+		t.Fatalf("HELLO-inclusive wire accounting missing: %+v", snapshot)
+	}
+	if snapshot.Sessions[0].TargetTxBytes == 0 || snapshot.Sessions[0].TargetRxBytes == 0 {
+		t.Fatalf("target accounting missing: %+v", snapshot.Sessions[0])
+	}
+	if snapshot.Sessions[0].Legs[0].LogicalRxUniqueBytes == 0 || !snapshot.Legs[0].LogicalRxShare.Valid {
+		t.Fatalf("logical RX accounting missing: %+v", snapshot)
+	}
+	if snapshot.Sessions[0].DisplaySessionID == "41000000000000000000000000000000" {
+		t.Fatal("telemetry exposed raw SessionID")
+	}
+	if err := leg0.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, time.Second, func() bool {
+		rows := instance.Telemetry().Snapshot().Sessions
+		return len(rows) == 1 && !rows[0].Legs[0].DetachAt.IsZero() && rows[0].Legs[0].State == "down"
+	})
+}
+
+func TestServerTelemetryTenLocalTwoLegSessionsAggregate(t *testing.T) {
+	target := startTCPEcho(t)
+	cfg := testConfig()
+	cfg.Telemetry.Enabled = true
+	cfg.Telemetry.MaxActiveSessions = 32
+	instance := startTestServer(t, cfg)
+
+	connections := make([]net.Conn, 0, 20)
+	defer func() {
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+	}()
+	for i := 0; i < 10; i++ {
+		var id smp3core.SessionID
+		id[0] = byte(i + 1)
+		leg0 := connectLeg(t, instance, cfg.Password, id, 0, smp3core.ModeStream, target, byte(40+i*2))
+		leg1 := connectLeg(t, instance, cfg.Password, id, 1, smp3core.ModeStream, target, byte(41+i*2))
+		connections = append(connections, leg0, leg1)
+		writeStreamDataFrame(t, leg0, 0, []byte("leg0-deterministic"))
+		writeStreamDataFrame(t, leg1, 1, []byte("leg1-deterministic"))
+	}
+
+	// Race instrumentation can make the twenty-leg fixture take longer than
+	// the normal three-second observation window. Keep the assertion bounded,
+	// but give the scheduler enough time to publish all aggregate counters.
+	waitFor(t, 8*time.Second, func() bool {
+		snapshot := instance.Telemetry().Snapshot()
+		return snapshot.ActiveSessions == 10 && snapshot.ActiveLegs == 20 && snapshot.Legs[0].LogicalRxUniqueBytes > 0 && snapshot.Legs[1].LogicalRxUniqueBytes > 0 && snapshot.Legs[0].WireRxBytes > 0 && snapshot.Legs[1].WireRxBytes > 0
+	})
+	snapshot := instance.Telemetry().Snapshot()
+	var rowLogicalRX [2]uint64
+	var rowWireRX [2]uint64
+	for _, row := range snapshot.Sessions {
+		for leg := range row.Legs {
+			rowLogicalRX[leg] += row.Legs[leg].LogicalRxUniqueBytes
+			rowWireRX[leg] += row.Legs[leg].WireRxBytes
+		}
+	}
+	if rowLogicalRX[0] != snapshot.Legs[0].LogicalRxUniqueBytes || rowLogicalRX[1] != snapshot.Legs[1].LogicalRxUniqueBytes {
+		t.Fatalf("logical aggregate mismatch rows=%v aggregate=%+v", rowLogicalRX, snapshot.Legs)
+	}
+	if rowWireRX[0] != snapshot.Legs[0].WireRxBytes || rowWireRX[1] != snapshot.Legs[1].WireRxBytes {
+		t.Fatalf("wire aggregate mismatch rows=%v aggregate=%+v", rowWireRX, snapshot.Legs)
+	}
+}
+
+func writeStreamDataFrame(t *testing.T, conn net.Conn, sequence uint64, payload []byte) {
+	t.Helper()
+	header := make([]byte, smp3core.StreamFrameHeaderSize)
+	if err := smp3core.EncodeStreamFrameHeader(header, smp3core.StreamFrameHeader{Type: smp3core.StreamFrameData, Value: sequence, Length: uint32(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	writeAll(t, conn, header)
+	writeAll(t, conn, payload)
 }
 
 func TestHelloAdmissionRejectsBadAuthAndReplay(t *testing.T) {

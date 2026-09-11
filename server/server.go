@@ -40,10 +40,14 @@ type Server struct {
 	nonceMu sync.Mutex
 	nonces  map[[16]byte]time.Time
 
-	acceptWG  sync.WaitGroup
-	handlerWG sync.WaitGroup
-	closeOnce sync.Once
-	closeDone chan struct{}
+	acceptWG      sync.WaitGroup
+	handlerWG     sync.WaitGroup
+	pendingMu     sync.Mutex
+	pending       map[net.Conn]struct{}
+	closeOnce     sync.Once
+	closeDone     chan struct{}
+	telemetry     *TelemetryRegistry
+	telemetryHTTP *telemetryHTTPServer
 }
 
 func New(cfg Config, logger *slog.Logger) (*Server, error) {
@@ -60,11 +64,20 @@ func New(cfg Config, logger *slog.Logger) (*Server, error) {
 		tombstones:       make(map[smp3core.SessionID]time.Time),
 		nonces:           make(map[[16]byte]time.Time),
 		sidecarListeners: make(map[net.Listener]struct{}),
+		pending:          make(map[net.Conn]struct{}),
 		closeDone:        make(chan struct{}),
+		telemetry:        NewTelemetryRegistry(cfg.Telemetry.registryConfig()),
 	}, nil
 }
 
-func (s *Server) Config() Config { return s.cfg }
+func (s *Server) Config() Config                { return s.cfg }
+func (s *Server) Telemetry() *TelemetryRegistry { return s.telemetry }
+func (s *Server) TelemetryHTTPAddr() net.Addr {
+	if s.telemetryHTTP == nil {
+		return nil
+	}
+	return s.telemetryHTTP.Addr()
+}
 
 func (s *Server) Start() error {
 	s.access.Lock()
@@ -83,9 +96,6 @@ func (s *Server) Start() error {
 		sidecar bool
 	}
 	addresses := []listenerConfig{{address: s.cfg.Listen}}
-	for _, address := range s.cfg.Listeners {
-		addresses = append(addresses, listenerConfig{address: address})
-	}
 	for _, address := range s.cfg.SidecarListeners {
 		addresses = append(addresses, listenerConfig{address: address, sidecar: true})
 	}
@@ -116,6 +126,24 @@ func (s *Server) Start() error {
 	s.listeners = listeners
 	s.sidecarListeners = sidecarListeners
 	s.access.Unlock()
+	if s.telemetry.Enabled() {
+		httpServer := newTelemetryHTTPServer(s.telemetry, time.Now())
+		if err := httpServer.Start(s.cfg.Telemetry.Listen); err != nil {
+			for _, listener := range listeners {
+				_ = listener.Close()
+			}
+			s.access.Lock()
+			if s.listener == listeners[0] {
+				s.listener = nil
+				s.listeners = nil
+				s.sidecarListeners = make(map[net.Listener]struct{})
+			}
+			s.access.Unlock()
+			s.telemetry.Close()
+			return fmt.Errorf("listen telemetry: %w", err)
+		}
+		s.telemetryHTTP = httpServer
+	}
 	s.logger.Info("standalone SMP3 server started", "address", listeners[0].Addr().String(), "listeners", len(listeners))
 	for _, listener := range listeners {
 		s.acceptWG.Add(1)
@@ -168,6 +196,35 @@ func (s *Server) acceptLoop(listener net.Listener, sidecar bool) {
 	}
 }
 
+func (s *Server) trackPending(conn net.Conn) func() {
+	s.pendingMu.Lock()
+	if s.pending == nil {
+		s.pending = make(map[net.Conn]struct{})
+	}
+	s.pending[conn] = struct{}{}
+	s.pendingMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.pendingMu.Lock()
+			delete(s.pending, conn)
+			s.pendingMu.Unlock()
+		})
+	}
+}
+
+func (s *Server) closePending() {
+	s.pendingMu.Lock()
+	pending := make([]net.Conn, 0, len(s.pending))
+	for conn := range s.pending {
+		pending = append(pending, conn)
+	}
+	s.pendingMu.Unlock()
+	for _, conn := range pending {
+		_ = conn.Close()
+	}
+}
+
 func (s *Server) isClosed() bool {
 	s.access.Lock()
 	closed := s.closed
@@ -175,7 +232,10 @@ func (s *Server) isClosed() bool {
 	return closed
 }
 
-func (s *Server) handleCarrier(ctx context.Context, conn net.Conn, sidecar bool) {
+func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bool) {
+	releasePending := s.trackPending(rawConn)
+	defer releasePending()
+	conn, wireCounters := newCountedConn(rawConn)
 	if err := conn.SetReadDeadline(time.Now().Add(s.cfg.HelloReadTimeout.Time())); err != nil {
 		s.logger.Debug("failed to set HELLO read deadline", "error", err)
 	}
@@ -198,12 +258,14 @@ func (s *Server) handleCarrier(ctx context.Context, conn net.Conn, sidecar bool)
 		s.rejectCarrier(conn, "destination", err)
 		return
 	}
-	session, created, err := s.admitSession(hello, destination)
-	if err != nil {
-		s.rejectCarrier(conn, "session", err)
-		return
-	}
+	var session *serverSession
+	var created bool
 	if sidecar {
+		session, created, err = s.admitSession(hello, destination)
+		if err != nil {
+			s.rejectCarrier(conn, "session", err)
+			return
+		}
 		if err := session.reserveLeg(hello.LegID); err != nil {
 			s.rejectCarrier(conn, "session", err)
 			if created {
@@ -219,13 +281,33 @@ func (s *Server) handleCarrier(ctx context.Context, conn net.Conn, sidecar bool)
 			}
 			return
 		}
-	}
-	if err := session.attachLeg(hello.LegID, conn); err != nil {
-		s.rejectCarrier(conn, "session", err)
-		if created {
-			session.close()
+		if err := s.attachSessionLeg(session, hello, conn); err != nil {
+			s.rejectCarrier(conn, "session", err)
+			if created {
+				session.close()
+			}
+			return
 		}
-		return
+	} else {
+		session, created, err = s.createOrJoinSession(hello, destination, conn)
+		if err != nil {
+			s.rejectCarrier(conn, "session", err)
+			return
+		}
+	}
+	releasePending()
+	if s.telemetry.Enabled() {
+		now := time.Now()
+		if created {
+			_ = s.telemetry.RegisterSession(hello.SessionID, modeName(hello.Mode), now)
+			if hello.Mode == smp3core.ModeDatagram {
+				s.telemetry.BindDatagram(hello.SessionID, session.dgram)
+			} else {
+				s.telemetry.BindStream(hello.SessionID, session.stream)
+			}
+			session.telemetry = s.telemetry.record(hello.SessionID)
+		}
+		s.telemetry.AttachLeg(hello.SessionID, uint8(hello.LegID), 0, wireCounters, now)
 	}
 	if !created {
 		s.logger.Info("multipath leg joined/rejoined", "session", sessionLogID(hello.SessionID), "leg", hello.LegID, "mode", modeName(hello.Mode))
@@ -246,6 +328,9 @@ func (s *Server) handleCarrier(ctx context.Context, conn net.Conn, sidecar bool)
 }
 
 func (s *Server) rejectCarrier(conn net.Conn, class string, err error) {
+	if s.telemetry.Enabled() {
+		s.telemetry.RecordRejectedCarrier()
+	}
 	s.logger.Warn("multipath HELLO rejected", "class", class, "error", err)
 	_ = conn.Close()
 }
@@ -278,7 +363,7 @@ func (s *Server) createOrJoinSession(hello smp3core.Hello, destination string, c
 	if err != nil {
 		return nil, false, err
 	}
-	if err := session.attachLeg(hello.LegID, conn); err != nil {
+	if err := s.attachSessionLeg(session, hello, conn); err != nil {
 		if created {
 			session.close()
 		}
@@ -314,6 +399,15 @@ func (s *Server) admitSession(hello smp3core.Hello, destination string) (*server
 	s.access.Unlock()
 	s.startSessionWatcher(session)
 	return session, true, nil
+}
+
+func (s *Server) attachSessionLeg(session *serverSession, hello smp3core.Hello, conn net.Conn) error {
+	onClose := func(error) {
+		if s.telemetry.Enabled() {
+			s.telemetry.DetachLeg(hello.SessionID, uint8(hello.LegID), time.Now())
+		}
+	}
+	return session.attachLeg(hello.LegID, conn, onClose)
 }
 
 func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSession {
@@ -356,6 +450,9 @@ func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSes
 			s.logger.Warn("multipath future ACK ignored", "session", sessionLogID(hello.SessionID), "next", next, "tx_seq", max, "count", count)
 		},
 	}
+	if s.telemetry.Enabled() {
+		cfg.Telemetry = &smp3core.StreamTelemetry{}
+	}
 	session.stream, session.streamApp = smp3core.NewStreamEngine(cfg)
 	return session
 }
@@ -370,11 +467,14 @@ func (s *Server) startSessionWatcher(session *serverSession) {
 
 func (s *Server) removeSession(id smp3core.SessionID, session *serverSession) {
 	s.access.Lock()
-	defer s.access.Unlock()
 	if current := s.sessions[id]; current == session {
 		delete(s.sessions, id)
 		s.tombstones[id] = time.Now().Add(helloReplayTTL)
 		s.logger.Debug("multipath session retired", "session", sessionLogID(id))
+	}
+	s.access.Unlock()
+	if s.telemetry.Enabled() {
+		s.telemetry.RemoveSession(id, time.Now())
 	}
 }
 
@@ -392,6 +492,9 @@ func (s *Server) pruneTombstonesLocked(now time.Time) {
 
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		if s.telemetryHTTP != nil {
+			_ = s.telemetryHTTP.Close()
+		}
 		s.access.Lock()
 		s.closed = true
 		listeners := append([]net.Listener(nil), s.listeners...)
@@ -413,11 +516,13 @@ func (s *Server) Close() error {
 		for _, listener := range listeners {
 			_ = listener.Close()
 		}
+		s.closePending()
 		s.acceptWG.Wait()
 		s.handlerWG.Wait()
 		for _, session := range sessions {
 			session.waitWorkers()
 		}
+		s.telemetry.Close()
 		close(s.closeDone)
 	})
 	<-s.closeDone

@@ -17,9 +17,14 @@ import (
 
 type smp3TestProxy struct {
 	C.Proxy
-	name    string
-	backend *smp3TestBackend
-	dialErr error
+	name      string
+	backend   *smp3TestBackend
+	dialErr   error
+	dialDelay time.Duration
+	started   chan struct{}
+	startOnce sync.Once
+	failed    chan struct{}
+	failOnce  sync.Once
 }
 
 func (p *smp3TestProxy) Name() string           { return p.name }
@@ -30,13 +35,131 @@ func (p *smp3TestProxy) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]string{"type": "socks5", "name": p.name})
 }
 func (p *smp3TestProxy) DialContext(_ context.Context, metadata *C.Metadata) (C.Conn, error) {
+	if p.started != nil {
+		p.startOnce.Do(func() { close(p.started) })
+	}
+	if p.dialDelay > 0 {
+		time.Sleep(p.dialDelay)
+	}
 	if p.dialErr != nil {
+		if p.failed != nil {
+			p.failOnce.Do(func() { close(p.failed) })
+		}
 		return nil, p.dialErr
 	}
 	p.backend.recordTarget(metadata.RemoteAddress())
 	client, server := net.Pipe()
 	p.backend.accept(server)
 	return NewConn(client, p), nil
+}
+
+func TestSMP3StartupConfigMapsPreferredCorePolicy(t *testing.T) {
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}},
+		StartupPolicy: "preferred", StartupPreferredLeg: 1, StartupGrace: "40ms",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.streamConfig.StartupPolicy != smp3core.StreamStartupPreferred || adapter.streamConfig.StartupPreferredLeg != 1 || adapter.streamConfig.StartupGrace != 40*time.Millisecond {
+		t.Fatalf("startup config=%+v", adapter.streamConfig)
+	}
+	if _, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, StartupPolicy: "invalid",
+	}); err == nil {
+		t.Fatal("invalid startup policy accepted")
+	}
+}
+
+func TestSMP3PreferredTerminalLegFailureReleasesThroughCore(t *testing.T) {
+	const password = "test-password"
+	backend := newSMP3TestBackend(password)
+	line := &smp3TestProxy{name: "line-path", backend: backend}
+	failedPreferred := &smp3TestProxy{name: "public-hy2", backend: backend, dialErr: errors.New("preferred unavailable"), failed: make(chan struct{})}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs: []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
+		StartupPolicy: "preferred", StartupPreferredLeg: 1, StartupGrace: "1s", RedialInterval: "100ms",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.close()
+	adapter.lookup = func(name string) (C.Proxy, bool) {
+		switch name {
+		case "line-path":
+			return line, true
+		case "public-hy2":
+			return failedPreferred, true
+		default:
+			return nil, false
+		}
+	}
+	conn, err := adapter.DialContext(context.Background(), &C.Metadata{NetWork: C.TCP, Host: "example.com", DstPort: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	serverApp := <-backend.appReady
+	select {
+	case <-failedPreferred.failed:
+	case <-time.After(time.Second):
+		t.Fatal("preferred terminal failure was not observed")
+	}
+	if _, err := conn.Write([]byte("terminal-fallback")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len("terminal-fallback"))
+	if _, err := io.ReadFull(serverApp, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "terminal-fallback" {
+		t.Fatalf("server received %q", got)
+	}
+}
+
+func TestSMP3PreferredBootstrapAllowsLeg1First(t *testing.T) {
+	const password = "test-password"
+	backend := newSMP3TestBackend(password)
+	slowLeg0 := &smp3TestProxy{name: "line-path", backend: backend, dialDelay: 200 * time.Millisecond, started: make(chan struct{})}
+	fastLeg1 := &smp3TestProxy{name: "public-hy2", backend: backend, started: make(chan struct{})}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs:          []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
+		StartupPolicy: "preferred", StartupPreferredLeg: 1, StartupGrace: "100ms",
+		RedialInterval: "100ms",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.close()
+	adapter.lookup = func(name string) (C.Proxy, bool) {
+		switch name {
+		case "line-path":
+			return slowLeg0, true
+		case "public-hy2":
+			return fastLeg1, true
+		default:
+			return nil, false
+		}
+	}
+	started := time.Now()
+	conn, err := adapter.DialContext(context.Background(), &C.Metadata{NetWork: C.TCP, Host: "example.com", DstPort: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if elapsed := time.Since(started); elapsed >= 180*time.Millisecond {
+		t.Fatalf("preferred fast leg did not win bootstrap promptly: %v", elapsed)
+	}
+	select {
+	case <-slowLeg0.started:
+	case <-time.After(time.Second):
+		t.Fatal("slow Leg0 attempt did not start concurrently")
+	}
+	backend.waitForLegs(t, 2)
 }
 
 func TestSMP3DestinationFormattingParity(t *testing.T) {

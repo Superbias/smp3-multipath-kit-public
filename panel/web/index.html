@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMP3 Monitor</title>
+  <link rel="stylesheet" href="/monitor.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div><p class="overline">SMP3</p><h1>Realtime Monitor</h1></div></div>
+      <div class="topbar-right"><span id="connection" class="connection disconnected"><span class="dot" aria-hidden="true"></span><span id="connection-label">Disconnected</span></span><span class="separator" aria-hidden="true"></span><span id="sample-time">Waiting for telemetry</span></div>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="overview-title">
+        <div class="section-head"><div><p class="overline">READ-ONLY OPERATIONS</p><h2 id="overview-title">System overview</h2></div><span id="overall-health" class="health-pill unknown">UNKNOWN</span></div>
+        <div id="kpis" class="kpis"></div>
+      </section>
+      <section class="grid-two" aria-label="Leg status and traffic">
+        <article class="panel"><div class="section-head"><div><p class="overline">PER-LEG TELEMETRY</p><h2>Leg comparison</h2></div><span class="muted">Counter-delta rates</span></div><div id="legs" class="legs"></div></article>
+        <article class="panel"><div class="section-head"><div><p class="overline">TRAFFIC SHARE</p><h2>Contribution</h2></div><span class="muted">N/A means no valid denominator</span></div><div id="shares" class="shares"></div></article>
+      </section>
+      <section class="panel charts-panel" aria-labelledby="charts-title">
+        <div class="section-head"><div><p class="overline">REALTIME WINDOW</p><h2 id="charts-title">Rates over time</h2></div><label class="range-control">Window <select id="chart-window" aria-label="Chart time window"><option value="1">1m</option><option value="5" selected>5m</option><option value="30">30m</option><option value="60">1h</option><option value="1440">24h</option><option value="10080">7d</option></select></label></div>
+        <div class="charts">
+          <figure class="chart-card"><figcaption>Throughput <span>Mbps</span></figcaption><canvas id="throughput-chart" width="640" height="150" role="img" aria-label="Leg throughput chart">No valid samples</canvas><div class="chart-legend"><span><i class="legend-dot leg0"></i>Leg0</span><span><i class="legend-dot leg1"></i>Leg1</span></div></figure>
+          <figure class="chart-card"><figcaption>Useful ACK <span>Mbps</span></figcaption><canvas id="ack-chart" width="640" height="150" role="img" aria-label="Useful ACK chart">No valid samples</canvas><div class="chart-legend"><span><i class="legend-dot leg0"></i>Leg0</span><span><i class="legend-dot leg1"></i>Leg1</span></div></figure>
+          <figure class="chart-card"><figcaption>Useful ACK share <span>%</span></figcaption><canvas id="share-chart" width="640" height="150" role="img" aria-label="Useful ACK share chart">No valid samples</canvas><div class="chart-legend"><span><i class="legend-dot leg0"></i>Leg0</span><span><i class="legend-dot leg1"></i>Leg1</span></div></figure>
+        </div>
+      </section>
+      <section class="grid-two lower" aria-label="History and health">
+        <article class="panel"><div class="section-head"><div><p class="overline">ONE HOUR MEMORY</p><h2>Recent rates</h2></div><span id="history-count" class="muted">0 samples</span></div><div id="history" class="history"></div></article>
+        <article class="panel"><div class="section-head"><div><p class="overline">LOCAL HEALTH</p><h2>Process / listener probes</h2></div></div><div id="listeners" class="listeners"></div></article>
+      </section>
+      <section class="grid-two lower" aria-label="Carrier identity and policy">
+        <article class="panel"><div class="section-head"><div><p class="overline">QUALIFIED PATHS</p><h2>Carriers</h2></div><span class="muted">Read-only production identity</span></div><div class="carrier-grid"><div class="carrier-card leg0-accent"><div class="carrier-name"><span class="legend-dot leg0"></span>Carrier-A</div><strong>LINE_PATH</strong><span>127.0.0.1:17898</span><small>Existing qualified protocol</small></div><div class="carrier-card leg1-accent"><div class="carrier-name"><span class="legend-dot leg1"></span>Carrier-B</div><strong>公正法治JP-skyline-reality</strong><span>127.0.0.1:17899</span><small>VLESS + Reality</small></div></div></article>
+        <article class="panel"><div class="section-head"><div><p class="overline">RUNTIME POLICY</p><h2>Scheduling</h2></div><span class="muted">Configuration display only</span></div><div class="policy-grid"><div><span>Startup policy</span><strong>preferred</strong></div><div><span>Preferred leg</span><strong>Leg0</strong></div><div><span>Activation threshold</span><strong>80 Mbps</strong></div><div><span>Activation window</span><strong>1s</strong></div><div><span>Startup grace</span><strong>500ms</strong></div></div></article>
+      </section>
+      <section class="panel events-panel" aria-labelledby="events-title"><div class="section-head"><div><p class="overline">OPERATIONS</p><h2 id="events-title">Events</h2></div><span id="event-count" class="muted">0 events</span></div><div id="events" class="events"></div></section>
+    </main>
+    <footer><span>Panel backend → loopback telemetry</span><span id="telemetry-state">Telemetry unavailable</span></footer>
+  </div>
+  <script src="/monitor.js" defer></script>
+</body>
+</html>

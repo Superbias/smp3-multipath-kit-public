@@ -34,13 +34,16 @@ type SMP3UDPOption struct {
 // the existing udp.enabled option is set.
 type SMP3Option struct {
 	BasicOption
-	Name          string          `proxy:"name"`
-	Server        string          `proxy:"server"`
-	Port          int             `proxy:"port"`
-	Password      string          `proxy:"password,omitempty"`
-	Legs          []SMP3LegOption `proxy:"legs"`
-	Leg1Fallback  string          `proxy:"leg1-fallback,omitempty"`
-	SchedulerMode string          `proxy:"scheduler-mode,omitempty"`
+	Name                string          `proxy:"name"`
+	Server              string          `proxy:"server"`
+	Port                int             `proxy:"port"`
+	Password            string          `proxy:"password,omitempty"`
+	Legs                []SMP3LegOption `proxy:"legs"`
+	Leg1Fallback        string          `proxy:"leg1-fallback,omitempty"`
+	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
+	StartupPolicy       string          `proxy:"startup-policy,omitempty"`
+	StartupPreferredLeg uint8           `proxy:"startup-preferred-leg,omitempty"`
+	StartupGrace        string          `proxy:"startup-grace,omitempty"`
 
 	ActivationThresholdMbps uint64   `proxy:"activation-threshold-mbps,omitempty"`
 	ActivationWindow        string   `proxy:"activation-window,omitempty"`
@@ -165,6 +168,9 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 			cancel()
 		}
 	}()
+	if s.streamConfig.StartupPolicy == smp3core.StreamStartupPreferred {
+		return session.dialPreferred(ctx)
+	}
 
 	leg0, carrierName, err := session.dialCarrier(ctx, 0)
 	if err != nil {
@@ -191,6 +197,111 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 		session.ensureLeg(1)
 	}
 	return NewConn(appConn, s), nil
+}
+
+type smp3BootstrapResult struct {
+	id          uint8
+	conn        C.Conn
+	carrierName string
+	err         error
+}
+
+func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
+	config := ss.owner.streamConfig
+	config.OnActivate = func() { ss.ensureLeg(1) }
+	config.OnLegDown = func(id uint8, legErr error) { ss.scheduleLeg(id, legErr) }
+	engine, appConn := smp3core.NewStreamEngine(config)
+	ss.engine = engine
+	go func() {
+		<-engine.Done()
+		ss.cancel()
+		ss.owner.sessions.Delete(ss)
+	}()
+
+	ss.mu.Lock()
+	ss.joining[0] = true
+	ss.joining[1] = true
+	ss.mu.Unlock()
+	results := make(chan smp3BootstrapResult, 2)
+	for id := uint8(0); id < 2; id++ {
+		go func(id uint8) {
+			conn, carrierName, err := ss.dialCarrier(ss.ctx, id)
+			results <- smp3BootstrapResult{id: id, conn: conn, carrierName: carrierName, err: err}
+		}(id)
+	}
+
+	var first *smp3BootstrapResult
+	var causes []error
+	completed := 0
+	for first == nil && completed < 2 {
+		select {
+		case <-ctx.Done():
+			ss.cancel()
+			_ = engine.Close()
+			for completed < 2 {
+				result := <-results
+				completed++
+				if result.conn != nil {
+					_ = result.conn.Close()
+				}
+			}
+			ss.engine = nil
+			return nil, ctx.Err()
+		case result := <-results:
+			completed++
+			ss.finishJoining(result.id)
+			if result.err != nil {
+				causes = append(causes, fmt.Errorf("leg%d bootstrap: %w", result.id, result.err))
+				if result.id == uint8(config.StartupPreferredLeg) {
+					engine.MarkStartupLegTerminalUnavailable(smp3core.LegID(result.id))
+				}
+				continue
+			}
+			if err := engine.AttachLeg(smp3core.LegID(result.id), result.conn, nil); err != nil {
+				_ = result.conn.Close()
+				causes = append(causes, fmt.Errorf("attach leg%d: %w", result.id, err))
+				continue
+			}
+			first = &result
+		}
+	}
+	if first == nil {
+		ss.cancel()
+		_ = engine.Close()
+		ss.engine = nil
+		return nil, errors.Join(causes...)
+	}
+
+	go ss.finishPreferredCompanion(results, completed, engine)
+	log.Infoln("[SMP3] %s preferred session bootstrapped via leg %d / %s to %s", ss.owner.Name(), first.id, first.carrierName, ss.destination)
+	return NewConn(appConn, ss.owner), nil
+}
+
+func (ss *smp3Session) finishPreferredCompanion(results <-chan smp3BootstrapResult, completed int, engine *smp3core.StreamEngine) {
+	if completed >= 2 {
+		return
+	}
+	result := <-results
+	ss.finishJoining(result.id)
+	if result.err != nil {
+		if result.id == uint8(ss.owner.streamConfig.StartupPreferredLeg) {
+			engine.MarkStartupLegTerminalUnavailable(smp3core.LegID(result.id))
+		}
+		return
+	}
+	if ss.engine == nil || engine.Finalizing() || engine.HasLeg(smp3core.LegID(result.id)) {
+		_ = result.conn.Close()
+		return
+	}
+	if err := engine.AttachLeg(smp3core.LegID(result.id), result.conn, nil); err != nil {
+		_ = result.conn.Close()
+	}
+}
+
+func (ss *smp3Session) finishJoining(id uint8) {
+	ss.mu.Lock()
+	ss.joining[id] = false
+	ss.mu.Unlock()
 }
 
 // ListenPacketContext delegates the production UDP lifecycle to the dual-leg
@@ -368,6 +479,21 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	if err != nil {
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: recovery-timeout: %w", err)
 	}
+	startupPolicy := smp3core.StreamStartupFirstReady
+	switch strings.ToLower(strings.TrimSpace(option.StartupPolicy)) {
+	case "", "first-ready":
+	case "preferred":
+		startupPolicy = smp3core.StreamStartupPreferred
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: startup-policy must be first-ready or preferred")
+	}
+	if option.StartupPreferredLeg > 1 {
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: startup-preferred-leg must be 0 or 1")
+	}
+	startupGrace, err := parseSMP3StartupGrace(option.StartupGrace)
+	if err != nil {
+		return smp3core.StreamConfig{}, err
+	}
 	mode := smp3core.StreamSchedulerAdaptive
 	switch option.SchedulerMode {
 	case "", "adaptive":
@@ -381,18 +507,35 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 		threshold = 80
 	}
 	return smp3core.StreamConfig{
-		SchedulerMode:     mode,
-		ChunkSize:         option.ChunkSize,
-		QueueFrames:       option.QueueFrames,
-		ThresholdBytesPS:  threshold * 1000 * 1000 / 8,
-		ActivationWindow:  activationWindow,
-		BandwidthMbps:     append([]uint32(nil), option.BandwidthMbps...),
-		MaxReorderFrames:  option.MaxReorderFrames,
-		MaxInflightFrames: option.MaxInflightFrames,
-		AckInterval:       ackInterval,
-		RetransmitTimeout: retransmitTimeout,
-		RecoveryTimeout:   recoveryTimeout,
+		SchedulerMode:       mode,
+		ChunkSize:           option.ChunkSize,
+		QueueFrames:         option.QueueFrames,
+		ThresholdBytesPS:    threshold * 1000 * 1000 / 8,
+		ActivationWindow:    activationWindow,
+		BandwidthMbps:       append([]uint32(nil), option.BandwidthMbps...),
+		MaxReorderFrames:    option.MaxReorderFrames,
+		MaxInflightFrames:   option.MaxInflightFrames,
+		AckInterval:         ackInterval,
+		RetransmitTimeout:   retransmitTimeout,
+		RecoveryTimeout:     recoveryTimeout,
+		StartupPolicy:       startupPolicy,
+		StartupPreferredLeg: smp3core.LegID(option.StartupPreferredLeg),
+		StartupGrace:        startupGrace,
 	}, nil
+}
+
+func parseSMP3StartupGrace(value string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < 0 {
+		return 0, fmt.Errorf("smp3: invalid startup-grace %q", value)
+	}
+	if duration > smp3core.MaxStreamStartupGrace {
+		return 0, fmt.Errorf("smp3: startup-grace must be <= %s", smp3core.MaxStreamStartupGrace)
+	}
+	return duration, nil
 }
 
 func parseSMP3Duration(value string, fallback time.Duration) (time.Duration, error) {

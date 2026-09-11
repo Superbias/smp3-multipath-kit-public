@@ -103,6 +103,11 @@ type StreamConfig struct {
 	OnLegDown            func(uint8, error)
 	OnFutureAck          func(next, max, count uint64)
 	NotifyPeerOnActivate bool
+	Telemetry            *StreamTelemetry
+	StartupPolicy        StreamStartupPolicy
+	StartupPreferredLeg  LegID
+	StartupGrace         time.Duration
+	startupTimerFactory  func(time.Duration) streamStartupTimer
 }
 
 // StreamStats is a point-in-time, logical-stream view of a core. Counters are
@@ -136,7 +141,8 @@ type StreamStats struct {
 	RxPendingBytes     uint64
 	RxGapAge           time.Duration
 
-	LegUp [2]bool
+	LegUp     [2]bool
+	Telemetry StreamTelemetryStats
 }
 
 type dataFrame struct {
@@ -195,9 +201,10 @@ type wireFrame struct {
 }
 
 type StreamEngine struct {
-	cfg      StreamConfig
-	appConn  net.Conn
-	pipeConn net.Conn
+	cfg       StreamConfig
+	telemetry *StreamTelemetry
+	appConn   net.Conn
+	pipeConn  net.Conn
 
 	// lifecycleMu serializes the transition into FINALIZING/DONE with leg
 	// attachment. ACTIVE and graceful CLOSING still accept transport repair;
@@ -230,6 +237,7 @@ type StreamEngine struct {
 	active       atomic.Bool
 	activeCh     chan struct{}
 	activateOnce sync.Once
+	startup      *streamStartupGate
 
 	ackNext   atomic.Uint64
 	ackForce  atomic.Bool
@@ -282,6 +290,7 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 	appConn, pipeConn := net.Pipe()
 	c := &StreamEngine{
 		cfg:              cfg,
+		telemetry:        cfg.Telemetry,
 		appConn:          appConn,
 		pipeConn:         pipeConn,
 		legs:             make(map[uint8]*streamLeg),
@@ -296,6 +305,10 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		retryCh:          make(chan struct{}, 1),
 		frontierRescueCh: make(chan struct{}, 1),
 		ackWakeCh:        make(chan struct{}, 1),
+	}
+	c.startup = newStreamStartupGate(cfg)
+	if cfg.Telemetry != nil {
+		cfg.Telemetry.configureStartup(cfg)
 	}
 	c.bufferPool.New = func() any {
 		return make([]byte, cfg.ChunkSize)
@@ -373,7 +386,11 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 			defer leg.workers.Done()
 			c.legReadLoop(leg)
 		}()
+		if c.telemetry != nil {
+			c.telemetry.markStartupAttached(id8, time.Now())
+		}
 		c.kickRetry()
+		c.startup.notify(id8)
 		c.forceAck()
 		return nil
 	}
@@ -407,6 +424,7 @@ func (c *StreamEngine) Snapshot() StreamStats {
 		RxPendingFrames:        int(c.rxPendingFrames.Load()),
 		RxPendingBytes:         c.rxPendingBytes.Load(),
 	}
+	stats.Telemetry = c.telemetry.snapshot()
 	if timestamp := c.lastAckProgressNs.Load(); timestamp != 0 {
 		stats.LastAckProgress = time.Unix(0, timestamp)
 	}
@@ -433,6 +451,24 @@ func (c *StreamEngine) Snapshot() StreamStats {
 	}
 	if stats.LastAckProgress.IsZero() && stats.OutstandingFrames > 0 {
 		stats.LastAckProgress = now.Add(-stats.OldestOutstandingAge)
+	}
+	return stats
+}
+
+// TelemetrySnapshot reads only atomic protocol counters and optional telemetry
+// fields. It intentionally skips the TX ledger/debug frontier scan so a host
+// snapshot worker cannot contend with scheduler ledger operations.
+func (c *StreamEngine) TelemetrySnapshot() StreamStats {
+	stats := StreamStats{
+		TxSentBytesByLeg:       [2]uint64{c.txSentBytes[0].Load(), c.txSentBytes[1].Load()},
+		TxAckedUsefulByLeg:     [2]uint64{c.txAckedUseful[0].Load(), c.txAckedUseful[1].Load()},
+		TxRetransmitBytesByLeg: [2]uint64{c.txRetransmitBytes[0].Load(), c.txRetransmitBytes[1].Load()},
+		RxUniqueBytesByLeg:     [2]uint64{c.rxUniqueBytes[0].Load(), c.rxUniqueBytes[1].Load()},
+		RxDeliveredBytes:       c.rxDeliveredBytes.Load(),
+		Telemetry:              c.telemetry.snapshot(),
+	}
+	for id := range stats.LegUp {
+		stats.LegUp[id] = c.hasLeg(uint8(id))
 	}
 	return stats
 }
@@ -507,6 +543,9 @@ func (c *StreamEngine) fail(err error) {
 		err = ErrStreamClosed
 	}
 	c.closeOne.Do(func() {
+		if c.startup != nil {
+			c.startup.markSessionClosed()
+		}
 		// This lock makes FINALIZING/DONE atomic with AttachLeg(). A leg is either
 		// installed before shutdown snapshots transports, or rejected after the
 		// lifecycle transition; it can never appear in between.
@@ -568,8 +607,27 @@ func (c *StreamEngine) txLoop() {
 		n, err := c.pipeConn.Read(buffer)
 		if n > 0 {
 			c.ingressBytes.Add(uint64(n))
+			if c.startup != nil && c.telemetry != nil {
+				c.telemetry.markStartupFirstDataWaiting(time.Now())
+			}
+			startupHint := int16(-1)
+			if c.startup != nil && !c.startup.released.Load() {
+				var released bool
+				startupHint, released = c.startup.await(c)
+				if !released {
+					c.putBuffer(buffer)
+					c.releaseInflight(1)
+					return
+				}
+			}
 			record := c.txLedger.Add(buffer[:n], time.Now())
-			if enqueueErr := c.enqueueRecord(record, -1); enqueueErr != nil {
+			var enqueueErr error
+			if startupHint >= 0 {
+				enqueueErr = c.enqueueRecordWithHint(record, -1, startupHint)
+			} else {
+				enqueueErr = c.enqueueRecord(record, -1)
+			}
+			if enqueueErr != nil {
 				c.fail(enqueueErr)
 				return
 			}
@@ -838,6 +896,15 @@ func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 	return best
 }
 
+func (c *StreamEngine) chooseLegWithStartupHint(active bool, avoid, preferred int16) *streamLeg {
+	if preferred >= 0 && preferred < 2 && preferred != avoid {
+		if leg := c.getLeg(uint8(preferred)); leg != nil && !leg.closed.Load() {
+			return leg
+		}
+	}
+	return c.chooseLeg(active, avoid)
+}
+
 func (c *StreamEngine) markTransit(record *StreamTXRecord, legID uint8) bool {
 	return c.txLedger.MarkTransit(record, LegID(legID), time.Now())
 }
@@ -862,15 +929,19 @@ func (c *StreamEngine) attemptCurrent(record *StreamTXRecord, legID uint8, rescu
 	return c.txLedger.AttemptCurrent(record, LegID(legID), rescue)
 }
 
-func (c *StreamEngine) markAttemptSent(record *StreamTXRecord, legID uint8, rescue bool) {
+func (c *StreamEngine) markAttemptSent(record *StreamTXRecord, legID uint8, rescue bool) StreamTXAttemptResult {
 	result := c.txLedger.MarkAttemptSent(record, LegID(legID), rescue, time.Now())
 	if !result.Applied || legID >= uint8(len(c.txSentBytes)) {
-		return
+		return result
 	}
 	if result.Retransmit {
 		c.txRetransmitBytes[legID].Add(uint64(result.Bytes))
 	}
 	c.txSentBytes[legID].Add(uint64(result.Bytes))
+	if c.telemetry != nil {
+		c.telemetry.markDataTx(legID, result.Retransmit, rescue, uint64(result.Bytes))
+	}
+	return result
 }
 
 func (c *StreamEngine) isOutstanding(record *StreamTXRecord) bool {
@@ -982,6 +1053,24 @@ func (c *StreamEngine) enqueueRecord(record *StreamTXRecord, avoid int16) error 
 	}
 }
 
+func (c *StreamEngine) enqueueRecordWithHint(record *StreamTXRecord, avoid, preferred int16) error {
+	if preferred < 0 || preferred > 1 || preferred == avoid || !c.isOutstanding(record) {
+		return c.enqueueRecord(record, avoid)
+	}
+	active := c.active.Load()
+	leg := c.chooseLegWithStartupHint(active, avoid, preferred)
+	if leg != nil && c.tryQueue(leg, record) {
+		return nil
+	}
+	// The one-shot hint is consumed by this decision. Any unavailable or
+	// backpressured preferred leg falls back to the unchanged scheduler.
+	return c.enqueueRecord(record, avoid)
+}
+
+func (c *StreamEngine) MarkStartupLegTerminalUnavailable(id LegID) bool {
+	return c.startup.markTerminalUnavailable(id)
+}
+
 // tryEnqueueRecord makes one non-blocking ordinary retry scheduling pass.
 // Application TX still uses enqueueRecord because it must apply backpressure
 // to the application. The retransmit scheduler, however, must not wait for a
@@ -1055,6 +1144,9 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 		if err != nil {
 			c.handleLegFailure(leg, err)
 			return false
+		}
+		if c.telemetry != nil {
+			c.telemetry.markControlTx(leg.id, control.typ)
 		}
 		return true
 	}
@@ -1178,13 +1270,22 @@ func (c *StreamEngine) legReadLoop(leg *streamLeg) {
 		}
 		switch frame.typ {
 		case frameTypeActivate:
+			if c.telemetry != nil {
+				c.telemetry.markControlRx(leg.id, frame.typ)
+			}
 			c.activate()
 		case frameTypeAck:
+			if c.telemetry != nil {
+				c.telemetry.markControlRx(leg.id, frame.typ)
+			}
 			if err := c.handleAck(frame.seq); err != nil {
 				c.handleLegFailure(leg, err)
 				return
 			}
 		case frameTypeClose:
+			if c.telemetry != nil {
+				c.telemetry.markControlRx(leg.id, frame.typ)
+			}
 			// CLOSE carries the sender's final next-sequence value. The sender only
 			// emits it after our cumulative ACK has retired all of those DATA frames,
 			// so a value beyond ackNext is inconsistent and must not truncate data.
@@ -1644,18 +1745,30 @@ func (c *StreamEngine) rxLoop() {
 			}
 			switch disposition {
 			case StreamRXDuplicate:
+				if c.telemetry != nil {
+					c.telemetry.markDataRxDuplicate(frame.leg, uint64(len(frame.data)))
+				}
 				c.putBuffer(frame.data)
 				c.forceAck()
 				continue
 			case StreamRXBufferedDuplicate:
+				if c.telemetry != nil {
+					c.telemetry.markDataRxDuplicate(frame.leg, uint64(len(frame.data)))
+				}
 				c.putBuffer(frame.data)
 				continue
 			case StreamRXBuffered:
+				if c.telemetry != nil {
+					c.telemetry.markDataRxUnique(frame.leg)
+				}
 				if frame.leg < uint8(len(c.rxUniqueBytes)) {
 					c.rxUniqueBytes[frame.leg].Add(uint64(len(frame.data)))
 				}
 				c.syncRXStatsFromWindow(window)
 				continue
+			}
+			if c.telemetry != nil {
+				c.telemetry.markDataRxUnique(frame.leg)
 			}
 			if frame.leg < uint8(len(c.rxUniqueBytes)) {
 				c.rxUniqueBytes[frame.leg].Add(uint64(len(frame.data)))

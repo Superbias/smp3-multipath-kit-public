@@ -300,8 +300,9 @@ func (a *datagramAssociation) dialLeg(id smp3core.LegID, sid smp3core.SessionID)
 		routes = append(routes, a.client.cfg.SMP3.Routes.Leg1Fallback)
 	}
 	var causes []error
+	upstream := a.client.cfg.effectiveUpstream(uint8(id))
 	for _, endpoint := range routes {
-		conn, err := dialUpstream(a.ctx, a.client.cfg.UpstreamSocks, endpoint)
+		conn, err := dialUpstream(a.ctx, upstream, endpoint)
 		if err != nil {
 			if ctxErr := a.ctx.Err(); ctxErr != nil {
 				return nil, ctxErr

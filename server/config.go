@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const Version = "2.2.0"
+const Version = "2.0.0"
 
 type Duration time.Duration
 
@@ -39,14 +39,14 @@ func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Durat
 func (d Duration) Time() time.Duration          { return time.Duration(d) }
 
 type Config struct {
-	Listen           string        `json:"listen"`
-	Listeners        []string      `json:"listeners,omitempty"`
-	SidecarListeners []string      `json:"sidecar_listeners,omitempty"`
-	Password         string        `json:"password"`
-	HelloReadTimeout Duration      `json:"hello_read_timeout"`
-	RecoveryTimeout  Duration      `json:"recovery_timeout"`
-	Stream           StreamOptions `json:"stream"`
-	UDP              UDPOptions    `json:"udp"`
+	Listen           string           `json:"listen"`
+	SidecarListeners []string         `json:"sidecar_listeners,omitempty"`
+	Password         string           `json:"password"`
+	HelloReadTimeout Duration         `json:"hello_read_timeout"`
+	RecoveryTimeout  Duration         `json:"recovery_timeout"`
+	Stream           StreamOptions    `json:"stream"`
+	UDP              UDPOptions       `json:"udp"`
+	Telemetry        TelemetryOptions `json:"telemetry"`
 }
 
 type StreamOptions struct {
@@ -132,29 +132,28 @@ func (c *Config) NormalizeAndValidate() error {
 		field   string
 	}
 	addresses := []listenerConfig{{address: c.Listen, field: "listen"}}
-	for index, address := range c.Listeners {
-		addresses = append(addresses, listenerConfig{address: address, field: fmt.Sprintf("listeners[%d]", index)})
-	}
 	for index, address := range c.SidecarListeners {
 		addresses = append(addresses, listenerConfig{address: address, field: fmt.Sprintf("sidecar_listeners[%d]", index)})
 	}
-	seen := make(map[string]struct{}, len(addresses))
+	seen := make(map[string]string, len(addresses))
 	for index, configured := range addresses {
-		address := configured.address
-		canonical, err := normalizeListenAddress(address)
+		canonical, err := normalizeListenAddress(configured.address)
 		if err != nil {
 			if index == 0 {
-				return fmt.Errorf("invalid listen %q: %w", address, err)
+				if configured.address == "" {
+					return errors.New("invalid listen: address is empty")
+				}
+				return fmt.Errorf("invalid listen %q: %w", configured.address, err)
 			}
-			return fmt.Errorf("invalid %s %q: %w", configured.field, address, err)
+			return fmt.Errorf("invalid %s %q: %w", configured.field, configured.address, err)
 		}
-		// Port zero asks the kernel for a fresh ephemeral port, so repeating it
-		// is useful for disposable tests and does not name a duplicate endpoint.
+		// Port zero asks the kernel for a fresh endpoint, so repeated :0
+		// entries are independent listeners rather than duplicate endpoints.
 		if !strings.HasSuffix(canonical, ":0") {
-			if _, exists := seen[canonical]; exists {
-				return fmt.Errorf("duplicate SMP3 listener %q", address)
+			if previous, exists := seen[canonical]; exists {
+				return fmt.Errorf("duplicate SMP3 listener %q conflicts with %s", configured.address, previous)
 			}
-			seen[canonical] = struct{}{}
+			seen[canonical] = configured.field
 		}
 	}
 	if c.Password == "" {
@@ -165,6 +164,9 @@ func (c *Config) NormalizeAndValidate() error {
 	}
 	if c.RecoveryTimeout.Time() <= 0 {
 		c.RecoveryTimeout = Duration(15 * time.Second)
+	}
+	if err := c.Telemetry.NormalizeAndValidate(); err != nil {
+		return err
 	}
 	if err := validateStream(&c.Stream); err != nil {
 		return err

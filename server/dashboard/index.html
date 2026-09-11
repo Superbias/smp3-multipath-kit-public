@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMP3 Telemetry</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="dashboard-sidebar" aria-label="Dashboard navigation">
+      <div class="brand-mark"><span class="brand-pulse" aria-hidden="true"></span><div><strong>SMP3</strong><small>Multipath telemetry</small></div></div>
+      <nav class="sidebar-nav">
+        <button class="nav-item is-active" data-view="overview"><span class="nav-icon" aria-hidden="true">◈</span><span>Overview</span></button>
+        <button class="nav-item" data-view="legs"><span class="nav-icon" aria-hidden="true">⇄</span><span>Legs</span></button>
+        <button class="nav-item" data-view="sessions"><span class="nav-icon" aria-hidden="true">≡</span><span>Sessions</span></button>
+      </nav>
+      <div class="sidebar-footer"><span>READ ONLY</span><small>Configuration unavailable</small></div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar">
+        <div><p class="eyebrow">NETWORK OPERATIONS</p><h1 id="page-title">Overview</h1></div>
+        <div class="topbar-meta"><span id="connection-state" class="connection-state disconnected"><span class="state-dot" aria-hidden="true"></span><span class="state-label">Disconnected</span></span><span class="meta-divider" aria-hidden="true"></span><span id="server-version">SMP3</span><span class="meta-divider" aria-hidden="true"></span><span id="server-uptime">Uptime —</span></div>
+      </header>
+
+      <main class="dashboard-content">
+        <section id="view-overview" class="view is-visible" aria-labelledby="overview-title">
+          <div class="section-heading"><div><p class="eyebrow">LIVE SNAPSHOT</p><h2 id="overview-title">System overview</h2></div><span id="snapshot-time" class="muted">Waiting for telemetry</span></div>
+          <div class="metric-grid" id="overview-metrics"></div>
+          <section class="hero-panel" aria-labelledby="traffic-title"><div class="panel-heading"><div><p class="eyebrow">REALTIME CONTRIBUTION</p><h2 id="traffic-title">Traffic distribution</h2></div><span class="help-label">Wire and logical DATA are separate measures</span></div><div id="traffic-distribution"></div></section>
+          <div class="leg-grid" id="overview-legs"></div>
+        </section>
+
+        <section id="view-legs" class="view" aria-labelledby="legs-title"><div class="section-heading"><div><p class="eyebrow">CARRIER ACCOUNTING</p><h2 id="legs-title">Leg comparison</h2></div></div><div class="leg-grid" id="legs-content"></div></section>
+
+        <section id="view-sessions" class="view" aria-labelledby="sessions-title"><div class="section-heading"><div><p class="eyebrow">BOUNDED ACTIVE ROWS</p><h2 id="sessions-title">Session inspector</h2></div><span id="session-count" class="muted">—</span></div><div id="sessions-error" class="notice" hidden></div><div class="table-wrap"><table><caption class="sr-only">Active SMP3 sessions</caption><thead><tr><th>Session</th><th>Mode</th><th>Age</th><th>Leg0</th><th>Leg1</th><th>Wire</th><th>Logical</th><th>First DATA</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="sessions-body"></tbody></table></div><div class="pager"><button id="sessions-prev" class="secondary" disabled>Previous</button><button id="sessions-next" class="secondary" disabled>Next</button></div></section>
+      </main>
+    </div>
+  </div>
+
+  <div id="detail-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="detail-drawer" class="detail-drawer" aria-label="Session detail" aria-hidden="true" tabindex="-1"><div class="drawer-header"><div><p class="eyebrow">SESSION DETAIL</p><h2 id="detail-title">Session</h2></div><button id="detail-close" class="icon-button" aria-label="Close session detail">×</button></div><div id="detail-error" class="notice" hidden></div><div id="detail-content" class="detail-content"></div></aside>
+
+  <footer><span>Telemetry plane · <strong id="telemetry-health">Waiting</strong></span><span id="server-dropped">Dropped events —</span></footer>
+  <script src="/dashboard.js" defer></script>
+</body>
+</html>
