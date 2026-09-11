@@ -117,7 +117,10 @@ with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED, compressleve
 PY
 fi
 
-sha256sum "$OUT_ZIP" > "$OUT_ZIP.sha256"
+(
+  cd "$(dirname "$OUT_ZIP")"
+  sha256sum "$(basename "$OUT_ZIP")"
+) > "$OUT_ZIP.sha256"
 unzip -t "$OUT_ZIP" >/dev/null
 echo "[+] clean source archive: $OUT_ZIP"
 echo "[+] sha256: $OUT_ZIP.sha256"
