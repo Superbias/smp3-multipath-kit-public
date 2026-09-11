@@ -1,3 +1,19 @@
+# SMP3 2.3.1
+
+This is a documentation-only patch release. It does not change the SMP3 Core,
+wire protocol, scheduler, Native adapter, Standalone runtime, Carrier setup,
+or R15 Panel behavior. Product artifacts remain based on the qualified v2.3.0
+baseline.
+
+## Documentation updates
+
+- Replaced the old 2.2.0 deployment text with a concise v2.3.x quick start.
+- Added a clear Native vs Standalone vs optional sing-box compatibility guide.
+- Documented where Carrier node definitions live and how Leg0/Leg1 use them.
+- Documented the qualified local port layout and recommended process order.
+- Added R15 Panel startup, REST/SSE, history, and troubleshooting instructions.
+- Added Chinese and English Sidecar usage guides.
+
 # SMP3 2.1.1
 
 SMP3 2.1.1 is a bugfix release for bidirectional Stream activation. It keeps

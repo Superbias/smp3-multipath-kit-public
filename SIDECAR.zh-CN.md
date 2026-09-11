@@ -1,97 +1,82 @@
-# SMP3 2.2.0 独立 SOCKS5 Sidecar
+# SMP3 v2.3.1 Standalone SOCKS5 Sidecar
 
-本文说明 SMP3 2.2.0 release candidate 中的独立 sidecar 客户端。它是
-面向兼容性的、与 host 无关的 client；已使用 Windows stock Mihomo
-v1.19.29 完成验收。
-
-Sidecar 是一个仅绑定本机回环地址的 SOCKS5 服务。它只通过宿主已有的
-SOCKS5 端点，使用 TCP `CONNECT` 连接两个 SMP3 route；不会使用上游的
-SOCKS UDP ASSOCIATE。两个 route 必须经过各自 carrier 最终到达同一个
-standalone SMP3 listener，并且提供可靠的 TCP stream。
-
-Sidecar route 必须指向 standalone server 明确声明的 `sidecar_listeners`。
-这些 listener 只有在 canonical HELLO 完成解析、认证和 admission 后才发送
-带认证的 `SMP3RDY1` readiness 记录。旧的 `listen`/`listeners` 继续保持
-原有 canonical-only 行为，不会发送 READY 字节。
+Standalone Sidecar 为普通应用提供本机 SOCKS5 入口。它负责 SMP3，不负责
+实现或保存 VLESS、Reality、Hysteria2、Snell 等外层节点协议。
 
 ```text
 应用
-    -> 本机 sidecar SOCKS5（127.0.0.1:18080）
-    -> 宿主 SOCKS5 CONNECT（leg0 / leg1）
-    -> child carrier 终止端
-    -> standalone SMP3 server
-    -> 目标地址
+  -> 127.0.0.1:18080（Sidecar SOCKS5）
+  -> Carrier-A / Carrier-B 提供的 SOCKS5
+  -> SMP3 server sidecar listener
 ```
 
-## 构建和运行
+## 使用方式
 
-在仓库根目录：
+下载 `smp3-client-windows-amd64.exe` 或 Linux 版本，复制
+`examples/smp3-client-config.example.json`，替换所有占位值：
+
+- `listen`：默认 `127.0.0.1:18080`；
+- `upstream_socks.address`：默认 Carrier/宿主 SOCKS5；
+- `upstream_socks.leg0`、`leg1`：需要分别使用不同 Carrier 时配置；
+- `smp3.routes.leg0`、`leg1`：到达 SMP3 server 的 route；
+- `smp3.password`：与 server 一致的密码。
+
+例如当前双 Carrier 形态：
+
+```json
+{
+  "upstream_socks": {
+    "address": "127.0.0.1:17898",
+    "leg1": { "address": "127.0.0.1:17899" }
+  },
+  "smp3": {
+    "routes": {
+      "leg0": "SERVER_IP:24445",
+      "leg1": "SERVER_IP:24445"
+    }
+  }
+}
+```
+
+两个 leg 可以指向同一个 SMP3 sidecar listener，但必须通过两个独立的
+Carrier 连接。示例中的地址和密码只是格式示例，不能直接用于生产。
+
+## 检查和启动
 
 ```bash
-go build -o smp3-client ./cmd/smp3-client
-./smp3-client -c ./examples/smp3-client-config.example.json -check
-./smp3-client -c ./config/client.json
+./smp3-client-linux-amd64 -c ./config/smp3-client.json -check
+./smp3-client-linux-amd64 -c ./config/smp3-client.json
 ```
 
-示例文件中的 endpoint 和 `CHANGE_ME` 都是占位符；连接真实服务前必须全部
-替换。监听地址设计上限制为 loopback。
+Windows 使用同名 `.exe`。应用连接：
 
-Windows：
-
-```powershell
-go build -o smp3-client.exe .\cmd\smp3-client
-.\smp3-client.exe -c .\config\client.json -check
-.\smp3-client.exe -c .\config\client.json
+```text
+SOCKS5 127.0.0.1:18080
 ```
 
-命令还支持 `-version`。`-check` 只校验 JSON 和参数，不会连接上游 SOCKS
-或 SMP3 endpoint。
+先启动 Carrier-A/B，再启动 Sidecar。Sidecar 自己不会启动外部 Carrier。
 
-## 配置说明
+## Leg 行为
 
-`upstream_socks.address` 是宿主侧 SOCKS5 端点；同时提供 `username` 和
-`password` 时启用 RFC 1929 认证。`smp3.routes.leg0`、`leg1` 是经上游
-SOCKS 请求的两个不同 endpoint。`connect_timeout`（默认 `10s`）限制一次
-完整的 TCP 建连、greeting、认证、CONNECT 请求和 CONNECT 回复事务；宿主
-代理的内部重试不能无限阻塞 primary 到 fallback 的选择。leg1 主 route
-失败或达到该超时后，才尝试 `leg1_fallback`。
+- Leg0 通常是 preferred/primary leg；
+- Leg1 在满足 activation 条件后加入；
+- 短连接或低速流量下 Leg1 未激活可能是正常现象；
+- `connect_timeout` 限制完整 SOCKS5 CONNECT 事务；
+- `carrier_ready_timeout` 限制 CONNECT 成功后等待远端 SMP3 readiness 的时间。
 
-`smp3.carrier_ready_timeout`（默认 `5s`）限制 SOCKS CONNECT 成功后等待远端
-认证 READY 的时间。仅 SOCKS CONNECT success 不能视为远端 carrier ready。
+Sidecar 使用 TCP CONNECT 承载 SMP3 Stream HELLO v4；UDP 使用 Datagram
+HELLO v5。它不会修改 Mihomo、Clash Party、Carrier、server、防火墙或路由。
 
-TCP `CONNECT` 使用 SMP3 Stream HELLO v4。第二条 stream leg 由 canonical
-Core 的应用流量回调激活，下载型流量也能触发；修复时保持同一个 logical
-session ID。UDP 使用 Datagram HELLO v5、首包 lazy bootstrap、逐 datagram
-寻址以及 adaptive/stripe/duplicate 策略。UDP engine 终止后可以在原 SOCKS
-UDP association 仍存在时重建；association 关闭后禁止再次重建。
+## Mihomo 使用 Sidecar
 
-## Mihomo 宿主集成
+先启动 Sidecar，再让 stock Mihomo 将 `127.0.0.1:18080` 作为 SOCKS5 代理。
+参考 `examples/mihomo-sidecar.example.yaml`，并把 Sidecar 的明确路由规则
+放在宽泛规则之前，避免代理回环。
 
-先单独运行 sidecar，再让 stock Mihomo 将它作为本地 SOCKS5 代理使用，参考
-`examples/mihomo-sidecar.example.yaml`。Sidecar 不会修改 Mihomo、Clash
-Party、carrier 定义、防火墙规则或 standalone server。必须把 sidecar
-endpoint 的 route discriminator 放在宽泛规则之前，避免宿主 SOCKS 到
-sidecar 的循环。
+## 安全和排障
 
-sidecar 不替换 native Mihomo 或 sing adapter；两者是独立集成，sidecar 不会
-修改它们。Native Mihomo 和 stock Mihomo Sidecar 已完成验收；sing-box、
-Xray/V2Ray 及其他 SOCKS5 host 目前仅属于架构兼容，仍需各自验收。
-
-## SOCKS5 行为
-
-- `CONNECT` 支持 IPv4、IPv6 和 domain。
-- `UDP ASSOCIATE` 分配 loopback UDP 端口，并通过 canonical DatagramEngine
-  承载数据。
-- `FRAG != 0` 的 UDP 包会安全丢弃，不会关闭 association。
-- `BIND` 和未知 command 返回 command-not-supported。
-- 本地 SOCKS 不启用认证；依靠 loopback 绑定和本机策略保护。
-
-## 校验
-
-```bash
-go test ./client ./cmd/smp3-client
-go vet ./client ./cmd/smp3-client
-```
-
-真实 carrier/standalone 的实机验收矩阵与本地 package 测试分开。不要使用
-生产配置或正在运行的 Clash Party 进行本地测试。
+- Sidecar 只绑定 loopback，不提供公网 SOCKS5；
+- 外层节点配置在 Carrier Mihomo，不在 Sidecar；
+- `-check` 只检查本地配置，不会连接生产端；
+- 两个 leg 都失败时，先查 Carrier SOCKS5、route、SMP3 密码和 server listener；
+- 不要把生产配置、密码、PSK 或 Reality 私钥用于本地测试。

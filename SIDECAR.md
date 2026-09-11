@@ -1,109 +1,87 @@
-# SMP3 2.2.0 Standalone SOCKS5 Sidecar
+# SMP3 v2.3.1 Standalone SOCKS5 Sidecar
 
-This document describes the standalone sidecar client included in the SMP3
-2.2.0 release candidate. It is a compatibility-first, host-agnostic client;
-the candidate has been qualified with stock Mihomo v1.19.29 on Windows.
-
-The sidecar is a small local SOCKS5 server. It uses the host's existing
-SOCKS5 endpoint only for outbound TCP `CONNECT` to each configured SMP3 route;
-it does not use upstream SOCKS UDP ASSOCIATE. Each route must lead, through its
-carrier, to the same standalone SMP3 listener and must carry a reliable TCP
-stream.
-
-Sidecar routes must target the standalone server's explicit
-`sidecar_listeners`. Those listeners send an authenticated `SMP3RDY1` host
-readiness record only after the canonical HELLO has been parsed, authenticated,
-and admitted. The legacy `listen`/`listeners` endpoints keep their existing
-canonical-only behavior and do not send READY bytes.
+The Standalone Sidecar gives ordinary applications a local SOCKS5 endpoint. It
+implements SMP3 only; VLESS, Reality, Hysteria2, Snell, and other outer
+protocols are implemented and configured by Mihomo/Carrier.
 
 ```text
 application
-    -> local sidecar SOCKS5 (127.0.0.1:18080)
-    -> host SOCKS5 CONNECT (leg0 / leg1)
-    -> child carrier termination
-    -> standalone SMP3 server
-    -> destination
+  -> 127.0.0.1:18080 (Sidecar SOCKS5)
+  -> Carrier-A / Carrier-B SOCKS5 endpoints
+  -> SMP3 server sidecar listener
 ```
 
-## Build and run
+## Configure
 
-From the repository root:
+Download `smp3-client-windows-amd64.exe` or the Linux artifact and copy
+`examples/smp3-client-config.example.json`. Replace every placeholder:
+
+- `listen`: normally `127.0.0.1:18080`;
+- `upstream_socks.address`: the default Carrier/host SOCKS5 endpoint;
+- `upstream_socks.leg0` and `leg1`: optional per-leg Carrier endpoints;
+- `smp3.routes.leg0` and `leg1`: routes to the SMP3 server;
+- `smp3.password`: the server's SMP3 password.
+
+For the qualified dual-Carrier shape:
+
+```json
+{
+  "upstream_socks": {
+    "address": "127.0.0.1:17898",
+    "leg1": { "address": "127.0.0.1:17899" }
+  },
+  "smp3": {
+    "routes": {
+      "leg0": "SERVER_IP:24445",
+      "leg1": "SERVER_IP:24445"
+    }
+  }
+}
+```
+
+Both legs may target the same SMP3 sidecar listener, but they must use two
+independent Carrier connections. The address and password above are examples.
+
+## Check and run
 
 ```bash
-go build -o smp3-client ./cmd/smp3-client
-./smp3-client -c ./examples/smp3-client-config.example.json -check
-./smp3-client -c ./config/client.json
+./smp3-client-linux-amd64 -c ./config/smp3-client.json -check
+./smp3-client-linux-amd64 -c ./config/smp3-client.json
 ```
 
-The example contains invalid placeholder endpoints and `CHANGE_ME`; replace
-all placeholders before connecting to a real server. The listener is restricted
-to loopback by design.
+On Windows use the `.exe` with the same arguments. Point applications to:
 
-On Windows:
-
-```powershell
-go build -o smp3-client.exe .\cmd\smp3-client
-.\smp3-client.exe -c .\config\client.json -check
-.\smp3-client.exe -c .\config\client.json
+```text
+SOCKS5 127.0.0.1:18080
 ```
 
-The command also supports `-version`. `-check` validates JSON and values only;
-it does not connect to the upstream SOCKS server or SMP3 endpoint.
+Start Carrier-A/B before the Sidecar. The Sidecar does not start external
+Carrier processes.
 
-## Configuration
+## Leg behavior
 
-`upstream_socks.address` is the host-side SOCKS5 endpoint. Optional
-`username` and `password` enable RFC 1929 authentication. `smp3.routes.leg0`
-and `leg1` are the two distinct endpoints requested through that upstream
-SOCKS service. `connect_timeout` (default `10s`) bounds the complete TCP
-connect, greeting, authentication, CONNECT request, and CONNECT reply
-transaction. Host-proxy internal retries cannot block primary-to-fallback
-selection indefinitely. `leg1_fallback` is tried only for leg 1 when its
-primary route fails or reaches that timeout.
+- Leg0 is normally the preferred/primary leg.
+- Leg1 joins after the activation condition is met.
+- A short or low-rate flow may legitimately leave Leg1 inactive.
+- `connect_timeout` bounds the complete SOCKS5 CONNECT transaction.
+- `carrier_ready_timeout` bounds the wait for remote SMP3 readiness after
+  SOCKS CONNECT succeeds.
 
-`smp3.carrier_ready_timeout` (default `5s`) bounds the post-CONNECT wait for
-the authenticated remote READY record. A SOCKS CONNECT success alone is not
-considered remote carrier readiness.
+The Sidecar uses Stream HELLO v4 over TCP and Datagram HELLO v5 for UDP. It does
+not modify Mihomo, Clash Party, Carrier, the server, firewall rules, or routes.
 
-TCP `CONNECT` uses SMP3 Stream HELLO v4. The second stream leg is activated by
-the canonical Core's application-traffic callback, including download-heavy
-flows, and repair keeps the same logical session ID. UDP uses Datagram HELLO
-v5, a lazy first-packet bootstrap, per-datagram routing, and the configured
-adaptive/stripe/duplicate policy. A terminal UDP engine can be recreated while
-the local SOCKS UDP association remains open; closing the association disables
-further recreation.
+## Use it with stock Mihomo
 
-## Mihomo host integration
+Start the Sidecar first, then configure stock Mihomo to use
+`127.0.0.1:18080` as a SOCKS5 proxy. See
+`examples/mihomo-sidecar.example.yaml`; put the explicit Sidecar route before
+broad rules to avoid a proxy loop.
 
-Run the sidecar separately and configure stock Mihomo to use it as a local
-SOCKS5 proxy. See `examples/mihomo-sidecar.example.yaml`. The sidecar does not
-modify Mihomo, Clash Party, carrier definitions, firewall rules, or the
-standalone server. The route discriminator for the sidecar's own endpoints must
-precede broad rules to prevent a host-SOCKS-to-sidecar loop.
+## Security and troubleshooting
 
-The sidecar does not replace the native Mihomo or sing adapters. Those
-integrations remain separate products and are not changed by the sidecar
-client. Native Mihomo and stock Mihomo Sidecar are qualified; sing-box,
-Xray/V2Ray, and other SOCKS5 hosts remain architecture-compatible but require
-their own qualification.
-
-## SOCKS5 behavior
-
-- `CONNECT` supports IPv4, IPv6, and domain destinations.
-- `UDP ASSOCIATE` binds a loopback UDP port and carries packets through the
-  canonical DatagramEngine.
-- UDP `FRAG != 0` is discarded safely; it does not tear down the association.
-- `BIND` and unknown commands return command-not-supported.
-- The local SOCKS listener accepts no authentication; protect it with the
-  loopback bind and local host policy.
-
-## Validation
-
-```bash
-go test ./client ./cmd/smp3-client
-go vet ./client ./cmd/smp3-client
-```
-
-The live carrier/standalone acceptance matrix is intentionally separate from
-this local package test. Do not use production configuration or an existing
-Clash Party process for the local tests.
+- The Sidecar is loopback-only and is not a public SOCKS5 server.
+- Outer node settings belong in Carrier Mihomo, not in the Sidecar config.
+- `-check` validates local config only; it does not connect to production.
+- If both legs fail, check Carrier SOCKS5, routes, password, and the server
+  listener first.
+- Never use production passwords, PSKs, or Reality private keys in local tests.
