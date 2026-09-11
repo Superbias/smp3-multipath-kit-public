@@ -1,4 +1,4 @@
-# SMP3 Multipath Kit v2.3.1
+# SMP3 Multipath Kit v2.3.2
 
 [简体中文](README-zh_CN.md) | English
 
@@ -21,11 +21,11 @@ legs through the Carrier SOCKS5 endpoints.
 
 ## Release
 
-- Version: `v2.3.1` (documentation-only patch; product/data-plane baseline is v2.3.0)
+- Version: `v2.3.2` (runtime version metadata unified; data-plane semantics unchanged)
 - Native artifact: Mihomo `v1.19.28` with the SMP3 adapter
 - Standalone artifacts: `smp3-client` and `smp3-server`
 - Panel artifacts: `smp3-panel`
-- [Download v2.3.1](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.1)
+- [Download v2.3.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2)
 - Verify every download with `SHA256SUMS` before running it.
 
 ## Qualified deployment shape

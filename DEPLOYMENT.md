@@ -1,4 +1,4 @@
-# SMP3 v2.3.1 Deployment and Usage
+# SMP3 v2.3.2 Deployment and Usage
 
 This is the short operational guide for the current release. Keep production
 passwords, PSKs, Reality keys, subscriptions, and real node configs outside
@@ -20,9 +20,8 @@ dialing.
 
 ## 2. Download and verify
 
-Download the v2.3.1 documentation release and its unchanged v2.3.0 product
-artifacts from the
-[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.1):
+Download the v2.3.2 assets from the
+[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2):
 
 | Asset | Purpose |
 | --- | --- |

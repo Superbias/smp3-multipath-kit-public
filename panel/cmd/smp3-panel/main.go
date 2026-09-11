@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -17,7 +18,12 @@ func main() {
 	listen := flag.String("listen", defaults.Listen, "literal loopback address for the Panel")
 	telemetry := flag.String("telemetry", defaults.TelemetryURL, "literal loopback telemetry URL")
 	history := flag.String("history", "monitor-history.jsonl", "local read-only monitor history file")
+	version := flag.Bool("version", false, "print Panel version")
 	flag.Parse()
+	if *version {
+		fmt.Println(panel.Version)
+		return
+	}
 	config := defaults
 	config.Listen, config.TelemetryURL, config.PersistentPath = *listen, *telemetry, *history
 	server, err := panel.New(config)

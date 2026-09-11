@@ -1,4 +1,4 @@
-# SMP3 v2.3.1 read-only Panel monitor
+# SMP3 v2.3.2 read-only Panel monitor
 
 This module is a separate, loopback-only management surface. It reads the
 existing telemetry API with bounded GET requests and serves a same-origin UI;

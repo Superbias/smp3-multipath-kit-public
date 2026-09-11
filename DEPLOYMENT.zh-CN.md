@@ -1,4 +1,4 @@
-# SMP3 v2.3.1 部署与使用教程
+# SMP3 v2.3.2 部署与使用教程
 
 这是一份面向实际使用的简明教程。生产密码、PSK、Reality 私钥和真实节点
 参数只放在本机配置中，不要提交到仓库。
@@ -25,8 +25,8 @@ Panel：浏览器 → 127.0.0.1:24600 → telemetry 127.0.0.1:24500
 
 ## 2. 下载和校验
 
-从 [v2.3.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.1)
-下载教程；其中产品二进制与数据面保持 v2.3.0 基线：
+从 [v2.3.2 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2)
+下载教程和产品制品。该版本只统一运行时版本标识，不改变数据面语义：
 
 | 文件 | 用途 |
 | --- | --- |

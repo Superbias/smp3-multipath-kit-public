@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-const Version = "2.0.0"
+// Version is the public SMP3 server release version. Official builds inject
+// the same value from the repository VERSION file with -ldflags.
+var Version = "2.3.2"
 
 type Duration time.Duration
 

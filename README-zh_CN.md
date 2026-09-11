@@ -1,4 +1,4 @@
-# SMP3 Multipath Kit v2.3.1
+# SMP3 Multipath Kit v2.3.2
 
 [English](README.md) | 简体中文
 
@@ -21,11 +21,11 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 
 ## 当前发布版本
 
-- Release：`v2.3.1`（文档补丁版本；产品/数据面基线仍为 v2.3.0）
+- Release：`v2.3.2`（运行时版本标识已统一；数据面语义不变）
 - Native：Mihomo `v1.19.28` + SMP3 adapter
 - Standalone：`smp3-client`、`smp3-server`
 - Panel：只读 REST/SSE 监控
-- 官方下载：[GitHub Releases v2.3.1](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.1)
+- 官方下载：[GitHub Releases v2.3.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2)
 - 下载后先用 `SHA256SUMS` 校验文件，不要直接使用示例配置中的占位密码。
 
 ## 当前资格化拓扑

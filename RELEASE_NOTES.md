@@ -1,3 +1,22 @@
+# SMP3 2.3.2
+
+This release unifies the public runtime version metadata across the
+Standalone server, Standalone Sidecar client, and R15 Panel. Official builds
+read `kit_version` from `VERSION` and inject it into each binary.
+
+## Included
+
+- `smp3-server -version` reports `2.3.2`.
+- `smp3-client -version` reports `2.3.2`.
+- `smp3-panel -version` reports `2.3.2`.
+- The formal build script now builds and checks server, client, Panel, Native,
+  and optional compatibility artifacts from one release version.
+- SMP3 wire/Core, scheduler, Native adapter semantics, Carrier behavior, and
+  configuration semantics are unchanged.
+
+The optional sing-box compatibility artifact keeps its upstream identity
+separate from the SMP3 Kit release version.
+
 # SMP3 2.3.1
 
 This is a documentation-only patch release. It does not change the SMP3 Core,

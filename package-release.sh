@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-VERSION="2.1.1"
+VERSION="$(awk -F= '$1 == "kit_version" { print $2; exit }' VERSION)"
+test -n "$VERSION" || { echo 'missing kit_version in VERSION' >&2; exit 2; }
 NAME="smp3-multipath-kit-$VERSION"
 STAGE_ROOT="${STAGE_ROOT:-$ROOT/.release-stage}"
 STAGE="$STAGE_ROOT/$NAME"
@@ -11,7 +12,7 @@ OUT_ZIP="${1:-$ROOT/$NAME-source.zip}"
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$STAGE/config" "$STAGE/patches" "$STAGE/scripts" \
   "$STAGE/src" "$STAGE/core" "$STAGE/server" "$STAGE/cmd" "$STAGE/adapters" "$STAGE/examples" \
-  "$STAGE/tools/check-binary-target" "$STAGE/dist"
+  "$STAGE/tools/check-binary-target" "$STAGE/panel" "$STAGE/dist"
 
 for file in \
   README.md README-zh_CN.md README.zh-CN.md RELEASE_NOTES.md CHANGELOG.md \
@@ -34,6 +35,7 @@ cp -a "$ROOT/server/." "$STAGE/server/"
 cp -a "$ROOT/cmd/." "$STAGE/cmd/"
 cp -a "$ROOT/adapters/." "$STAGE/adapters/"
 cp -a "$ROOT/examples/." "$STAGE/examples/"
+cp -a "$ROOT/panel/." "$STAGE/panel/"
 cp -a "$ROOT/tools/check-binary-target/." "$STAGE/tools/check-binary-target/"
 cp -a "$ROOT/dist/BUILD_REQUIRED.md" "$STAGE/dist/"
 
