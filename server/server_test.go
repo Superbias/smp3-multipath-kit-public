@@ -222,7 +222,9 @@ func TestServerTelemetryCountsAuthenticatedHelloAndActiveLegs(t *testing.T) {
 	writeAll(t, leg0, header)
 	writeAll(t, leg0, payload)
 
-	waitFor(t, time.Second, func() bool {
+	// Race instrumentation can delay publication of both authenticated legs
+	// and target counters beyond the normal one-second observation window.
+	waitFor(t, 8*time.Second, func() bool {
 		snapshot := instance.Telemetry().Snapshot()
 		return snapshot.ActiveSessions == 1 && snapshot.ActiveLegs == 2 && len(snapshot.Sessions) == 1 && !snapshot.Sessions[0].FirstDataSeenAt.IsZero() && snapshot.Sessions[0].TargetTxBytes > 0 && snapshot.Sessions[0].TargetRxBytes > 0
 	})
