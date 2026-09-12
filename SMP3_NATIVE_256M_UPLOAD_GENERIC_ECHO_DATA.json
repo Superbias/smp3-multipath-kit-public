@@ -1,0 +1,66 @@
+{
+  "status": "completed-generic-upload-only",
+  "mode": "generic-mihomo-direct",
+  "size_mib": 256,
+  "runs_requested": 3,
+  "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+  "runs": [
+    {
+      "run": 1,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 19.050559900002554,
+      "mbps": 112.7254872965551,
+      "fixture": {
+        "received": 268435456,
+        "echoed": 268435456,
+        "last_progress_age": 0.015548199997283518,
+        "active": 1
+      },
+      "log_tail": [
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:25:17.591084500+08:00\" level=info msg=\"Initial configuration complete, total time: 5ms\""
+      ]
+    },
+    {
+      "run": 2,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 17.890280400053598,
+      "mbps": 120.03633257718903,
+      "fixture": {
+        "received": 268435456,
+        "echoed": 268435456,
+        "last_progress_age": 0.003307500039227307,
+        "active": 1
+      },
+      "log_tail": [
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:25:17.591084500+08:00\" level=info msg=\"Initial configuration complete, total time: 5ms\""
+      ]
+    },
+    {
+      "run": 3,
+      "bytes": 268435456,
+      "pass": true,
+      "seconds": 18.814878500066698,
+      "mbps": 114.13752408724761,
+      "fixture": {
+        "received": 268435456,
+        "echoed": 268435456,
+        "last_progress_age": 0.001104300026781857,
+        "active": 1
+      },
+      "log_tail": [
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:25:17.585909900+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:25:17.591084500+08:00\" level=info msg=\"Initial configuration complete, total time: 5ms\""
+      ]
+    }
+  ]
+}

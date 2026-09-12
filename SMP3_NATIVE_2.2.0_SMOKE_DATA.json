@@ -1,0 +1,46 @@
+{
+  "status": "completed-native-smoke-only",
+  "branch": "qualification/standalone-sidecar-rc",
+  "base_head": "4320a6b",
+  "fixtures": {
+    "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+    "stock_sha256": "82cd796a23492f43a71c1ec27e4e5e0b3d58932014da5a36e79ed9b11fee8162"
+  },
+  "persistent_udp": {
+    "inherited": true,
+    "sent": 16,
+    "received": 16,
+    "lost": 0,
+    "source": "SMP3_SIDECAR_RC_BENCHMARK_REPORT.md"
+  },
+  "native_smoke": {
+    "upload": {
+      "bytes": 8388608,
+      "app_bytes_written": 8388608,
+      "target_bytes_received": 8388608,
+      "completion_response": true,
+      "seconds": 0.2935915000271052,
+      "mbps": 228.57904262829243,
+      "send_error": null,
+      "pass": true
+    },
+    "download": {
+      "bytes": 8388608,
+      "target_bytes_sent": 8388608,
+      "client_bytes_received": 8388608,
+      "seconds": 0.27021489990875125,
+      "mbps": 248.35367710167708,
+      "error": null,
+      "pass": true
+    },
+    "udp": {
+      "sent": 64,
+      "received": 64,
+      "lost": 0,
+      "bad": 0
+    },
+    "leg1_same_session": true,
+    "legacy_ready_free": true,
+    "pass": true
+  }
+}

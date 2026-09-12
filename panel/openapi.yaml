@@ -1,0 +1,157 @@
+openapi: 3.0.3
+info:
+  title: SMP3 Read-only Panel Monitor API
+  version: 1.0.0
+  description: Same-origin read-only monitoring API. The Panel backend reads loopback telemetry; browsers never access port 24500 directly.
+servers:
+  - url: /
+paths:
+  /api/monitor/status:
+    get:
+      summary: Current aggregate snapshot
+      responses:
+        '200':
+          description: Current snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Snapshot' }
+        '503': { $ref: '#/components/responses/TelemetryUnavailable' }
+  /api/monitor/history:
+    get:
+      summary: Bounded memory or persistent history
+      parameters:
+        - { in: query, name: scope, schema: { type: string, enum: [memory, persistent, all], default: memory } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 3600, default: 3600 } }
+      responses:
+        '200':
+          description: Ordered samples
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scope, items]
+                properties:
+                  scope: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/Snapshot' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/monitor/events:
+    get:
+      summary: Recent deduplicated operational events
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 256, default: 256 } }
+      responses:
+        '200':
+          description: Recent events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Event' } }
+  /api/monitor/stream:
+    get:
+      summary: Realtime snapshot and event feed
+      responses:
+        '200':
+          description: Server-sent events; event names are snapshot and event.
+          content:
+            text/event-stream: { schema: { type: string } }
+        '503': { $ref: '#/components/responses/TelemetryUnavailable' }
+components:
+  responses:
+    BadRequest:
+      description: Stable validation error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TelemetryUnavailable:
+      description: Telemetry is unavailable; no internal error is exposed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: TELEMETRY_UNAVAILABLE }
+            message: { type: string, example: telemetry is unavailable }
+    Snapshot:
+      type: object
+      required: [at, active_sessions, total_sessions, active_legs, legs, traffic, health]
+      properties:
+        at: { type: string, format: date-time }
+        active_sessions: { type: integer, format: int64 }
+        total_sessions: { type: integer, format: int64 }
+        active_legs: { type: integer, format: int64 }
+        total_wire_tx_bytes: { type: integer, format: int64 }
+        total_wire_rx_bytes: { type: integer, format: int64 }
+        total_wire_tx_rate_bps: { type: number, nullable: true }
+        total_wire_rx_rate_bps: { type: number, nullable: true }
+        telemetry_dropped_events: { type: integer, format: int64 }
+        legs: { type: array, minItems: 2, maxItems: 2, items: { $ref: '#/components/schemas/Leg' } }
+        traffic: { $ref: '#/components/schemas/Traffic' }
+        health: { $ref: '#/components/schemas/Health' }
+    Leg:
+      type: object
+      required: [leg_id, state, wire_tx_bytes, wire_rx_bytes, useful_ack_bytes, rx_unique_bytes]
+      properties:
+        leg_id: { type: integer, enum: [0, 1] }
+        state: { type: string, enum: [up, down] }
+        active_sessions: { type: integer, format: int64 }
+        active_connections: { type: integer, format: int64 }
+        wire_tx_bytes: { type: integer, format: int64 }
+        wire_rx_bytes: { type: integer, format: int64 }
+        wire_tx_rate_bps: { type: number, nullable: true }
+        wire_rx_rate_bps: { type: number, nullable: true }
+        useful_ack_bytes: { type: integer, format: int64 }
+        useful_ack_rate_bps: { type: number, nullable: true }
+        rx_unique_bytes: { type: integer, format: int64 }
+        rx_unique_rate_bps: { type: number, nullable: true }
+        counter_reset: { type: boolean }
+    Share:
+      type: object
+      required: [leg0, leg1]
+      properties:
+        leg0: { type: number, nullable: true, minimum: 0, maximum: 1 }
+        leg1: { type: number, nullable: true, minimum: 0, maximum: 1 }
+    Traffic:
+      type: object
+      required: [wire_tx, wire_rx, useful_ack, rx_unique]
+      properties:
+        wire_tx: { $ref: '#/components/schemas/Share' }
+        wire_rx: { $ref: '#/components/schemas/Share' }
+        useful_ack: { $ref: '#/components/schemas/Share' }
+        rx_unique: { $ref: '#/components/schemas/Share' }
+    Health:
+      type: object
+      required: [overall, telemetry, listeners]
+      properties:
+        overall: { type: string, enum: [HEALTHY, DEGRADED, IDLE, DOWN, UNKNOWN] }
+        telemetry: { type: string, enum: [UP, DOWN] }
+        listeners: { type: array, items: { $ref: '#/components/schemas/Listener' } }
+    Listener:
+      type: object
+      required: [name, address, port, listener_up, process_up, probe]
+      properties:
+        name: { type: string, example: carrier-a }
+        address: { type: string, example: 127.0.0.1:17898 }
+        port: { type: integer, example: 17898 }
+        listener_up: { type: boolean }
+        process_up: { type: boolean }
+        probe: { type: string, example: tcp }
+    Event:
+      type: object
+      required: [id, at, type, severity, source, message]
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        type: { type: string }
+        severity: { type: string, enum: [info, warning] }
+        source: { type: string }
+        message: { type: string }

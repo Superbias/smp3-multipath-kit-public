@@ -1,0 +1,173 @@
+{
+  "status": "completed-native-upload-only",
+  "mode": "native",
+  "size_mib": 256,
+  "runs_requested": 3,
+  "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+  "runs": [
+    {
+      "run": 1,
+      "bytes": 268435456,
+      "pass": false,
+      "seconds": 61.12023549992591,
+      "error": "TimeoutError('timed out')",
+      "fixture": {
+        "received": 47710208,
+        "echoed": 47644672,
+        "last_progress_age": 60.041683699935675,
+        "active": 1
+      },
+      "relay_counts": {
+        "A": 1,
+        "B": 1,
+        "C": 0
+      },
+      "native_log_tail": [
+        "time=\"2026-09-02T17:18:25.839600600+08:00\" level=info msg=\"Start initial configuration in progress\"",
+        "time=\"2026-09-02T17:18:25.839600600+08:00\" level=info msg=\"Geodata Loader mode: memconservative\"",
+        "time=\"2026-09-02T17:18:25.839600600+08:00\" level=info msg=\"Geosite Matcher implementation: succinct\"",
+        "time=\"2026-09-02T17:18:25.844279900+08:00\" level=info msg=\"Initial configuration complete, total time: 4ms\""
+      ],
+      "server_log_tail": [
+        "time=2026-09-02T17:18:25.319+08:00 level=INFO msg=\"standalone SMP3 server started\" address=127.0.0.1:21440 listeners=4",
+        "time=2026-09-02T17:18:25.571+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:18:25.571+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:18:25.571+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:18:25.589+08:00 level=WARN msg=\"multipath HELLO rejected\" class=hello error=EOF",
+        "time=2026-09-02T17:18:26.086+08:00 level=INFO msg=\"multipath session created\" session=4194f230 leg=0 mode=stream destination=127.0.0.1:60317",
+        "time=2026-09-02T17:18:26.133+08:00 level=INFO msg=\"multipath leg joined/rejoined\" session=4194f230 leg=1 mode=stream",
+        "time=2026-09-02T17:18:26.543+08:00 level=INFO msg=\"multipath stream activated\" session=4194f230"
+      ]
+    },
+    {
+      "run": 2,
+      "bytes": 268435456,
+      "pass": false,
+      "seconds": 61.08124039997347,
+      "error": "TimeoutError('timed out')",
+      "fixture": {
+        "received": 44634768,
+        "echoed": 44569232,
+        "last_progress_age": 60.03482279996388,
+        "active": 1
+      },
+      "relay_counts": {
+        "A": 62,
+        "B": 62,
+        "C": 0
+      },
+      "native_log_tail": [
+        "time=\"2026-09-02T17:20:18.507073600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:18.537790800+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:19.528655600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:58287->127.0.0.1:60308: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:20:19.539446300+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:20.530178400+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: read tcp 127.0.0.1:61904->127.0.0.1:60308: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:20.541259900+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:21.531901800+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:61908->127.0.0.1:60308: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:20:21.542069000+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: write tcp 127.0.0.1:61910->127.0.0.1:60307: wsasend: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:22.543731200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: read tcp 127.0.0.1:56026->127.0.0.1:60307: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:22.548756800+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: read tcp 127.0.0.1:56024->127.0.0.1:60308: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:23.546198300+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: write tcp 127.0.0.1:65449->127.0.0.1:60307: wsasend: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:23.549463900+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:65451->127.0.0.1:60308: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:20:24.547419200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: read tcp 127.0.0.1:56812->127.0.0.1:60307: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:24.572340000+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: read tcp 127.0.0.1:56814->127.0.0.1:60308: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:20:25.550578200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:25.574386200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:26.551869700+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:26.575661900+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:27.553918600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:20:27.577621600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\""
+      ],
+      "server_log_tail": [
+        "time=2026-09-02T17:20:18.507+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:18.537+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:19.528+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:19.538+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:20.530+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:20.540+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:21.531+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:21.542+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:22.543+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:22.548+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:23.545+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:23.549+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:24.547+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:24.571+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:25.549+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:25.573+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:26.551+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:26.574+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:27.552+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:20:27.577+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\""
+      ]
+    },
+    {
+      "run": 3,
+      "bytes": 268435456,
+      "pass": false,
+      "seconds": 66.08278190006968,
+      "error": "TimeoutError('timed out')",
+      "fixture": {
+        "received": 192629776,
+        "echoed": 192564240,
+        "last_progress_age": 60.051132699940354,
+        "active": 1
+      },
+      "relay_counts": {
+        "A": 129,
+        "B": 129,
+        "C": 0
+      },
+      "native_log_tail": [
+        "time=\"2026-09-02T17:21:25.126523900+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:54369->127.0.0.1:60308: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:21:25.169950600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:26.147548200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:26.195609600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:27.154493600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: read tcp 127.0.0.1:54456->127.0.0.1:60308: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:21:27.201925100+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:28.156125500+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:28.205480200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:29.157246600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:57948->127.0.0.1:60308: wsasend: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:21:29.211251300+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: read tcp 127.0.0.1:57950->127.0.0.1:60307: wsarecv: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:21:30.165110700+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:57954->127.0.0.1:60308: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:21:30.219444000+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: write tcp 127.0.0.1:57956->127.0.0.1:60307: wsasend: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:21:31.171742200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:61148->127.0.0.1:60308: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:21:31.231432700+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: write tcp 127.0.0.1:61150->127.0.0.1:60307: wsasend: An established connection was aborted by the software in your host machine.\"",
+        "time=\"2026-09-02T17:21:32.173522400+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: write tcp 127.0.0.1:65287->127.0.0.1:60308: wsasend: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:21:32.233284200+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: write tcp 127.0.0.1:65289->127.0.0.1:60307: wsasend: An existing connection was forcibly closed by the remote host.\"",
+        "time=\"2026-09-02T17:21:33.180530500+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:33.236649100+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:34.184216600+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 1 down for 127.0.0.1:60317: EOF\"",
+        "time=\"2026-09-02T17:21:34.260121800+08:00\" level=warning msg=\"[SMP3] SMP3-NATIVE leg 0 down for 127.0.0.1:60317: EOF\""
+      ],
+      "server_log_tail": [
+        "time=2026-09-02T17:21:25.126+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:25.168+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:26.147+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:26.193+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:27.154+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:27.201+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:28.155+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:28.204+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:29.157+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:29.210+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:30.163+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:30.216+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:31.170+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:31.227+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:32.173+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:32.232+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:33.179+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:33.235+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:34.183+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\"",
+        "time=2026-09-02T17:21:34.257+08:00 level=WARN msg=\"multipath HELLO rejected\" class=session error=\"multipath session id is retired\""
+      ]
+    }
+  ],
+  "relay_counts": {
+    "A": 129,
+    "B": 129,
+    "C": 0
+  },
+  "same_session_leg1": true
+}

@@ -1,0 +1,3931 @@
+{
+  "status": "completed",
+  "branch": "qualification/standalone-sidecar-rc",
+  "base_head": "4320a6b",
+  "fixtures": {
+    "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+    "stock_sha256": "82cd796a23492f43a71c1ec27e4e5e0b3d58932014da5a36e79ed9b11fee8162"
+  },
+  "persistent_udp": {
+    "inherited": true,
+    "sent": 16,
+    "received": 16,
+    "lost": 0,
+    "source": "SMP3_SIDECAR_RC_BENCHMARK_REPORT.md"
+  },
+  "native": {
+    "name": "native",
+    "warmup": {
+      "tcp": "PASS",
+      "upload": {
+        "bytes": 1048576,
+        "app_bytes_written": 1048576,
+        "target_bytes_received": 1048576,
+        "completion_response": true,
+        "seconds": 0.04624060005880892,
+        "mbps": 181.41217867699262,
+        "send_error": null,
+        "pass": true
+      },
+      "download": {
+        "bytes": 1048576,
+        "target_bytes_sent": 1048576,
+        "client_bytes_received": 1048576,
+        "seconds": 0.06678540003485978,
+        "mbps": 125.60541668720144,
+        "error": null,
+        "pass": true
+      },
+      "pass": true
+    },
+    "rtt": {
+      "64": {
+        "median_ms": 0.4111,
+        "p95_ms": 0.613,
+        "p99_ms": 0.7937
+      },
+      "1024": {
+        "median_ms": 0.4097,
+        "p95_ms": 0.6044,
+        "p99_ms": 0.7497
+      }
+    },
+    "throughput": {
+      "upload": {
+        "64": {
+          "runs": [
+            {
+              "bytes": 67108864,
+              "app_bytes_written": 67108864,
+              "target_bytes_received": 67108864,
+              "completion_response": true,
+              "seconds": 3.5081504000118002,
+              "mbps": 153.03531798357167,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 14,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 5,
+                  "attempts": 5,
+                  "bytes": {
+                    "left_to_right": 767644,
+                    "right_to_left": 2195483
+                  },
+                  "active": 1,
+                  "target_count": 5,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 4,
+                  "attempts": 4,
+                  "bytes": {
+                    "left_to_right": 1459572,
+                    "right_to_left": 28600
+                  },
+                  "active": 1,
+                  "target_count": 4,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 6,
+                  "attempts": 6,
+                  "bytes": {
+                    "left_to_right": 30361658,
+                    "right_to_left": 2562551
+                  },
+                  "active": 1,
+                  "target_count": 6,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 5,
+                  "attempts": 5,
+                  "bytes": {
+                    "left_to_right": 39827630,
+                    "right_to_left": 404966
+                  },
+                  "active": 1,
+                  "target_count": 5,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "app_bytes_written": 67108864,
+              "target_bytes_received": 67108864,
+              "completion_response": true,
+              "seconds": 5.145497000077739,
+              "mbps": 104.33800894100003,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 17,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 6,
+                  "attempts": 6,
+                  "bytes": {
+                    "left_to_right": 30361658,
+                    "right_to_left": 2562551
+                  },
+                  "active": 1,
+                  "target_count": 6,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 5,
+                  "attempts": 5,
+                  "bytes": {
+                    "left_to_right": 39827630,
+                    "right_to_left": 404966
+                  },
+                  "active": 1,
+                  "target_count": 5,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 7,
+                  "attempts": 7,
+                  "bytes": {
+                    "left_to_right": 58524625,
+                    "right_to_left": 2792573
+                  },
+                  "active": 1,
+                  "target_count": 7,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 6,
+                  "attempts": 6,
+                  "bytes": {
+                    "left_to_right": 79626774,
+                    "right_to_left": 648121
+                  },
+                  "active": 1,
+                  "target_count": 6,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "app_bytes_written": 67108864,
+              "target_bytes_received": 67108864,
+              "completion_response": true,
+              "seconds": 5.236970499972813,
+              "mbps": 102.51555016450581,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 20,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 7,
+                  "attempts": 7,
+                  "bytes": {
+                    "left_to_right": 58524625,
+                    "right_to_left": 2792573
+                  },
+                  "active": 1,
+                  "target_count": 7,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 6,
+                  "attempts": 6,
+                  "bytes": {
+                    "left_to_right": 79626774,
+                    "right_to_left": 648121
+                  },
+                  "active": 1,
+                  "target_count": 6,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 8,
+                  "attempts": 8,
+                  "bytes": {
+                    "left_to_right": 86972780,
+                    "right_to_left": 3015601
+                  },
+                  "active": 1,
+                  "target_count": 8,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 7,
+                  "attempts": 7,
+                  "bytes": {
+                    "left_to_right": 119141780,
+                    "right_to_left": 886011
+                  },
+                  "active": 1,
+                  "target_count": 7,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 104.33800894100003,
+          "all_pass": true
+        },
+        "256": {
+          "runs": [
+            {
+              "bytes": 268435456,
+              "app_bytes_written": 268435456,
+              "target_bytes_received": 268435456,
+              "completion_response": true,
+              "seconds": 20.78629900002852,
+              "mbps": 103.31245826864385,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 23,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 8,
+                  "attempts": 8,
+                  "bytes": {
+                    "left_to_right": 86972780,
+                    "right_to_left": 3015601
+                  },
+                  "active": 1,
+                  "target_count": 8,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 7,
+                  "attempts": 7,
+                  "bytes": {
+                    "left_to_right": 119141780,
+                    "right_to_left": 886011
+                  },
+                  "active": 1,
+                  "target_count": 7,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 9,
+                  "attempts": 9,
+                  "bytes": {
+                    "left_to_right": 200670618,
+                    "right_to_left": 3892763
+                  },
+                  "active": 1,
+                  "target_count": 9,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 8,
+                  "attempts": 8,
+                  "bytes": {
+                    "left_to_right": 277290636,
+                    "right_to_left": 1811380
+                  },
+                  "active": 1,
+                  "target_count": 8,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "app_bytes_written": 268435456,
+              "target_bytes_received": 268435456,
+              "completion_response": true,
+              "seconds": 21.0578454999486,
+              "mbps": 101.98021673229779,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 26,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 9,
+                  "attempts": 9,
+                  "bytes": {
+                    "left_to_right": 200670618,
+                    "right_to_left": 3892763
+                  },
+                  "active": 1,
+                  "target_count": 9,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 8,
+                  "attempts": 8,
+                  "bytes": {
+                    "left_to_right": 277290636,
+                    "right_to_left": 1811380
+                  },
+                  "active": 1,
+                  "target_count": 8,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 10,
+                  "attempts": 10,
+                  "bytes": {
+                    "left_to_right": 311710612,
+                    "right_to_left": 4788736
+                  },
+                  "active": 1,
+                  "target_count": 10,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 9,
+                  "attempts": 9,
+                  "bytes": {
+                    "left_to_right": 438096273,
+                    "right_to_left": 2761384
+                  },
+                  "active": 1,
+                  "target_count": 9,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "app_bytes_written": 268435456,
+              "target_bytes_received": 268435456,
+              "completion_response": true,
+              "seconds": 19.321756200050004,
+              "mbps": 111.14329493477629,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 29,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 10,
+                  "attempts": 10,
+                  "bytes": {
+                    "left_to_right": 311710612,
+                    "right_to_left": 4788736
+                  },
+                  "active": 1,
+                  "target_count": 10,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 9,
+                  "attempts": 9,
+                  "bytes": {
+                    "left_to_right": 438096273,
+                    "right_to_left": 2761384
+                  },
+                  "active": 1,
+                  "target_count": 9,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 11,
+                  "attempts": 11,
+                  "bytes": {
+                    "left_to_right": 421321646,
+                    "right_to_left": 6078739
+                  },
+                  "active": 1,
+                  "target_count": 11,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 10,
+                  "attempts": 10,
+                  "bytes": {
+                    "left_to_right": 600331946,
+                    "right_to_left": 4096045
+                  },
+                  "active": 1,
+                  "target_count": 10,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 103.31245826864385,
+          "all_pass": true
+        },
+        "512": {
+          "runs": [
+            {
+              "bytes": 536870912,
+              "app_bytes_written": 536870912,
+              "target_bytes_received": 536870912,
+              "completion_response": true,
+              "seconds": 21.09340140002314,
+              "mbps": 203.61662941640546,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 32,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 11,
+                  "attempts": 11,
+                  "bytes": {
+                    "left_to_right": 421321646,
+                    "right_to_left": 6078739
+                  },
+                  "active": 1,
+                  "target_count": 11,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 10,
+                  "attempts": 10,
+                  "bytes": {
+                    "left_to_right": 600331946,
+                    "right_to_left": 4096045
+                  },
+                  "active": 1,
+                  "target_count": 10,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 12,
+                  "attempts": 12,
+                  "bytes": {
+                    "left_to_right": 662741602,
+                    "right_to_left": 9770388
+                  },
+                  "active": 1,
+                  "target_count": 12,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 11,
+                  "attempts": 11,
+                  "bytes": {
+                    "left_to_right": 902602012,
+                    "right_to_left": 7799150
+                  },
+                  "active": 1,
+                  "target_count": 11,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "app_bytes_written": 536870912,
+              "target_bytes_received": 536870912,
+              "completion_response": true,
+              "seconds": 20.882649400038645,
+              "mbps": 205.6715703895336,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 35,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 12,
+                  "attempts": 12,
+                  "bytes": {
+                    "left_to_right": 662741602,
+                    "right_to_left": 9770388
+                  },
+                  "active": 1,
+                  "target_count": 12,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 11,
+                  "attempts": 11,
+                  "bytes": {
+                    "left_to_right": 902602012,
+                    "right_to_left": 7799150
+                  },
+                  "active": 1,
+                  "target_count": 11,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 13,
+                  "attempts": 13,
+                  "bytes": {
+                    "left_to_right": 902357165,
+                    "right_to_left": 13506848
+                  },
+                  "active": 1,
+                  "target_count": 13,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 12,
+                  "attempts": 12,
+                  "bytes": {
+                    "left_to_right": 1206677482,
+                    "right_to_left": 11541216
+                  },
+                  "active": 1,
+                  "target_count": 12,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "app_bytes_written": 536870912,
+              "target_bytes_received": 536870912,
+              "completion_response": true,
+              "seconds": 20.726427800022066,
+              "mbps": 207.22178165189794,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 38,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 13,
+                  "attempts": 13,
+                  "bytes": {
+                    "left_to_right": 902357165,
+                    "right_to_left": 13506848
+                  },
+                  "active": 1,
+                  "target_count": 13,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 12,
+                  "attempts": 12,
+                  "bytes": {
+                    "left_to_right": 1206677482,
+                    "right_to_left": 11541216
+                  },
+                  "active": 1,
+                  "target_count": 12,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 14,
+                  "attempts": 14,
+                  "bytes": {
+                    "left_to_right": 1141605617,
+                    "right_to_left": 17242125
+                  },
+                  "active": 1,
+                  "target_count": 14,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 13,
+                  "attempts": 13,
+                  "bytes": {
+                    "left_to_right": 1511118002,
+                    "right_to_left": 15282268
+                  },
+                  "active": 1,
+                  "target_count": 13,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 205.6715703895336,
+          "all_pass": true
+        }
+      },
+      "download": {
+        "64": {
+          "runs": [
+            {
+              "bytes": 67108864,
+              "target_bytes_sent": 67108864,
+              "client_bytes_received": 67108864,
+              "seconds": 2.3280577999539673,
+              "mbps": 230.608927325866,
+              "error": null,
+              "pass": true,
+              "run_log_start": 41,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 14,
+                  "attempts": 14,
+                  "bytes": {
+                    "left_to_right": 1141605617,
+                    "right_to_left": 17242125
+                  },
+                  "active": 1,
+                  "target_count": 14,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 13,
+                  "attempts": 13,
+                  "bytes": {
+                    "left_to_right": 1511118002,
+                    "right_to_left": 15282268
+                  },
+                  "active": 1,
+                  "target_count": 13,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 15,
+                  "attempts": 15,
+                  "bytes": {
+                    "left_to_right": 1141619440,
+                    "right_to_left": 50564233
+                  },
+                  "active": 1,
+                  "target_count": 15,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 14,
+                  "attempts": 14,
+                  "bytes": {
+                    "left_to_right": 1511131500,
+                    "right_to_left": 49097962
+                  },
+                  "active": 1,
+                  "target_count": 14,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "target_bytes_sent": 67108864,
+              "client_bytes_received": 67108864,
+              "seconds": 2.4738376999739558,
+              "mbps": 217.01945604824928,
+              "error": null,
+              "pass": true,
+              "run_log_start": 44,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 15,
+                  "attempts": 15,
+                  "bytes": {
+                    "left_to_right": 1141619440,
+                    "right_to_left": 50564233
+                  },
+                  "active": 1,
+                  "target_count": 15,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 14,
+                  "attempts": 14,
+                  "bytes": {
+                    "left_to_right": 1511131500,
+                    "right_to_left": 49097962
+                  },
+                  "active": 1,
+                  "target_count": 14,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 16,
+                  "attempts": 16,
+                  "bytes": {
+                    "left_to_right": 1141633497,
+                    "right_to_left": 83838873
+                  },
+                  "active": 1,
+                  "target_count": 16,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 15,
+                  "attempts": 15,
+                  "bytes": {
+                    "left_to_right": 1511145180,
+                    "right_to_left": 82960747
+                  },
+                  "active": 1,
+                  "target_count": 15,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "target_bytes_sent": 67108864,
+              "client_bytes_received": 67108864,
+              "seconds": 2.1850185999646783,
+              "mbps": 245.70541962831746,
+              "error": null,
+              "pass": true,
+              "run_log_start": 47,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 16,
+                  "attempts": 16,
+                  "bytes": {
+                    "left_to_right": 1141633497,
+                    "right_to_left": 83838873
+                  },
+                  "active": 1,
+                  "target_count": 16,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 15,
+                  "attempts": 15,
+                  "bytes": {
+                    "left_to_right": 1511145180,
+                    "right_to_left": 82960747
+                  },
+                  "active": 1,
+                  "target_count": 15,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 17,
+                  "attempts": 17,
+                  "bytes": {
+                    "left_to_right": 1141647086,
+                    "right_to_left": 118582044
+                  },
+                  "active": 1,
+                  "target_count": 17,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 16,
+                  "attempts": 16,
+                  "bytes": {
+                    "left_to_right": 1511158522,
+                    "right_to_left": 115387236
+                  },
+                  "active": 1,
+                  "target_count": 16,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 230.608927325866,
+          "all_pass": true
+        },
+        "256": {
+          "runs": [
+            {
+              "bytes": 268435456,
+              "target_bytes_sent": 268435456,
+              "client_bytes_received": 268435456,
+              "seconds": 10.159457599977031,
+              "mbps": 211.37778536571236,
+              "error": null,
+              "pass": true,
+              "run_log_start": 50,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 17,
+                  "attempts": 17,
+                  "bytes": {
+                    "left_to_right": 1141647086,
+                    "right_to_left": 118582044
+                  },
+                  "active": 1,
+                  "target_count": 17,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 16,
+                  "attempts": 16,
+                  "bytes": {
+                    "left_to_right": 1511158522,
+                    "right_to_left": 115387236
+                  },
+                  "active": 1,
+                  "target_count": 16,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 18,
+                  "attempts": 18,
+                  "bytes": {
+                    "left_to_right": 1141697244,
+                    "right_to_left": 251076493
+                  },
+                  "active": 1,
+                  "target_count": 18,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 17,
+                  "attempts": 17,
+                  "bytes": {
+                    "left_to_right": 1511209889,
+                    "right_to_left": 251469509
+                  },
+                  "active": 1,
+                  "target_count": 17,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "target_bytes_sent": 268435456,
+              "client_bytes_received": 268435456,
+              "seconds": 8.898926499998197,
+              "mbps": 241.31940498670656,
+              "error": null,
+              "pass": true,
+              "run_log_start": 53,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 18,
+                  "attempts": 18,
+                  "bytes": {
+                    "left_to_right": 1141697244,
+                    "right_to_left": 251076493
+                  },
+                  "active": 1,
+                  "target_count": 18,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 17,
+                  "attempts": 17,
+                  "bytes": {
+                    "left_to_right": 1511209889,
+                    "right_to_left": 251469509
+                  },
+                  "active": 1,
+                  "target_count": 17,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 19,
+                  "attempts": 19,
+                  "bytes": {
+                    "left_to_right": 1141744295,
+                    "right_to_left": 389280238
+                  },
+                  "active": 1,
+                  "target_count": 19,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 18,
+                  "attempts": 18,
+                  "bytes": {
+                    "left_to_right": 1511258708,
+                    "right_to_left": 381845645
+                  },
+                  "active": 1,
+                  "target_count": 18,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "target_bytes_sent": 268435456,
+              "client_bytes_received": 268435456,
+              "seconds": 8.383493599947542,
+              "mbps": 256.1561743201471,
+              "error": null,
+              "pass": true,
+              "run_log_start": 56,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 19,
+                  "attempts": 19,
+                  "bytes": {
+                    "left_to_right": 1141744295,
+                    "right_to_left": 389280238
+                  },
+                  "active": 1,
+                  "target_count": 19,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 18,
+                  "attempts": 18,
+                  "bytes": {
+                    "left_to_right": 1511258708,
+                    "right_to_left": 381845645
+                  },
+                  "active": 1,
+                  "target_count": 18,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 20,
+                  "attempts": 20,
+                  "bytes": {
+                    "left_to_right": 1141791034,
+                    "right_to_left": 519614601
+                  },
+                  "active": 1,
+                  "target_count": 20,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 19,
+                  "attempts": 19,
+                  "bytes": {
+                    "left_to_right": 1511306877,
+                    "right_to_left": 520087939
+                  },
+                  "active": 1,
+                  "target_count": 19,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 241.31940498670656,
+          "all_pass": true
+        },
+        "512": {
+          "runs": [
+            {
+              "bytes": 536870912,
+              "target_bytes_sent": 536870912,
+              "client_bytes_received": 536870912,
+              "seconds": 16.926460099988617,
+              "mbps": 253.74279504566277,
+              "error": null,
+              "pass": true,
+              "run_log_start": 59,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 20,
+                  "attempts": 20,
+                  "bytes": {
+                    "left_to_right": 1141791034,
+                    "right_to_left": 519614601
+                  },
+                  "active": 1,
+                  "target_count": 20,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 19,
+                  "attempts": 19,
+                  "bytes": {
+                    "left_to_right": 1511306877,
+                    "right_to_left": 520087939
+                  },
+                  "active": 1,
+                  "target_count": 19,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 21,
+                  "attempts": 21,
+                  "bytes": {
+                    "left_to_right": 1141884183,
+                    "right_to_left": 786460853
+                  },
+                  "active": 0,
+                  "target_count": 21,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 20,
+                  "attempts": 20,
+                  "bytes": {
+                    "left_to_right": 1511404147,
+                    "right_to_left": 790365912
+                  },
+                  "active": 0,
+                  "target_count": 20,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "target_bytes_sent": 536870912,
+              "client_bytes_received": 536870912,
+              "seconds": 17.16928759997245,
+              "mbps": 250.15407721441466,
+              "error": null,
+              "pass": true,
+              "run_log_start": 62,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 21,
+                  "attempts": 21,
+                  "bytes": {
+                    "left_to_right": 1141884183,
+                    "right_to_left": 786460853
+                  },
+                  "active": 0,
+                  "target_count": 21,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 20,
+                  "attempts": 20,
+                  "bytes": {
+                    "left_to_right": 1511404147,
+                    "right_to_left": 790365912
+                  },
+                  "active": 0,
+                  "target_count": 20,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 22,
+                  "attempts": 22,
+                  "bytes": {
+                    "left_to_right": 1141975499,
+                    "right_to_left": 1056247650
+                  },
+                  "active": 0,
+                  "target_count": 22,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 21,
+                  "attempts": 21,
+                  "bytes": {
+                    "left_to_right": 1511500858,
+                    "right_to_left": 1057667036
+                  },
+                  "active": 0,
+                  "target_count": 21,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "target_bytes_sent": 536870912,
+              "client_bytes_received": 536870912,
+              "seconds": 17.205622700043023,
+              "mbps": 249.6257979659905,
+              "error": null,
+              "pass": true,
+              "run_log_start": 65,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 22,
+                  "attempts": 22,
+                  "bytes": {
+                    "left_to_right": 1141975499,
+                    "right_to_left": 1056247650
+                  },
+                  "active": 0,
+                  "target_count": 22,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 21,
+                  "attempts": 21,
+                  "bytes": {
+                    "left_to_right": 1511500858,
+                    "right_to_left": 1057667036
+                  },
+                  "active": 0,
+                  "target_count": 21,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 23,
+                  "attempts": 23,
+                  "bytes": {
+                    "left_to_right": 1142067478,
+                    "right_to_left": 1323515136
+                  },
+                  "active": 0,
+                  "target_count": 23,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 22,
+                  "attempts": 22,
+                  "bytes": {
+                    "left_to_right": 1511597881,
+                    "right_to_left": 1327521162
+                  },
+                  "active": 0,
+                  "target_count": 22,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 250.15407721441466,
+          "all_pass": true
+        }
+      }
+    },
+    "bidirectional": [
+      {
+        "bytes_each_direction": 268435456,
+        "tx_bytes": 268435456,
+        "rx_bytes": 268435456,
+        "seconds": 10.1061584999552,
+        "tx_mbps": 212.49257549340035,
+        "rx_mbps": 212.49257549340035,
+        "combined_mbps": 424.9851509868007,
+        "fixture": {
+          "received": 268435456,
+          "echoed": 268435456,
+          "last_progress_age": 0.015902500017546117,
+          "active": 1
+        },
+        "error": null,
+        "pass": true
+      },
+      {
+        "bytes_each_direction": 268435456,
+        "tx_bytes": 268435456,
+        "rx_bytes": 268435456,
+        "seconds": 9.849833199987188,
+        "tx_mbps": 218.0223364597477,
+        "rx_mbps": 218.0223364597477,
+        "combined_mbps": 436.0446729194954,
+        "fixture": {
+          "received": 268435456,
+          "echoed": 268435456,
+          "last_progress_age": 0.039163300069049,
+          "active": 1
+        },
+        "error": null,
+        "pass": true
+      },
+      {
+        "bytes_each_direction": 268435456,
+        "tx_bytes": 268435456,
+        "rx_bytes": 268435456,
+        "seconds": 9.916207299917005,
+        "tx_mbps": 216.56300469010705,
+        "rx_mbps": 216.56300469010705,
+        "combined_mbps": 433.1260093802141,
+        "fixture": {
+          "received": 268435456,
+          "echoed": 268435456,
+          "last_progress_age": 0.018411500030197203,
+          "active": 1
+        },
+        "error": null,
+        "pass": true
+      }
+    ],
+    "tcp_churn": {
+      "count": 1000,
+      "fail": 0,
+      "pass": true
+    },
+    "udp_10000": {
+      "sent": 10000,
+      "received": 10000,
+      "lost": 0,
+      "bad": 0,
+      "duplicate": 0,
+      "reordered": 0,
+      "pass": true
+    },
+    "resources": {
+      "per_pid": {
+        "21792": {
+          "first": {
+            "working_set": 25006080.0,
+            "cpu_seconds": 0.375
+          },
+          "last": {
+            "working_set": 24649728.0,
+            "cpu_seconds": 260.09375
+          },
+          "peak_working_set": 511442944.0,
+          "cpu_seconds_delta": 259.71875,
+          "samples": 407
+        }
+      },
+      "combined_peak_working_set": 511442944.0,
+      "combined_cpu_seconds_delta": 259.71875,
+      "sample_count": 408
+    }
+  },
+  "sidecar": {
+    "name": "sidecar",
+    "warmup": {
+      "tcp": "PASS",
+      "upload": {
+        "bytes": 1048576,
+        "app_bytes_written": 1048576,
+        "target_bytes_received": 1048576,
+        "completion_response": true,
+        "seconds": 0.0389187999535352,
+        "mbps": 215.54128107791306,
+        "send_error": null,
+        "pass": true
+      },
+      "download": {
+        "bytes": 1048576,
+        "target_bytes_sent": 1048576,
+        "client_bytes_received": 1048576,
+        "seconds": 0.05466919997707009,
+        "mbps": 153.4430356310031,
+        "error": null,
+        "pass": true
+      },
+      "pass": true
+    },
+    "rtt": {
+      "64": {
+        "median_ms": 0.36875,
+        "p95_ms": 0.5901,
+        "p99_ms": 0.7469
+      },
+      "1024": {
+        "median_ms": 0.3392,
+        "p95_ms": 0.5276,
+        "p99_ms": 0.6373
+      }
+    },
+    "throughput": {
+      "upload": {
+        "64": {
+          "runs": [
+            {
+              "bytes": 67108864,
+              "app_bytes_written": 67108864,
+              "target_bytes_received": 67108864,
+              "completion_response": true,
+              "seconds": 2.3311022999696434,
+              "mbps": 230.3077441118699,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1089,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1032,
+                  "attempts": 1032,
+                  "bytes": {
+                    "left_to_right": 1514958522,
+                    "right_to_left": 1722632041
+                  },
+                  "active": 0,
+                  "target_count": 1032,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 29,
+                  "attempts": 29,
+                  "bytes": {
+                    "left_to_right": 1957901739,
+                    "right_to_left": 1745011290
+                  },
+                  "active": 1,
+                  "target_count": 29,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1033,
+                  "attempts": 1033,
+                  "bytes": {
+                    "left_to_right": 1542897484,
+                    "right_to_left": 1723120202
+                  },
+                  "active": 1,
+                  "target_count": 1033,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 30,
+                  "attempts": 30,
+                  "bytes": {
+                    "left_to_right": 1997924862,
+                    "right_to_left": 1745499129
+                  },
+                  "active": 1,
+                  "target_count": 30,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "app_bytes_written": 67108864,
+              "target_bytes_received": 67108864,
+              "completion_response": true,
+              "seconds": 2.605131799937226,
+              "mbps": 206.0820538956749,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1092,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1033,
+                  "attempts": 1033,
+                  "bytes": {
+                    "left_to_right": 1542897484,
+                    "right_to_left": 1723120202
+                  },
+                  "active": 1,
+                  "target_count": 1033,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 30,
+                  "attempts": 30,
+                  "bytes": {
+                    "left_to_right": 1997924862,
+                    "right_to_left": 1745499129
+                  },
+                  "active": 1,
+                  "target_count": 30,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1034,
+                  "attempts": 1034,
+                  "bytes": {
+                    "left_to_right": 1570691266,
+                    "right_to_left": 1723610859
+                  },
+                  "active": 1,
+                  "target_count": 1034,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 31,
+                  "attempts": 31,
+                  "bytes": {
+                    "left_to_right": 2038092128,
+                    "right_to_left": 1745987579
+                  },
+                  "active": 1,
+                  "target_count": 31,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "app_bytes_written": 67108864,
+              "target_bytes_received": 67108864,
+              "completion_response": true,
+              "seconds": 2.336940500070341,
+              "mbps": 229.73238385138194,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1095,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1034,
+                  "attempts": 1034,
+                  "bytes": {
+                    "left_to_right": 1570691266,
+                    "right_to_left": 1723610859
+                  },
+                  "active": 1,
+                  "target_count": 1034,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 31,
+                  "attempts": 31,
+                  "bytes": {
+                    "left_to_right": 2038092128,
+                    "right_to_left": 1745987579
+                  },
+                  "active": 1,
+                  "target_count": 31,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1035,
+                  "attempts": 1035,
+                  "bytes": {
+                    "left_to_right": 1598542083,
+                    "right_to_left": 1724104246
+                  },
+                  "active": 1,
+                  "target_count": 1035,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 32,
+                  "attempts": 32,
+                  "bytes": {
+                    "left_to_right": 2078202359,
+                    "right_to_left": 1746478733
+                  },
+                  "active": 1,
+                  "target_count": 32,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 229.73238385138194,
+          "all_pass": true
+        },
+        "256": {
+          "runs": [
+            {
+              "bytes": 268435456,
+              "app_bytes_written": 268435456,
+              "target_bytes_received": 268435456,
+              "completion_response": true,
+              "seconds": 12.791847300017253,
+              "mbps": 167.87908717430543,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1098,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1035,
+                  "attempts": 1035,
+                  "bytes": {
+                    "left_to_right": 1598542083,
+                    "right_to_left": 1724104246
+                  },
+                  "active": 1,
+                  "target_count": 1035,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 32,
+                  "attempts": 32,
+                  "bytes": {
+                    "left_to_right": 2078202359,
+                    "right_to_left": 1746478733
+                  },
+                  "active": 1,
+                  "target_count": 32,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1036,
+                  "attempts": 1036,
+                  "bytes": {
+                    "left_to_right": 1696654835,
+                    "right_to_left": 1725792502
+                  },
+                  "active": 1,
+                  "target_count": 1036,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 33,
+                  "attempts": 33,
+                  "bytes": {
+                    "left_to_right": 2251934188,
+                    "right_to_left": 1748191653
+                  },
+                  "active": 1,
+                  "target_count": 33,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "app_bytes_written": 268435456,
+              "target_bytes_received": 268435456,
+              "completion_response": true,
+              "seconds": 17.765357900061645,
+              "mbps": 120.88040444108071,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1101,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1036,
+                  "attempts": 1036,
+                  "bytes": {
+                    "left_to_right": 1696654835,
+                    "right_to_left": 1725792502
+                  },
+                  "active": 1,
+                  "target_count": 1036,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 33,
+                  "attempts": 33,
+                  "bytes": {
+                    "left_to_right": 2251934188,
+                    "right_to_left": 1748191653
+                  },
+                  "active": 1,
+                  "target_count": 33,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1037,
+                  "attempts": 1037,
+                  "bytes": {
+                    "left_to_right": 1780169738,
+                    "right_to_left": 1727051407
+                  },
+                  "active": 1,
+                  "target_count": 1037,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 34,
+                  "attempts": 34,
+                  "bytes": {
+                    "left_to_right": 2440262829,
+                    "right_to_left": 1749537115
+                  },
+                  "active": 1,
+                  "target_count": 34,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "app_bytes_written": 268435456,
+              "target_bytes_received": 268435456,
+              "completion_response": true,
+              "seconds": 16.236846199957654,
+              "mbps": 132.25989958601693,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1104,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1037,
+                  "attempts": 1037,
+                  "bytes": {
+                    "left_to_right": 1780169738,
+                    "right_to_left": 1727051407
+                  },
+                  "active": 1,
+                  "target_count": 1037,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 34,
+                  "attempts": 34,
+                  "bytes": {
+                    "left_to_right": 2440262829,
+                    "right_to_left": 1749537115
+                  },
+                  "active": 1,
+                  "target_count": 34,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1038,
+                  "attempts": 1038,
+                  "bytes": {
+                    "left_to_right": 1862434006,
+                    "right_to_left": 1728353186
+                  },
+                  "active": 1,
+                  "target_count": 1038,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 35,
+                  "attempts": 35,
+                  "bytes": {
+                    "left_to_right": 2629843116,
+                    "right_to_left": 1750897163
+                  },
+                  "active": 1,
+                  "target_count": 35,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 132.25989958601693,
+          "all_pass": true
+        },
+        "512": {
+          "runs": [
+            {
+              "bytes": 536870912,
+              "app_bytes_written": 536870912,
+              "target_bytes_received": 536870912,
+              "completion_response": true,
+              "seconds": 35.9933404000476,
+              "mbps": 119.32672122852816,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1107,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1038,
+                  "attempts": 1038,
+                  "bytes": {
+                    "left_to_right": 1862434006,
+                    "right_to_left": 1728353186
+                  },
+                  "active": 1,
+                  "target_count": 1038,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 35,
+                  "attempts": 35,
+                  "bytes": {
+                    "left_to_right": 2629843116,
+                    "right_to_left": 1750897163
+                  },
+                  "active": 1,
+                  "target_count": 35,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1039,
+                  "attempts": 1039,
+                  "bytes": {
+                    "left_to_right": 2027386606,
+                    "right_to_left": 1730680899
+                  },
+                  "active": 1,
+                  "target_count": 1039,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 36,
+                  "attempts": 36,
+                  "bytes": {
+                    "left_to_right": 3008581562,
+                    "right_to_left": 1753392371
+                  },
+                  "active": 1,
+                  "target_count": 36,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "app_bytes_written": 536870912,
+              "target_bytes_received": 536870912,
+              "completion_response": true,
+              "seconds": 32.995364500093274,
+              "mbps": 130.16880889398445,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1110,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1039,
+                  "attempts": 1039,
+                  "bytes": {
+                    "left_to_right": 2027386606,
+                    "right_to_left": 1730680899
+                  },
+                  "active": 1,
+                  "target_count": 1039,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 36,
+                  "attempts": 36,
+                  "bytes": {
+                    "left_to_right": 3008581562,
+                    "right_to_left": 1753392371
+                  },
+                  "active": 1,
+                  "target_count": 36,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1040,
+                  "attempts": 1040,
+                  "bytes": {
+                    "left_to_right": 2189813061,
+                    "right_to_left": 1733267234
+                  },
+                  "active": 1,
+                  "target_count": 1040,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 37,
+                  "attempts": 37,
+                  "bytes": {
+                    "left_to_right": 3389843016,
+                    "right_to_left": 1756104757
+                  },
+                  "active": 1,
+                  "target_count": 37,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "app_bytes_written": 536870912,
+              "target_bytes_received": 536870912,
+              "completion_response": true,
+              "seconds": 34.35224549996201,
+              "mbps": 125.02726484080203,
+              "send_error": null,
+              "pass": true,
+              "run_log_start": 1113,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1040,
+                  "attempts": 1040,
+                  "bytes": {
+                    "left_to_right": 2189813061,
+                    "right_to_left": 1733267234
+                  },
+                  "active": 1,
+                  "target_count": 1040,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 37,
+                  "attempts": 37,
+                  "bytes": {
+                    "left_to_right": 3389843016,
+                    "right_to_left": 1756104757
+                  },
+                  "active": 1,
+                  "target_count": 37,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1041,
+                  "attempts": 1041,
+                  "bytes": {
+                    "left_to_right": 2352988230,
+                    "right_to_left": 1735775088
+                  },
+                  "active": 1,
+                  "target_count": 1041,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 38,
+                  "attempts": 38,
+                  "bytes": {
+                    "left_to_right": 3770355756,
+                    "right_to_left": 1758729770
+                  },
+                  "active": 1,
+                  "target_count": 38,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 125.02726484080203,
+          "all_pass": true
+        }
+      },
+      "download": {
+        "64": {
+          "runs": [
+            {
+              "bytes": 67108864,
+              "target_bytes_sent": 67108864,
+              "client_bytes_received": 67108864,
+              "seconds": 4.04282069997862,
+              "mbps": 132.7961222724617,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1116,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1041,
+                  "attempts": 1041,
+                  "bytes": {
+                    "left_to_right": 2352988230,
+                    "right_to_left": 1735775088
+                  },
+                  "active": 1,
+                  "target_count": 1041,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 38,
+                  "attempts": 38,
+                  "bytes": {
+                    "left_to_right": 3770355756,
+                    "right_to_left": 1758729770
+                  },
+                  "active": 1,
+                  "target_count": 38,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1042,
+                  "attempts": 1042,
+                  "bytes": {
+                    "left_to_right": 2352997737,
+                    "right_to_left": 1769558504
+                  },
+                  "active": 0,
+                  "target_count": 1042,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 39,
+                  "attempts": 39,
+                  "bytes": {
+                    "left_to_right": 3770367928,
+                    "right_to_left": 1792082176
+                  },
+                  "active": 0,
+                  "target_count": 39,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "target_bytes_sent": 67108864,
+              "client_bytes_received": 67108864,
+              "seconds": 3.784853699966334,
+              "mbps": 141.8472032366206,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1119,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1042,
+                  "attempts": 1042,
+                  "bytes": {
+                    "left_to_right": 2352997737,
+                    "right_to_left": 1769558504
+                  },
+                  "active": 0,
+                  "target_count": 1042,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 39,
+                  "attempts": 39,
+                  "bytes": {
+                    "left_to_right": 3770367928,
+                    "right_to_left": 1792082176
+                  },
+                  "active": 0,
+                  "target_count": 39,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1043,
+                  "attempts": 1043,
+                  "bytes": {
+                    "left_to_right": 2353008154,
+                    "right_to_left": 1803523636
+                  },
+                  "active": 0,
+                  "target_count": 1043,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 40,
+                  "attempts": 40,
+                  "bytes": {
+                    "left_to_right": 3770380230,
+                    "right_to_left": 1825318558
+                  },
+                  "active": 0,
+                  "target_count": 40,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 67108864,
+              "target_bytes_sent": 67108864,
+              "client_bytes_received": 67108864,
+              "seconds": 3.7670751999830827,
+              "mbps": 142.51664315127317,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1122,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1043,
+                  "attempts": 1043,
+                  "bytes": {
+                    "left_to_right": 2353008154,
+                    "right_to_left": 1803523636
+                  },
+                  "active": 0,
+                  "target_count": 1043,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 40,
+                  "attempts": 40,
+                  "bytes": {
+                    "left_to_right": 3770380230,
+                    "right_to_left": 1825318558
+                  },
+                  "active": 0,
+                  "target_count": 40,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1044,
+                  "attempts": 1044,
+                  "bytes": {
+                    "left_to_right": 2353018454,
+                    "right_to_left": 1837153714
+                  },
+                  "active": 0,
+                  "target_count": 1044,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 41,
+                  "attempts": 41,
+                  "bytes": {
+                    "left_to_right": 3770392129,
+                    "right_to_left": 1858857759
+                  },
+                  "active": 0,
+                  "target_count": 41,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 141.8472032366206,
+          "all_pass": true
+        },
+        "256": {
+          "runs": [
+            {
+              "bytes": 268435456,
+              "target_bytes_sent": 268435456,
+              "client_bytes_received": 268435456,
+              "seconds": 15.728223300073296,
+              "mbps": 136.53695061603,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1125,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1044,
+                  "attempts": 1044,
+                  "bytes": {
+                    "left_to_right": 2353018454,
+                    "right_to_left": 1837153714
+                  },
+                  "active": 0,
+                  "target_count": 1044,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 41,
+                  "attempts": 41,
+                  "bytes": {
+                    "left_to_right": 3770392129,
+                    "right_to_left": 1858857759
+                  },
+                  "active": 0,
+                  "target_count": 41,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1045,
+                  "attempts": 1045,
+                  "bytes": {
+                    "left_to_right": 2353054494,
+                    "right_to_left": 1971972753
+                  },
+                  "active": 1,
+                  "target_count": 1045,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 42,
+                  "attempts": 42,
+                  "bytes": {
+                    "left_to_right": 3770439505,
+                    "right_to_left": 1992878336
+                  },
+                  "active": 1,
+                  "target_count": 42,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "target_bytes_sent": 268435456,
+              "client_bytes_received": 268435456,
+              "seconds": 15.356170000042766,
+              "mbps": 139.8450035389045,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1128,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1045,
+                  "attempts": 1045,
+                  "bytes": {
+                    "left_to_right": 2353054494,
+                    "right_to_left": 1971972753
+                  },
+                  "active": 1,
+                  "target_count": 1045,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 42,
+                  "attempts": 42,
+                  "bytes": {
+                    "left_to_right": 3770439505,
+                    "right_to_left": 1992878336
+                  },
+                  "active": 1,
+                  "target_count": 42,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1046,
+                  "attempts": 1046,
+                  "bytes": {
+                    "left_to_right": 2353093173,
+                    "right_to_left": 2104708551
+                  },
+                  "active": 1,
+                  "target_count": 1046,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 43,
+                  "attempts": 43,
+                  "bytes": {
+                    "left_to_right": 3770488961,
+                    "right_to_left": 2128917489
+                  },
+                  "active": 1,
+                  "target_count": 43,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 268435456,
+              "target_bytes_sent": 268435456,
+              "client_bytes_received": 268435456,
+              "seconds": 13.24542679998558,
+              "mbps": 162.1301963634979,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1131,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1046,
+                  "attempts": 1046,
+                  "bytes": {
+                    "left_to_right": 2353093173,
+                    "right_to_left": 2104708551
+                  },
+                  "active": 1,
+                  "target_count": 1046,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 43,
+                  "attempts": 43,
+                  "bytes": {
+                    "left_to_right": 3770488961,
+                    "right_to_left": 2128917489
+                  },
+                  "active": 1,
+                  "target_count": 43,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1047,
+                  "attempts": 1047,
+                  "bytes": {
+                    "left_to_right": 2353139548,
+                    "right_to_left": 2239978343
+                  },
+                  "active": 0,
+                  "target_count": 1047,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 44,
+                  "attempts": 44,
+                  "bytes": {
+                    "left_to_right": 3770541173,
+                    "right_to_left": 2262424832
+                  },
+                  "active": 0,
+                  "target_count": 44,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 139.8450035389045,
+          "all_pass": true
+        },
+        "512": {
+          "runs": [
+            {
+              "bytes": 536870912,
+              "target_bytes_sent": 536870912,
+              "client_bytes_received": 536870912,
+              "seconds": 30.176569600007497,
+              "mbps": 142.32788394870877,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1134,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1047,
+                  "attempts": 1047,
+                  "bytes": {
+                    "left_to_right": 2353139548,
+                    "right_to_left": 2239978343
+                  },
+                  "active": 0,
+                  "target_count": 1047,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 44,
+                  "attempts": 44,
+                  "bytes": {
+                    "left_to_right": 3770541173,
+                    "right_to_left": 2262424832
+                  },
+                  "active": 0,
+                  "target_count": 44,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1048,
+                  "attempts": 1048,
+                  "bytes": {
+                    "left_to_right": 2353210519,
+                    "right_to_left": 2505615804
+                  },
+                  "active": 1,
+                  "target_count": 1048,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 45,
+                  "attempts": 45,
+                  "bytes": {
+                    "left_to_right": 3770633906,
+                    "right_to_left": 2534237998
+                  },
+                  "active": 0,
+                  "target_count": 45,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "target_bytes_sent": 536870912,
+              "client_bytes_received": 536870912,
+              "seconds": 29.827824999927543,
+              "mbps": 143.99197045075977,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1137,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1048,
+                  "attempts": 1048,
+                  "bytes": {
+                    "left_to_right": 2353210519,
+                    "right_to_left": 2505615804
+                  },
+                  "active": 1,
+                  "target_count": 1048,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 45,
+                  "attempts": 45,
+                  "bytes": {
+                    "left_to_right": 3770633906,
+                    "right_to_left": 2534237998
+                  },
+                  "active": 0,
+                  "target_count": 45,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1049,
+                  "attempts": 1049,
+                  "bytes": {
+                    "left_to_right": 2353280814,
+                    "right_to_left": 2775070359
+                  },
+                  "active": 0,
+                  "target_count": 1049,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 46,
+                  "attempts": 46,
+                  "bytes": {
+                    "left_to_right": 3770726496,
+                    "right_to_left": 2802312245
+                  },
+                  "active": 0,
+                  "target_count": 46,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            },
+            {
+              "bytes": 536870912,
+              "target_bytes_sent": 536870912,
+              "client_bytes_received": 536870912,
+              "seconds": 29.439114700071514,
+              "mbps": 145.89322198569943,
+              "error": null,
+              "pass": true,
+              "run_log_start": 1140,
+              "leg1_same_session": true,
+              "relay_before": [
+                {
+                  "name": "A",
+                  "count": 1049,
+                  "attempts": 1049,
+                  "bytes": {
+                    "left_to_right": 2353280814,
+                    "right_to_left": 2775070359
+                  },
+                  "active": 0,
+                  "target_count": 1049,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 46,
+                  "attempts": 46,
+                  "bytes": {
+                    "left_to_right": 3770726496,
+                    "right_to_left": 2802312245
+                  },
+                  "active": 0,
+                  "target_count": 46,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ],
+              "relay_after": [
+                {
+                  "name": "A",
+                  "count": 1050,
+                  "attempts": 1050,
+                  "bytes": {
+                    "left_to_right": 2353357583,
+                    "right_to_left": 3044874926
+                  },
+                  "active": 1,
+                  "target_count": 1050,
+                  "last_target": null
+                },
+                {
+                  "name": "B",
+                  "count": 47,
+                  "attempts": 47,
+                  "bytes": {
+                    "left_to_right": 3770824221,
+                    "right_to_left": 3070055179
+                  },
+                  "active": 1,
+                  "target_count": 47,
+                  "last_target": null
+                },
+                {
+                  "name": "C",
+                  "count": 0,
+                  "attempts": 0,
+                  "bytes": {
+                    "left_to_right": 0,
+                    "right_to_left": 0
+                  },
+                  "active": 0,
+                  "target_count": 0,
+                  "last_target": null
+                }
+              ]
+            }
+          ],
+          "median_mbps": 143.99197045075977,
+          "all_pass": true
+        }
+      }
+    },
+    "bidirectional": [
+      {
+        "bytes_each_direction": 268435456,
+        "tx_bytes": 268435456,
+        "rx_bytes": 268435456,
+        "seconds": 20.5009177000029,
+        "tx_mbps": 104.75061065191711,
+        "rx_mbps": 104.75061065191711,
+        "combined_mbps": 209.50122130383423,
+        "fixture": {
+          "received": 268435456,
+          "echoed": 268435456,
+          "last_progress_age": 0.0759178000735119,
+          "active": 1
+        },
+        "error": null,
+        "pass": true
+      },
+      {
+        "bytes_each_direction": 268435456,
+        "tx_bytes": 268435456,
+        "rx_bytes": 268435456,
+        "seconds": 20.651578500051983,
+        "tx_mbps": 103.98641672812538,
+        "rx_mbps": 103.98641672812538,
+        "combined_mbps": 207.97283345625075,
+        "fixture": {
+          "received": 268435456,
+          "echoed": 268435456,
+          "last_progress_age": 0.04829279996920377,
+          "active": 1
+        },
+        "error": null,
+        "pass": true
+      },
+      {
+        "bytes_each_direction": 268435456,
+        "tx_bytes": 268435456,
+        "rx_bytes": 268435456,
+        "seconds": 20.517808599979617,
+        "tx_mbps": 104.6643766821245,
+        "rx_mbps": 104.6643766821245,
+        "combined_mbps": 209.328753364249,
+        "fixture": {
+          "received": 268435456,
+          "echoed": 268435456,
+          "last_progress_age": 0.015520700020715594,
+          "active": 1
+        },
+        "error": null,
+        "pass": true
+      }
+    ],
+    "tcp_churn": {
+      "count": 1000,
+      "fail": 0,
+      "pass": true
+    },
+    "udp_10000": {
+      "sent": 10000,
+      "received": 10000,
+      "lost": 0,
+      "bad": 0,
+      "duplicate": 0,
+      "reordered": 0,
+      "pass": true
+    },
+    "resources": {
+      "per_pid": {
+        "16684": {
+          "first": {
+            "working_set": 13737984.0,
+            "cpu_seconds": 0.28125
+          },
+          "last": {
+            "working_set": 12943360.0,
+            "cpu_seconds": 182.546875
+          },
+          "peak_working_set": 165806080.0,
+          "cpu_seconds_delta": 182.265625,
+          "samples": 389
+        },
+        "44692": {
+          "first": {
+            "working_set": 25690112.0,
+            "cpu_seconds": 0.609375
+          },
+          "last": {
+            "working_set": 15585280.0,
+            "cpu_seconds": 129.359375
+          },
+          "peak_working_set": 28704768.0,
+          "cpu_seconds_delta": 128.75,
+          "samples": 389
+        }
+      },
+      "combined_peak_working_set": 194510848.0,
+      "combined_cpu_seconds_delta": 311.015625,
+      "sample_count": 389
+    }
+  },
+  "host_restart": {
+    "stock_restarted": true,
+    "sidecar_alive": true,
+    "traffic_recovered": true,
+    "seconds": 0.06937920011114329
+  },
+  "false_success": {
+    "stock_false_success_observed": true,
+    "ready_timeout_seconds": 2,
+    "fallback": true,
+    "same_session_join": true,
+    "seconds": 4.476292199920863
+  },
+  "carrier_failure": {
+    "bytes": 134217728,
+    "exact": true,
+    "leg1_failed": true,
+    "fallback": true,
+    "same_session": true,
+    "seconds": 9.849780700053088
+  },
+  "ready_cost": {
+    "samples_requested": 20,
+    "samples": [
+      {
+        "sample": 1,
+        "socks_connect_to_app_ms": 0.749099999666214,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.23769994731992483,
+            "hello_to_ready_ms": 0.23760006297379732,
+            "socks_reply_to_ready_ms": 0.47530001029372215
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 2,
+        "socks_connect_to_app_ms": 0.35960006061941385,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.09780004620552063,
+            "hello_to_ready_ms": 0.12749992311000824,
+            "socks_reply_to_ready_ms": 0.22529996931552887
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 3,
+        "socks_connect_to_app_ms": 23.41959998011589,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.23450003936886787,
+            "hello_to_ready_ms": 0.11439993977546692,
+            "socks_reply_to_ready_ms": 0.3488999791443348
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 4,
+        "socks_connect_to_app_ms": 0.3256000345572829,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.08829997386783361,
+            "hello_to_ready_ms": 0.09560002945363522,
+            "socks_reply_to_ready_ms": 0.18390000332146883
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 5,
+        "socks_connect_to_app_ms": 0.32620003912597895,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.08939998224377632,
+            "hello_to_ready_ms": 0.13229995965957642,
+            "socks_reply_to_ready_ms": 0.22169994190335274
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 6,
+        "socks_connect_to_app_ms": 0.27600000612437725,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.07979990914463997,
+            "hello_to_ready_ms": 0.09910005610436201,
+            "socks_reply_to_ready_ms": 0.17889996524900198
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 7,
+        "socks_connect_to_app_ms": 0.2824000548571348,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.07850001566112041,
+            "hello_to_ready_ms": 0.10679999832063913,
+            "socks_reply_to_ready_ms": 0.18530001398175955
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 8,
+        "socks_connect_to_app_ms": 0.3350999904796481,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.08020002860575914,
+            "hello_to_ready_ms": 0.09789993055164814,
+            "socks_reply_to_ready_ms": 0.17809995915740728
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 9,
+        "socks_connect_to_app_ms": 0.30149996746331453,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.39599998854100704,
+            "hello_to_ready_ms": 0.2463000128045678,
+            "socks_reply_to_ready_ms": 0.6423000013455749
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 10,
+        "socks_connect_to_app_ms": 0.5769000854343176,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.11330004781484604,
+            "hello_to_ready_ms": 0.33179996535182,
+            "socks_reply_to_ready_ms": 0.44510001316666603
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 11,
+        "socks_connect_to_app_ms": 0.5319000920280814,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.13130006846040487,
+            "hello_to_ready_ms": 0.17279991880059242,
+            "socks_reply_to_ready_ms": 0.3040999872609973
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 12,
+        "socks_connect_to_app_ms": 20.467999973334372,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.19020005129277706,
+            "hello_to_ready_ms": 0.15829992480576038,
+            "socks_reply_to_ready_ms": 0.34849997609853745
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 13,
+        "socks_connect_to_app_ms": 0.3513999981805682,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.10379997547715902,
+            "hello_to_ready_ms": 0.07469998672604561,
+            "socks_reply_to_ready_ms": 0.17849996220320463
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 14,
+        "socks_connect_to_app_ms": 0.6924000335857272,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.07780001033097506,
+            "hello_to_ready_ms": 0.11010002344846725,
+            "socks_reply_to_ready_ms": 0.1879000337794423
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 15,
+        "socks_connect_to_app_ms": 0.27520000003278255,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.3648999845609069,
+            "hello_to_ready_ms": 0.31209993176162243,
+            "socks_reply_to_ready_ms": 0.6769999163225293
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 16,
+        "socks_connect_to_app_ms": 12.758199940435588,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.14480005484074354,
+            "hello_to_ready_ms": 0.26759994216263294,
+            "socks_reply_to_ready_ms": 0.4123999970033765
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 17,
+        "socks_connect_to_app_ms": 0.5830000154674053,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.18390000332146883,
+            "hello_to_ready_ms": 0.11429993901401758,
+            "socks_reply_to_ready_ms": 0.2981999423354864
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 18,
+        "socks_connect_to_app_ms": 22.0983000472188,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.3879999276250601,
+            "hello_to_ready_ms": 0.3090000245720148,
+            "socks_reply_to_ready_ms": 0.6969999521970749
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 19,
+        "socks_connect_to_app_ms": 12.951399898156524,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.15330000314861536,
+            "hello_to_ready_ms": 0.20560005214065313,
+            "socks_reply_to_ready_ms": 0.3589000552892685
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 20,
+        "socks_connect_to_app_ms": 10.786700062453747,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.13840000610798597,
+            "hello_to_ready_ms": 0.19109994173049927,
+            "socks_reply_to_ready_ms": 0.32949994783848524
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      }
+    ],
+    "hello_to_ready_ms": {
+      "median": 0.1452999422326684,
+      "p95": 0.31209993176162243
+    },
+    "socks_connect_to_app_ms": {
+      "median": 0.5544000887311995,
+      "p95": 22.0983000472188
+    },
+    "measurement": "leg0 relay SOCKS reply -> first SMP3 HELLO -> first authenticated SMP3RDY1; app SOCKS CONNECT is reported separately",
+    "leg1_in_probe": "not triggered by 1-byte probe; validated by formal large-flow leg1_same_session records",
+    "all_stage_observed": true,
+    "pass": true
+  },
+  "native_compatibility": {
+    "tcp": true,
+    "udp": true,
+    "legacy_ready_free": true,
+    "pass": true
+  },
+  "cleanup": {
+    "process_handles": 4
+  },
+  "orphan_process_count": 0,
+  "rc_artifacts": {
+    "files": [
+      {
+        "filename": "smp3-client-windows-amd64.exe",
+        "size": 4314112,
+        "sha256": "35062becba71c4554f401216c4c4444d4360d74ae8eca257bbf287b9e79c0d02",
+        "version": "2.1.1-sidecar-dev"
+      },
+      {
+        "filename": "smp3-server-windows-amd64.exe",
+        "size": 4322304,
+        "sha256": "5f86c1330ef050683a48d6117dd2327335558be4f422368398d73289b3d0743c",
+        "version": "2.0.0"
+      },
+      {
+        "filename": "smp3-client-linux-amd64",
+        "size": 4206288,
+        "sha256": "0853c2d0c6eb39f9e1fa1c23248ee26136b1507112644443d414411e5d373e33",
+        "version": "2.1.1-sidecar-dev"
+      },
+      {
+        "filename": "smp3-server-linux-amd64",
+        "size": 4200026,
+        "sha256": "b85fc251d6f15e6c9cf9d2cca83d287f215a2b976ed6cfb16c302f4aff7db85a",
+        "version": "2.0.0"
+      }
+    ],
+    "sha256s": "e497313bcfb0e7c2d86572173f2a8e5967602127d276a6f7ed44a4d2393112d1",
+    "sums": "D:\\smp3-singbox\\.work\\phase2a-r2-staging\\SHA256SUMS-RC"
+  }
+}

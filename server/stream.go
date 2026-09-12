@@ -53,18 +53,43 @@ func (s *Server) startStreamHost(session *serverSession) error {
 	}
 
 	session.goWorker(func() {
-		err := copyStreamDirection(session.streamApp, target)
+		err := copyStreamDirectionCounted(session.streamApp, target, func(n int) {
+			session.addTargetBytes(true, n)
+		})
 		finish(err)
 	})
 	session.goWorker(func() {
-		err := copyStreamDirection(target, session.streamApp)
+		err := copyStreamDirectionCounted(target, session.streamApp, func(n int) {
+			session.addTargetBytes(false, n)
+		})
 		finish(err)
 	})
 	return nil
 }
 
 func copyStreamDirection(source, destination net.Conn) error {
-	_, err := io.Copy(destination, source)
+	return copyStreamDirectionCounted(source, destination, nil)
+}
+
+type telemetryCountingWriter struct {
+	writer  io.Writer
+	counted func(int)
+}
+
+func (w telemetryCountingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	if n > 0 && w.counted != nil {
+		w.counted(n)
+	}
+	return n, err
+}
+
+func copyStreamDirectionCounted(source, destination net.Conn, counted func(int)) error {
+	writer := io.Writer(destination)
+	if counted != nil {
+		writer = telemetryCountingWriter{writer: destination, counted: counted}
+	}
+	_, err := io.Copy(writer, source)
 	if err != nil {
 		_ = source.Close()
 		_ = destination.Close()

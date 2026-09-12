@@ -4,4 +4,6 @@ use (
 	./core
 	./server
 	./cmd/smp3-server
+	./client
+	./cmd/smp3-client
 )

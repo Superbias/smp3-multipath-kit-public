@@ -30,6 +30,21 @@ func testConfig() Config {
 	return cfg
 }
 
+func TestLoadConfigDefaultsAccountingPathBesideConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"password":"test","telemetry":{"enabled":true,"listen":"127.0.0.1:0"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(filepath.Dir(configPath), "telemetry-accounting.json")
+	if cfg.Telemetry.AccountingPath != expected {
+		t.Fatalf("accounting path=%q expected=%q", cfg.Telemetry.AccountingPath, expected)
+	}
+}
+
 func startTestServer(t *testing.T, cfg Config) *Server {
 	t.Helper()
 	instance, err := New(cfg, nil)
@@ -198,6 +213,107 @@ func TestConfigValidationAndDurationParsing(t *testing.T) {
 	if err := duration.UnmarshalJSON([]byte(`"10s"`)); err != nil || duration.Time() != 10*time.Second {
 		t.Fatalf("duration parse = %v/%v", duration, err)
 	}
+}
+
+func TestServerTelemetryCountsAuthenticatedHelloAndActiveLegs(t *testing.T) {
+	target := startTCPEcho(t)
+	cfg := testConfig()
+	cfg.Telemetry.Enabled = true
+	cfg.Telemetry.MaxActiveSessions = 8
+	instance := startTestServer(t, cfg)
+	var id smp3core.SessionID
+	id[0] = 0x41
+	leg0 := connectLeg(t, instance, cfg.Password, id, 0, smp3core.ModeStream, target, 11)
+	leg1 := connectLeg(t, instance, cfg.Password, id, 1, smp3core.ModeStream, target, 12)
+	defer leg0.Close()
+	defer leg1.Close()
+
+	payload := []byte("server-telemetry-data")
+	header := make([]byte, smp3core.StreamFrameHeaderSize)
+	if err := smp3core.EncodeStreamFrameHeader(header, smp3core.StreamFrameHeader{Type: smp3core.StreamFrameData, Value: 0, Length: uint32(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	writeAll(t, leg0, header)
+	writeAll(t, leg0, payload)
+
+	waitFor(t, 10*time.Second, func() bool {
+		snapshot := instance.Telemetry().Snapshot()
+		return snapshot.ActiveSessions == 1 && snapshot.ActiveLegs == 2 && len(snapshot.Sessions) == 1 && !snapshot.Sessions[0].FirstDataSeenAt.IsZero() && snapshot.Sessions[0].TargetTxBytes > 0 && snapshot.Sessions[0].TargetRxBytes > 0
+	})
+	snapshot := instance.Telemetry().Snapshot()
+	if snapshot.TotalWireRx == 0 || snapshot.Sessions[0].Legs[0].WireRxBytes == 0 || snapshot.Sessions[0].Legs[1].WireRxBytes == 0 {
+		t.Fatalf("HELLO-inclusive wire accounting missing: %+v", snapshot)
+	}
+	if snapshot.Sessions[0].TargetTxBytes == 0 || snapshot.Sessions[0].TargetRxBytes == 0 {
+		t.Fatalf("target accounting missing: %+v", snapshot.Sessions[0])
+	}
+	if snapshot.Sessions[0].Legs[0].LogicalRxUniqueBytes == 0 || !snapshot.Legs[0].LogicalRxShare.Valid {
+		t.Fatalf("logical RX accounting missing: %+v", snapshot)
+	}
+	if snapshot.Sessions[0].DisplaySessionID == "41000000000000000000000000000000" {
+		t.Fatal("telemetry exposed raw SessionID")
+	}
+	if err := leg0.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, time.Second, func() bool {
+		rows := instance.Telemetry().Snapshot().Sessions
+		return len(rows) == 1 && !rows[0].Legs[0].DetachAt.IsZero() && rows[0].Legs[0].State == "down"
+	})
+}
+
+func TestServerTelemetryTenLocalTwoLegSessionsAggregate(t *testing.T) {
+	target := startTCPEcho(t)
+	cfg := testConfig()
+	cfg.Telemetry.Enabled = true
+	cfg.Telemetry.MaxActiveSessions = 32
+	instance := startTestServer(t, cfg)
+
+	connections := make([]net.Conn, 0, 20)
+	defer func() {
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+	}()
+	for i := 0; i < 10; i++ {
+		var id smp3core.SessionID
+		id[0] = byte(i + 1)
+		leg0 := connectLeg(t, instance, cfg.Password, id, 0, smp3core.ModeStream, target, byte(40+i*2))
+		leg1 := connectLeg(t, instance, cfg.Password, id, 1, smp3core.ModeStream, target, byte(41+i*2))
+		connections = append(connections, leg0, leg1)
+		writeStreamDataFrame(t, leg0, 0, []byte("leg0-deterministic"))
+		writeStreamDataFrame(t, leg1, 1, []byte("leg1-deterministic"))
+	}
+
+	waitFor(t, 10*time.Second, func() bool {
+		snapshot := instance.Telemetry().Snapshot()
+		return snapshot.ActiveSessions == 10 && snapshot.ActiveLegs == 20 && snapshot.Legs[0].LogicalRxUniqueBytes > 0 && snapshot.Legs[1].LogicalRxUniqueBytes > 0 && snapshot.Legs[0].WireRxBytes > 0 && snapshot.Legs[1].WireRxBytes > 0
+	})
+	snapshot := instance.Telemetry().Snapshot()
+	var rowLogicalRX [2]uint64
+	var rowWireRX [2]uint64
+	for _, row := range snapshot.Sessions {
+		for leg := range row.Legs {
+			rowLogicalRX[leg] += row.Legs[leg].LogicalRxUniqueBytes
+			rowWireRX[leg] += row.Legs[leg].WireRxBytes
+		}
+	}
+	if rowLogicalRX[0] != snapshot.Legs[0].LogicalRxUniqueBytes || rowLogicalRX[1] != snapshot.Legs[1].LogicalRxUniqueBytes {
+		t.Fatalf("logical aggregate mismatch rows=%v aggregate=%+v", rowLogicalRX, snapshot.Legs)
+	}
+	if rowWireRX[0] != snapshot.Legs[0].WireRxBytes || rowWireRX[1] != snapshot.Legs[1].WireRxBytes {
+		t.Fatalf("wire aggregate mismatch rows=%v aggregate=%+v", rowWireRX, snapshot.Legs)
+	}
+}
+
+func writeStreamDataFrame(t *testing.T, conn net.Conn, sequence uint64, payload []byte) {
+	t.Helper()
+	header := make([]byte, smp3core.StreamFrameHeaderSize)
+	if err := smp3core.EncodeStreamFrameHeader(header, smp3core.StreamFrameHeader{Type: smp3core.StreamFrameData, Value: sequence, Length: uint32(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	writeAll(t, conn, header)
+	writeAll(t, conn, payload)
 }
 
 func TestHelloAdmissionRejectsBadAuthAndReplay(t *testing.T) {

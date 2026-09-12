@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMP3 Telemetry</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="dashboard-sidebar" aria-label="Dashboard navigation">
+      <div class="brand-mark"><span class="brand-pulse" aria-hidden="true"></span><div><strong>SMP3</strong><small>Multipath telemetry</small></div></div>
+      <nav class="sidebar-nav">
+        <button class="nav-item is-active" data-view="overview"><span class="nav-icon" aria-hidden="true">◈</span><span>Overview</span></button>
+        <button class="nav-item" data-view="legs"><span class="nav-icon" aria-hidden="true">⇄</span><span>Legs</span></button>
+        <button class="nav-item" data-view="sessions"><span class="nav-icon" aria-hidden="true">≡</span><span>Sessions</span></button>
+        <button class="nav-item" data-view="traffic"><span class="nav-icon" aria-hidden="true">▥</span><span>Traffic</span></button>
+      </nav>
+      <div class="sidebar-footer"><span>READ ONLY</span><small>Configuration unavailable</small></div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar">
+        <div><p class="eyebrow">NETWORK OPERATIONS</p><h1 id="page-title">Overview</h1></div>
+        <div class="topbar-meta"><span id="connection-state" class="connection-state disconnected"><span class="state-dot" aria-hidden="true"></span><span class="state-label">Disconnected</span></span><span class="meta-divider" aria-hidden="true"></span><span id="server-version">SMP3</span><span class="meta-divider" aria-hidden="true"></span><span id="server-uptime">Uptime —</span></div>
+      </header>
+
+      <main class="dashboard-content">
+        <section id="view-overview" class="view is-visible" aria-labelledby="overview-title">
+          <div class="section-heading"><div><p class="eyebrow">LIVE SNAPSHOT</p><h2 id="overview-title">System overview</h2></div><span id="snapshot-time" class="muted">Waiting for telemetry</span></div>
+          <div class="metric-grid" id="overview-metrics"></div>
+          <section class="hero-panel" aria-labelledby="volume-overview-title"><div class="panel-heading"><div><p class="eyebrow">CUMULATIVE VOLUME</p><h2 id="volume-overview-title">Carrier traffic</h2></div><span id="overview-accounting-status" class="accounting-status">Waiting</span></div><div class="metric-grid volume-metrics" id="overview-volume"></div></section>
+          <section class="hero-panel" aria-labelledby="traffic-title"><div class="panel-heading"><div><p class="eyebrow">REALTIME CONTRIBUTION</p><h2 id="traffic-title">Traffic distribution</h2></div><span class="help-label">Wire and logical DATA are separate measures</span></div><div id="traffic-distribution"></div></section>
+          <div class="leg-grid" id="overview-legs"></div>
+        </section>
+
+        <section id="view-legs" class="view" aria-labelledby="legs-title"><div class="section-heading"><div><p class="eyebrow">CARRIER ACCOUNTING</p><h2 id="legs-title">Leg comparison</h2></div></div><div class="leg-grid" id="legs-content"></div></section>
+
+        <section id="view-sessions" class="view" aria-labelledby="sessions-title"><div class="section-heading"><div><p class="eyebrow">BOUNDED ACTIVE ROWS</p><h2 id="sessions-title">Session inspector</h2></div><div class="section-actions"><label class="period-control" for="session-filter">Filter <select id="session-filter"><option value="all">All</option><option value="native">Native</option><option value="standalone">Standalone</option><option value="active">Active</option><option value="idle">Idle</option><option value="degraded">Degraded</option><option value="closed">Closed/recent</option></select></label><span id="session-count" class="muted">—</span></div></div><div id="sessions-error" class="notice" hidden></div><div class="table-wrap"><table><caption class="sr-only">SMP3 sessions</caption><thead><tr><th>Session</th><th>Role</th><th>Mode</th><th>Age</th><th>Leg0</th><th>Leg1</th><th>Wire</th><th>Logical</th><th>First DATA</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="sessions-body"></tbody></table></div><div class="pager"><button id="sessions-prev" class="secondary" disabled>Previous</button><button id="sessions-next" class="secondary" disabled>Next</button></div></section>
+
+        <section id="view-traffic" class="view" aria-labelledby="traffic-volume-title"><div class="section-heading"><div><p class="eyebrow">PERSISTENT ACCOUNTING</p><h2 id="traffic-volume-title">Traffic volume</h2></div><label class="period-control" for="traffic-period">Period <select id="traffic-period"><option value="current_session">Current Session</option><option value="today" selected>Today</option><option value="last_24_hours">Last 24 Hours</option><option value="7_days">7 Days</option><option value="all_recorded">All Recorded</option></select></label></div><div id="traffic-error" class="notice" hidden></div><div class="accounting-banner"><span id="traffic-accounting-status" class="accounting-status">Waiting</span><span id="traffic-gap-notice" class="muted">No accounting sample yet</span></div><div class="metric-grid volume-metrics" id="traffic-volume-cards"></div><div class="table-wrap traffic-table-wrap"><table><caption class="sr-only">Cumulative carrier and useful traffic by leg</caption><thead><tr><th>Metric</th><th>Leg0</th><th>Leg1</th><th>Total</th><th>Share</th></tr></thead><tbody id="traffic-volume-body"></tbody></table></div><div class="traffic-columns"><article class="hero-panel"><div class="panel-heading"><div><p class="eyebrow">INGRESS ROLE</p><h2>Native vs Standalone</h2></div></div><div id="traffic-role-breakdown"></div></article><article class="hero-panel"><div class="panel-heading"><div><p class="eyebrow">HISTORY</p><h2>Hourly volume</h2></div></div><div id="traffic-history"></div></article></div><article class="hero-panel metrics-info"><div class="panel-heading"><div><p class="eyebrow">METRICS INFO</p><h2>How to read this page</h2></div></div><p id="traffic-metrics-info" class="muted">Sampling interval, snapshot age, rate window, history bucket resolution, traffic-share basis, and last telemetry update are shown here after telemetry connects.</p></article></section>
+      </main>
+    </div>
+  </div>
+
+  <div id="detail-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="detail-drawer" class="detail-drawer" aria-label="Session detail" aria-hidden="true" tabindex="-1"><div class="drawer-header"><div><p class="eyebrow">SESSION DETAIL</p><h2 id="detail-title">Session</h2></div><button id="detail-close" class="icon-button" aria-label="Close session detail">×</button></div><div id="detail-error" class="notice" hidden></div><div id="detail-content" class="detail-content"></div></aside>
+
+  <footer><span>Telemetry plane · <strong id="telemetry-health">Waiting</strong></span><span id="server-dropped">Dropped events —</span></footer>
+  <script src="/dashboard.js" defer></script>
+</body>
+</html>

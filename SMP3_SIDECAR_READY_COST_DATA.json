@@ -1,0 +1,373 @@
+{
+  "status": "completed-ready-only",
+  "branch": "qualification/standalone-sidecar-rc",
+  "base_head": "4320a6b",
+  "fixtures": {
+    "native_sha256": "5f48edd5f52bdf80d5493a876971eddcf441c00f24fb77118140ad36c364b8db",
+    "stock_sha256": "82cd796a23492f43a71c1ec27e4e5e0b3d58932014da5a36e79ed9b11fee8162"
+  },
+  "persistent_udp": {
+    "inherited": true,
+    "sent": 16,
+    "received": 16,
+    "lost": 0,
+    "source": "SMP3_SIDECAR_RC_BENCHMARK_REPORT.md"
+  },
+  "ready_cost": {
+    "samples_requested": 20,
+    "samples": [
+      {
+        "sample": 1,
+        "socks_connect_to_app_ms": 0.749099999666214,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.23769994731992483,
+            "hello_to_ready_ms": 0.23760006297379732,
+            "socks_reply_to_ready_ms": 0.47530001029372215
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 2,
+        "socks_connect_to_app_ms": 0.35960006061941385,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.09780004620552063,
+            "hello_to_ready_ms": 0.12749992311000824,
+            "socks_reply_to_ready_ms": 0.22529996931552887
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 3,
+        "socks_connect_to_app_ms": 23.41959998011589,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.23450003936886787,
+            "hello_to_ready_ms": 0.11439993977546692,
+            "socks_reply_to_ready_ms": 0.3488999791443348
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 4,
+        "socks_connect_to_app_ms": 0.3256000345572829,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.08829997386783361,
+            "hello_to_ready_ms": 0.09560002945363522,
+            "socks_reply_to_ready_ms": 0.18390000332146883
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 5,
+        "socks_connect_to_app_ms": 0.32620003912597895,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.08939998224377632,
+            "hello_to_ready_ms": 0.13229995965957642,
+            "socks_reply_to_ready_ms": 0.22169994190335274
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 6,
+        "socks_connect_to_app_ms": 0.27600000612437725,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.07979990914463997,
+            "hello_to_ready_ms": 0.09910005610436201,
+            "socks_reply_to_ready_ms": 0.17889996524900198
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 7,
+        "socks_connect_to_app_ms": 0.2824000548571348,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.07850001566112041,
+            "hello_to_ready_ms": 0.10679999832063913,
+            "socks_reply_to_ready_ms": 0.18530001398175955
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 8,
+        "socks_connect_to_app_ms": 0.3350999904796481,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.08020002860575914,
+            "hello_to_ready_ms": 0.09789993055164814,
+            "socks_reply_to_ready_ms": 0.17809995915740728
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 9,
+        "socks_connect_to_app_ms": 0.30149996746331453,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.39599998854100704,
+            "hello_to_ready_ms": 0.2463000128045678,
+            "socks_reply_to_ready_ms": 0.6423000013455749
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 10,
+        "socks_connect_to_app_ms": 0.5769000854343176,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.11330004781484604,
+            "hello_to_ready_ms": 0.33179996535182,
+            "socks_reply_to_ready_ms": 0.44510001316666603
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 11,
+        "socks_connect_to_app_ms": 0.5319000920280814,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.13130006846040487,
+            "hello_to_ready_ms": 0.17279991880059242,
+            "socks_reply_to_ready_ms": 0.3040999872609973
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 12,
+        "socks_connect_to_app_ms": 20.467999973334372,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.19020005129277706,
+            "hello_to_ready_ms": 0.15829992480576038,
+            "socks_reply_to_ready_ms": 0.34849997609853745
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 13,
+        "socks_connect_to_app_ms": 0.3513999981805682,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.10379997547715902,
+            "hello_to_ready_ms": 0.07469998672604561,
+            "socks_reply_to_ready_ms": 0.17849996220320463
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 14,
+        "socks_connect_to_app_ms": 0.6924000335857272,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.07780001033097506,
+            "hello_to_ready_ms": 0.11010002344846725,
+            "socks_reply_to_ready_ms": 0.1879000337794423
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 15,
+        "socks_connect_to_app_ms": 0.27520000003278255,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.3648999845609069,
+            "hello_to_ready_ms": 0.31209993176162243,
+            "socks_reply_to_ready_ms": 0.6769999163225293
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 16,
+        "socks_connect_to_app_ms": 12.758199940435588,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.14480005484074354,
+            "hello_to_ready_ms": 0.26759994216263294,
+            "socks_reply_to_ready_ms": 0.4123999970033765
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 17,
+        "socks_connect_to_app_ms": 0.5830000154674053,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.18390000332146883,
+            "hello_to_ready_ms": 0.11429993901401758,
+            "socks_reply_to_ready_ms": 0.2981999423354864
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 18,
+        "socks_connect_to_app_ms": 22.0983000472188,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.3879999276250601,
+            "hello_to_ready_ms": 0.3090000245720148,
+            "socks_reply_to_ready_ms": 0.6969999521970749
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 19,
+        "socks_connect_to_app_ms": 12.951399898156524,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.15330000314861536,
+            "hello_to_ready_ms": 0.20560005214065313,
+            "socks_reply_to_ready_ms": 0.3589000552892685
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      },
+      {
+        "sample": 20,
+        "socks_connect_to_app_ms": 10.786700062453747,
+        "milestones": {
+          "leg0": {
+            "observed": true,
+            "socks_reply_to_hello_ms": 0.13840000610798597,
+            "hello_to_ready_ms": 0.19109994173049927,
+            "socks_reply_to_ready_ms": 0.32949994783848524
+          },
+          "leg1": {
+            "observed": false,
+            "reason": "1-byte probe does not cross activation threshold"
+          }
+        },
+        "pass": true
+      }
+    ],
+    "hello_to_ready_ms": {
+      "median": 0.1452999422326684,
+      "p95": 0.31209993176162243
+    },
+    "socks_connect_to_app_ms": {
+      "median": 0.5544000887311995,
+      "p95": 22.0983000472188
+    },
+    "measurement": "leg0 relay SOCKS reply -> first SMP3 HELLO -> first authenticated SMP3RDY1; app SOCKS CONNECT is reported separately",
+    "leg1_in_probe": "not triggered by 1-byte probe; validated by formal large-flow leg1_same_session records",
+    "all_stage_observed": true,
+    "pass": true
+  }
+}

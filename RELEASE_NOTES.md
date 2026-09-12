@@ -1,3 +1,64 @@
+# SMP3 2.3.3
+
+R16 integrates the read-only Dashboard and accurate telemetry accounting into
+`smp3-server`. The standalone `smp3-panel` process is retired and is not a
+v2.3.3 release asset.
+
+## Included
+
+- Realtime status, Sessions, Traffic, History, Events, and SSE views.
+- Native/Standalone ingress classification from authoritative listener role.
+- Leg0/Leg1 rates and cumulative Carrier/Useful traffic.
+- Current Session, Today, Last 24 Hours, 7 Days, and All Recorded periods.
+- Restart-safe, counter-reset-safe, session-replacement-safe accounting with
+  explicit telemetry gap and staleness status.
+- Standalone and Native routing, Core transfer semantics, scheduler semantics,
+  per-leg routing, and SMP3 wire protocol are unchanged.
+- All official v2.3.3 product binaries use the unified package version. Mihomo
+  is built from pinned upstream `v1.19.28`; `smp3-proxy` retains its pinned
+  sing-box runtime identity with the SMP3 release suffix.
+
+## Official binary assets
+
+The release contains eight binaries: `smp3-client`, `smp3-server`,
+`smp3-proxy`, and `mihomo-smp3`, each for Linux/amd64 and Windows/amd64,
+plus `SHA256SUMS`. No standalone `smp3-panel` binary is shipped.
+
+# SMP3 2.3.2
+
+This release unifies the public runtime version metadata across the
+Standalone server, Standalone Sidecar client, and R15 Panel. Official builds
+read `kit_version` from `VERSION` and inject it into each binary.
+
+## Included
+
+- `smp3-server -version` reports `2.3.2`.
+- `smp3-client -version` reports `2.3.2`.
+- `smp3-panel -version` reports `2.3.2`.
+- The formal build script now builds and checks server, client, Panel, Native,
+  and optional compatibility artifacts from one release version.
+- SMP3 wire/Core, scheduler, Native adapter semantics, Carrier behavior, and
+  configuration semantics are unchanged.
+
+The optional sing-box compatibility artifact keeps its upstream identity
+separate from the SMP3 Kit release version.
+
+# SMP3 2.3.1
+
+This is a documentation-only patch release. It does not change the SMP3 Core,
+wire protocol, scheduler, Native adapter, Standalone runtime, Carrier setup,
+or R15 Panel behavior. Product artifacts remain based on the qualified v2.3.0
+baseline.
+
+## Documentation updates
+
+- Replaced the old 2.2.0 deployment text with a concise v2.3.x quick start.
+- Added a clear Native vs Standalone vs optional sing-box compatibility guide.
+- Documented where Carrier node definitions live and how Leg0/Leg1 use them.
+- Documented the qualified local port layout and recommended process order.
+- Added R15 Panel startup, REST/SSE, history, and troubleshooting instructions.
+- Added Chinese and English Sidecar usage guides.
+
 # SMP3 2.1.1
 
 SMP3 2.1.1 is a bugfix release for bidirectional Stream activation. It keeps

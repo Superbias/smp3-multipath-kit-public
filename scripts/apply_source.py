@@ -62,8 +62,14 @@ if f'require {canonical_module} v0.0.0' not in go_mod_text:
     go_mod_text += f'\nrequire {canonical_module} v0.0.0\n'
 relative_core = os.path.relpath(canonical_dst, root).replace(os.sep, '/')
 replace_line = f'replace {canonical_module} => {relative_core}'
-if replace_line not in go_mod_text:
-    go_mod_text += replace_line + '\n'
+# A cached upstream checkout may already contain a stale overlay replacement.
+# Remove every prior replacement for this module before installing the one
+# canonical path for this build, otherwise Go rejects the module graph with
+# "conflicting replacements".
+replace_prefix = f'replace {canonical_module} =>'
+go_mod_lines = [line for line in go_mod_text.splitlines() if not line.strip().startswith(replace_prefix)]
+go_mod_text = '\n'.join(go_mod_lines).rstrip() + '\n'
+go_mod_text += replace_line + '\n'
 go_mod_path.write_text(go_mod_text)
 testdata_src = payload/'protocol/multipath/testdata'
 if testdata_src.exists():

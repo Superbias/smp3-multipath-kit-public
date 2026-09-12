@@ -8,12 +8,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const Version = "2.0.0"
+var Version = "2.3.3"
 
 type Duration time.Duration
 
@@ -39,12 +40,14 @@ func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Durat
 func (d Duration) Time() time.Duration          { return time.Duration(d) }
 
 type Config struct {
-	Listen           string        `json:"listen"`
-	Password         string        `json:"password"`
-	HelloReadTimeout Duration      `json:"hello_read_timeout"`
-	RecoveryTimeout  Duration      `json:"recovery_timeout"`
-	Stream           StreamOptions `json:"stream"`
-	UDP              UDPOptions    `json:"udp"`
+	Listen           string           `json:"listen"`
+	SidecarListeners []string         `json:"sidecar_listeners,omitempty"`
+	Password         string           `json:"password"`
+	HelloReadTimeout Duration         `json:"hello_read_timeout"`
+	RecoveryTimeout  Duration         `json:"recovery_timeout"`
+	Stream           StreamOptions    `json:"stream"`
+	UDP              UDPOptions       `json:"udp"`
+	Telemetry        TelemetryOptions `json:"telemetry"`
 }
 
 type StreamOptions struct {
@@ -118,6 +121,12 @@ func LoadConfig(path string) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("decode trailing config data: %w", err)
 	}
+	if config.Telemetry.Enabled && strings.TrimSpace(config.Telemetry.AccountingPath) == "" {
+		// A config-loaded server must retain lifetime accounting across process
+		// generations. Keep the default beside the config, while allowing an
+		// explicit path for service-managed data directories.
+		config.Telemetry.AccountingPath = filepath.Join(filepath.Dir(path), "telemetry-accounting.json")
+	}
 	if err := config.NormalizeAndValidate(); err != nil {
 		return Config{}, err
 	}
@@ -125,16 +134,34 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c *Config) NormalizeAndValidate() error {
-	if c.Listen == "" {
-		return errors.New("invalid listen: address is empty")
+	type listenerConfig struct {
+		address string
+		field   string
 	}
-	host, portText, err := net.SplitHostPort(c.Listen)
-	if err != nil || host == "" && !strings.HasPrefix(c.Listen, ":") {
-		return fmt.Errorf("invalid listen %q: expected host:port", c.Listen)
+	addresses := []listenerConfig{{address: c.Listen, field: "listen"}}
+	for index, address := range c.SidecarListeners {
+		addresses = append(addresses, listenerConfig{address: address, field: fmt.Sprintf("sidecar_listeners[%d]", index)})
 	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 0 || port > 65535 {
-		return fmt.Errorf("invalid listen port %q", portText)
+	seen := make(map[string]string, len(addresses))
+	for index, configured := range addresses {
+		canonical, err := normalizeListenAddress(configured.address)
+		if err != nil {
+			if index == 0 {
+				if configured.address == "" {
+					return errors.New("invalid listen: address is empty")
+				}
+				return fmt.Errorf("invalid listen %q: %w", configured.address, err)
+			}
+			return fmt.Errorf("invalid %s %q: %w", configured.field, configured.address, err)
+		}
+		// Port zero asks the kernel for a fresh endpoint, so repeated :0
+		// entries are independent listeners rather than duplicate endpoints.
+		if !strings.HasSuffix(canonical, ":0") {
+			if previous, exists := seen[canonical]; exists {
+				return fmt.Errorf("duplicate SMP3 listener %q conflicts with %s", configured.address, previous)
+			}
+			seen[canonical] = configured.field
+		}
 	}
 	if c.Password == "" {
 		return errors.New("empty password")
@@ -145,6 +172,9 @@ func (c *Config) NormalizeAndValidate() error {
 	if c.RecoveryTimeout.Time() <= 0 {
 		c.RecoveryTimeout = Duration(15 * time.Second)
 	}
+	if err := c.Telemetry.NormalizeAndValidate(); err != nil {
+		return err
+	}
 	if err := validateStream(&c.Stream); err != nil {
 		return err
 	}
@@ -154,6 +184,25 @@ func (c *Config) NormalizeAndValidate() error {
 		}
 	}
 	return nil
+}
+
+func normalizeListenAddress(address string) (string, error) {
+	if address == "" {
+		return "", errors.New("address is empty")
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || host == "" && !strings.HasPrefix(address, ":") {
+		return "", errors.New("expected host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 0 || port > 65535 {
+		return "", fmt.Errorf("invalid port %q", portText)
+	}
+	host = strings.ToLower(host)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "*"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
 func validateStream(c *StreamOptions) error {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net"
 	"sync"
 
@@ -23,8 +24,22 @@ type serverSession struct {
 	hostReleased bool
 	hostRelease  sync.Once
 
-	workerWG sync.WaitGroup
-	closeOne sync.Once
+	workerWG  sync.WaitGroup
+	closeOne  sync.Once
+	legMu     sync.Mutex
+	reserved  map[uint8]struct{}
+	telemetry *telemetrySessionRecord
+}
+
+func (s *serverSession) addTargetBytes(tx bool, n int) {
+	if s.telemetry == nil || n <= 0 {
+		return
+	}
+	if tx {
+		s.telemetry.targetTxBytes.Add(uint64(n))
+	} else {
+		s.telemetry.targetRxBytes.Add(uint64(n))
+	}
 }
 
 type ioCloser interface {
@@ -38,11 +53,44 @@ func (s *serverSession) done() <-chan struct{} {
 	return s.stream.Done()
 }
 
-func (s *serverSession) attachLeg(id smp3core.LegID, conn net.Conn) error {
+func (s *serverSession) attachLeg(id smp3core.LegID, conn net.Conn, onClose func(error)) error {
 	if s.mode == smp3core.ModeDatagram {
-		return s.dgram.AttachLeg(id, conn, nil)
+		return s.dgram.AttachLeg(id, conn, onClose)
 	}
-	return s.stream.AttachLeg(id, conn, nil)
+	return s.stream.AttachLeg(id, conn, onClose)
+}
+
+// reserveLeg closes the admission race between a sidecar HELLO/READY
+// handshake and the canonical Core AttachLeg call. The reservation is
+// server-local and does not create a second Core state machine.
+func (s *serverSession) reserveLeg(id smp3core.LegID) error {
+	if id > 1 {
+		return errors.New("invalid multipath leg id")
+	}
+	s.legMu.Lock()
+	defer s.legMu.Unlock()
+	if s.reserved == nil {
+		s.reserved = make(map[uint8]struct{})
+	}
+	id8 := uint8(id)
+	if _, exists := s.reserved[id8]; exists {
+		return errors.New("multipath leg is already being admitted")
+	}
+	if s.mode == smp3core.ModeDatagram {
+		if s.dgram.HasLeg(id) {
+			return errors.New("duplicate multipath datagram leg")
+		}
+	} else if s.stream.HasLeg(id) {
+		return errors.New("duplicate multipath stream leg")
+	}
+	s.reserved[id8] = struct{}{}
+	return nil
+}
+
+func (s *serverSession) releaseLeg(id smp3core.LegID) {
+	s.legMu.Lock()
+	delete(s.reserved, uint8(id))
+	s.legMu.Unlock()
 }
 
 func (s *serverSession) close() {

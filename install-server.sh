@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BIN="$ROOT/dist/smp3-server-linux-amd64"
 CFG_SRC="${1:-$ROOT/config/standalone-server.example.json}"
+RELEASE_VERSION="$(awk -F= '$1 == "kit_version" { print $2; exit }' "$ROOT/VERSION")"
 PREFIX="/opt/smp3-standalone"
 CONFIG="$PREFIX/config.json"
 UNIT="/etc/systemd/system/smp3-standalone.service"
@@ -11,6 +12,7 @@ UNIT="/etc/systemd/system/smp3-standalone.service"
 [ "$(id -u)" -eq 0 ] || { echo 'run as root (sudo ./install-server.sh)'; exit 1; }
 [ -x "$BIN" ] || { echo "missing $BIN; build release artifacts first" >&2; exit 1; }
 [ -f "$CFG_SRC" ] || { echo "missing config: $CFG_SRC" >&2; exit 1; }
+[ -n "$RELEASE_VERSION" ] || { echo "missing kit_version in $ROOT/VERSION" >&2; exit 1; }
 
 install -d -m 0750 "$PREFIX"
 install -m 0640 "$CFG_SRC" "$CONFIG.new"
@@ -21,9 +23,9 @@ chown root:root "$PREFIX/smp3-server" "$CONFIG"
 chmod 0755 "$PREFIX/smp3-server"
 chmod 0640 "$CONFIG"
 
-cat >"$UNIT" <<'UNIT'
+cat >"$UNIT" <<UNIT
 [Unit]
-Description=SMP3 standalone server 2.0.0
+Description=SMP3 standalone server $RELEASE_VERSION
 After=network-online.target
 Wants=network-online.target
 
