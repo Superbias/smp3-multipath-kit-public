@@ -20,6 +20,7 @@ const localTestCredential = "phase6b-local-fixture"
 func testConfig() Config {
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
+	cfg.Telemetry.Listen = "127.0.0.1:0"
 	cfg.Password = localTestCredential
 	cfg.Stream.ActivationThresholdMbps = 0
 	cfg.Stream.QueueFrames = 32

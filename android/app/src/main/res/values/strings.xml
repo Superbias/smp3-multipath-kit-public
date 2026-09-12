@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SMP3 Standalone</string>
+    <string name="notification_channel_name">SMP3 runtime</string>
+    <string name="notification_channel_description">SMP3 standalone transport status</string>
+</resources>

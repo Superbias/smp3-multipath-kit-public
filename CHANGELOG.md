@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.0 — unified Android Standalone release
+
+- Added the Android ARM64 Standalone APK and its configuration/status/log UI.
+- Preserved the independent `smp3-client` process and external Carrier
+  ownership; Android does not implement proxy node protocols.
+- Fixed the Android readiness probe so UI refreshes do not perform network I/O
+  on the Activity main thread.
+- Unified source defaults and release injection to `2.4.0` across Standalone,
+  server, Panel, Native, compatibility, and Android release metadata.
+- Preserved SMP3 Core, wire, scheduler, per-leg routing, and Carrier semantics.
+
 ## 2.3.3 — integrated server Dashboard and accurate accounting
 
 - Integrated the read-only Dashboard into `smp3-server`.

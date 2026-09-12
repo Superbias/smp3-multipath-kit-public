@@ -1,0 +1,5 @@
+# Local Android/Go build outputs are never release source.
+android/.gradle/
+android/app/build/
+.work/
+dist/ARTIFACTS_SHA256

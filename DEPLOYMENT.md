@@ -1,4 +1,4 @@
-# SMP3 v2.3.4 Deployment and Usage
+# SMP3 v2.4.0 Deployment and Usage
 
 This is the short operational guide for the current release. Keep production
 passwords, PSKs, Reality keys, subscriptions, and real node configs outside
@@ -20,8 +20,8 @@ dialing.
 
 ## 2. Download and verify
 
-Download the v2.3.4 assets from the
-[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4):
+Download the v2.4.0 assets from the
+[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.0):
 
 | Asset | Purpose |
 | --- | --- |
@@ -29,6 +29,7 @@ Download the v2.3.4 assets from the
 | `smp3-client-*` | Standalone local SOCKS5 |
 | `mihomo-smp3-*` | Native / Clash Party |
 | `smp3-proxy-*` | sing-box compatibility artifact |
+| `smp3-android-standalone-2.4.0-debug.apk` | Android ARM64 Standalone |
 | `SHA256SUMS` | Integrity manifest |
 
 ```bash
@@ -133,7 +134,27 @@ switch Leg1 to Leg0's SOCKS endpoint automatically.
 See [the Standalone external proxy contract](docs/standalone/EXTERNAL_PROXY.md)
 for the one-process/two-listener model and vendor-neutral responsibility split.
 
-### 5.3 Leg behavior
+## 6. Android Standalone
+
+Install `smp3-android-standalone-2.4.0-debug.apk` on an `arm64-v8a` Android
+device. In the external proxy core, expose two local SOCKS5 listeners (for
+example `127.0.0.1:20001` and `127.0.0.1:20002`) backed by the desired nodes.
+The APK does not implement VLESS, Reality, Hysteria2, Snell, or other node
+protocols; those remain in the external proxy core.
+
+In the app, enter:
+
+- local SOCKS: normally `127.0.0.1:18080`;
+- the reachable SMP3 server sidecar endpoint;
+- the same SMP3 password as the server;
+- Carrier-A and Carrier-B listener host/ports.
+
+Tap **Save**, then **Start**. Configure applications to use the app's
+`127.0.0.1:18080` SOCKS5 endpoint. Stop the app before changing its runtime
+configuration. See [the Android guide](docs/android/README.md) for lifecycle,
+logs, and troubleshooting details.
+
+### 6.1 Leg behavior
 
 - Leg0 is normally the preferred/primary leg.
 - Leg1 joins after the configured activation condition is met.
@@ -141,7 +162,7 @@ for the one-process/two-listener model and vendor-neutral responsibility split.
 - Do not lower thresholds, change windows, or manually dial a leg for a normal
   production check.
 
-## 6. Lifecycle management
+## 7. Lifecycle management
 
 Use the existing service manager, scheduled tasks, or supervisor to manage
 Carrier-A, Carrier-B, and `smp3-client` together:
@@ -154,7 +175,7 @@ stop:  smp3-client -> Carrier-B -> Carrier-A
 The client itself manages only its own SMP3 process. It does not create,
 start, or replace Carrier processes.
 
-## 7. Integrated Server Dashboard
+## 8. Integrated Server Dashboard
 
 The Dashboard is served by `smp3-server`; do not start the retired standalone
 `smp3-panel` process or bind port `24600`. The read-only API surface is:
@@ -173,7 +194,7 @@ Carrier/Useful traffic, Native/Standalone breakdown, events, health, and
 bounded history. It does not expose raw session IDs, destinations, payloads,
 passwords, or private keys.
 
-## 8. First-use checks
+## 9. First-use checks
 
 1. Server `-check` succeeds.
 2. Both Carrier endpoints are listening.
@@ -194,7 +215,7 @@ Windows PowerShell:
 Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500
 ```
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | First checks |
 | --- | --- |
@@ -205,7 +226,7 @@ Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500
 | Dashboard has no data | Telemetry `127.0.0.1:24500` and server logs |
 | SSE does not update | `/api/v1/events` and telemetry logs |
 
-## 10. Security
+## 11. Security
 
 - Use a unique long SMP3 password per deployment.
 - Keep the raw SMP3 listener private.

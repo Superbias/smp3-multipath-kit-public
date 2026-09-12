@@ -12,15 +12,19 @@ test -n "$RELEASE_VERSION" || { echo "missing kit_version in $ROOT/VERSION" >&2;
 RUNTIME_SING_VERSION="1.14.0-beta.14-smp3-${RELEASE_VERSION}"
 
 command -v go >/dev/null || { echo 'missing go' >&2; exit 2; }
-command -v python3 >/dev/null || { echo 'missing python3' >&2; exit 2; }
 command -v git >/dev/null || { echo 'missing git' >&2; exit 2; }
 mkdir -p "$OUT" "$WORK"
 source "$ROOT/scripts/build-external-common.sh"
+PYTHON_BIN="$(r18_python_bin)"
 r18_prepare_checkout "$SING_ROOT" https://github.com/SagerNet/sing-box.git "$SING_TAG" "$SING_REV"
-python3 "$ROOT/scripts/apply_source.py" "$SING_ROOT" "$WORK/sing-source-work"
+"$PYTHON_BIN" "$ROOT/scripts/apply_source.py" "$SING_ROOT" "$WORK/sing-source-work"
 
-SING_TAGS="$(cat "$SING_ROOT/release/DEFAULT_BUILD_TAGS_OTHERS")"
-SING_LDFLAGS_SHARED="$(cat "$SING_ROOT/release/LDFLAGS")"
+SING_TAGS="$(tr -d '\r' < "$SING_ROOT/release/DEFAULT_BUILD_TAGS_OTHERS")"
+# The pinned sing-box release lists old tfo-go linkname compatibility tags.
+# Go 1.25 removed the referenced net internals, so omit only those tags.
+SING_TAGS="${SING_TAGS//,badlinkname/}"
+SING_TAGS="${SING_TAGS//,tfogo_checklinkname0/}"
+SING_LDFLAGS_SHARED="$(tr -d '\r' < "$SING_ROOT/release/LDFLAGS")"
 SING_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$RUNTIME_SING_VERSION $SING_LDFLAGS_SHARED -s -w -buildid="
 (
   cd "$SING_ROOT"

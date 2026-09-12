@@ -1,4 +1,4 @@
-# SMP3 v2.3.4 Standalone SOCKS5 Sidecar
+# SMP3 v2.4.0 Standalone SOCKS5 Sidecar
 
 The Standalone Sidecar gives ordinary applications a local SOCKS5 endpoint. It
 implements SMP3 only; VLESS, Reality, Hysteria2, Snell, and other outer

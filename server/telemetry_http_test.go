@@ -65,10 +65,11 @@ func TestTelemetryHTTPStatusAndHEADShareGETHeaders(t *testing.T) {
 func TestTelemetryHTTPTrafficAndHistoryExposeAuthoritativeAccounting(t *testing.T) {
 	registry := NewTelemetryRegistry(TelemetryConfig{Enabled: true, HMACSecret: []byte("traffic-http-test")})
 	defer registry.Close()
-	httpServer := newTelemetryHTTPServer(registry, time.Now())
 	at := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	httpServer := newTelemetryHTTPServer(registry, at)
 	httpServer.accounting.Collect(accountingTestSnapshot(at, accountingTestSession("session-a", TelemetryIngressStandalone, 100, 80, 200, 160)))
 	httpServer.accounting.Collect(accountingTestSnapshot(at.Add(time.Second), accountingTestSession("session-a", TelemetryIngressStandalone, 1100, 880, 2200, 1760)))
+	registry.latest.Store(accountingTestSnapshot(at.Add(time.Second), accountingTestSession("session-a", TelemetryIngressStandalone, 1100, 880, 2200, 1760)))
 
 	traffic := httptest.NewRecorder()
 	httpServer.ServeHTTP(traffic, httptest.NewRequest(http.MethodGet, "/api/v1/traffic?period=all_recorded", nil))

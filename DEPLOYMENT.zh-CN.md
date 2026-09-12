@@ -1,4 +1,4 @@
-# SMP3 v2.3.4 部署与使用教程
+# SMP3 v2.4.0 部署与使用教程
 
 这是一份面向实际使用的简明教程。生产密码、PSK、Reality 私钥和真实节点
 参数只放在本机配置中，不要提交到仓库。
@@ -25,8 +25,8 @@ Dashboard：浏览器 → SMP3 server → telemetry 127.0.0.1:24500
 
 ## 2. 下载和校验
 
-从 [v2.3.4 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4)
-下载教程和产品制品。该版本只统一运行时版本标识，不改变数据面语义：
+从 [v2.4.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.0)
+下载教程和产品制品。该版本加入 Android Standalone，同时不改变 SMP3 数据面语义：
 
 | 文件 | 用途 |
 | --- | --- |
@@ -34,6 +34,7 @@ Dashboard：浏览器 → SMP3 server → telemetry 127.0.0.1:24500
 | `smp3-client-linux-amd64` / Windows 版 | Standalone 本地 SOCKS5 |
 | `mihomo-smp3-linux-amd64` / Windows 版 | Native / Clash Party |
 | `smp3-proxy-linux-amd64` / Windows 版 | sing-box 兼容模式 |
+| `smp3-android-standalone-2.4.0-debug.apk` | Android ARM64 Standalone |
 | `SHA256SUMS` | 文件完整性校验 |
 
 ```bash
@@ -162,14 +163,33 @@ Leg override 时，该 Leg 使用全局地址；存在 override 时只作用于�
 Standalone 不读取节点协议配置，只连接通用 SOCKS5。详见
 [Standalone 外部代理 contract](docs/standalone/EXTERNAL_PROXY.md)。
 
-### 5.3 Leg0/Leg1 行为
+## 6. Android Standalone
+
+在 `arm64-v8a` Android 设备安装 `smp3-android-standalone-2.4.0-debug.apk`。
+先在外部代理核心中提供两个本机 SOCKS5 监听，例如
+`127.0.0.1:20001` 和 `127.0.0.1:20002`，分别连接你选择的两个节点。
+APK 不实现 VLESS、Reality、Hysteria2、Snell 等节点协议，这些仍由外部
+代理核心负责。
+
+在 App 中填写：
+
+- Local SOCKS：通常为 `127.0.0.1:18080`；
+- 可被手机访问的 SMP3 server sidecar 地址；
+- 与服务端相同的 SMP3 密码；
+- Carrier-A、Carrier-B 的监听地址和端口。
+
+点击 **Save**，再点击 **Start**。其他应用的代理设置为 App 的
+`127.0.0.1:18080`。修改运行配置前先点击 **Stop**。详细说明见
+[Android 使用说明](docs/android/README.md)。
+
+### 6.1 Leg0/Leg1 行为
 
 - `leg0` 通常先启动，是 preferred/primary leg；
 - 满足 activation threshold 后，`leg1` 才会加入；
 - 短连接、低速请求或尚未达到阈值时，Leg1 保持 down/未激活可能是正常现象；
 - 不要通过修改 threshold、window 或手动拨号来判断生产行为。
 
-## 6. 启动、停止和持久化
+## 7. 启动、停止和持久化
 
 推荐由同一个服务管理器、计划任务或 supervisor 管理外部 Carrier、
 `smp3-client` 和集成 Dashboard：
@@ -183,7 +203,7 @@ Standalone 不读取节点协议配置，只连接通用 SOCKS5。详见
 进程。若 Carrier-A/B 已经有独立服务定义，应由上层服务管理器负责依赖关系、
 自动重启和开机启动。
 
-## 7. 集成 Dashboard
+## 8. 集成 Dashboard
 
 Dashboard 由 `smp3-server` 提供，不要再启动已经退役的独立 `smp3-panel`，也不要使用 `24600`：
 
@@ -205,7 +225,7 @@ GET /api/v1/events       # SSE
 
 Dashboard 不展示 raw SessionID、目标地址、payload、密码或私钥。
 
-## 8. 首次验证
+## 9. 首次验证
 
 按以下顺序检查：
 
@@ -228,7 +248,7 @@ Windows PowerShell：
 Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500
 ```
 
-## 9. 常见问题
+## 10. 常见问题
 
 | 现象 | 优先检查 |
 | --- | --- |
@@ -239,7 +259,7 @@ Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500
 | Dashboard 无数据 | `24500` 是否监听、服务端 telemetry 是否启用 |
 | Dashboard 页面能开但 SSE 不更新 | 检查 `/api/v1/events` 和 telemetry 日志 |
 
-## 10. 安全要求
+## 11. 安全要求
 
 - 每个部署使用独立的长随机 SMP3 密码；
 - 不公开裸 SMP3 listener；

@@ -11,12 +11,12 @@ RELEASE_VERSION="$(awk -F= '$1 == "kit_version" { print $2; exit }' "$ROOT/VERSI
 test -n "$RELEASE_VERSION" || { echo "missing kit_version in $ROOT/VERSION" >&2; exit 2; }
 
 command -v go >/dev/null || { echo 'missing go' >&2; exit 2; }
-command -v python3 >/dev/null || { echo 'missing python3' >&2; exit 2; }
 command -v git >/dev/null || { echo 'missing git' >&2; exit 2; }
 mkdir -p "$OUT" "$WORK"
 source "$ROOT/scripts/build-external-common.sh"
+PYTHON_BIN="$(r18_python_bin)"
 r18_prepare_checkout "$MIHOMO_ROOT" https://github.com/MetaCubeX/mihomo.git "$MIHOMO_TAG" "$MIHOMO_REV"
-python3 "$ROOT/scripts/apply_mihomo_adapter.py" "$MIHOMO_ROOT" "$ROOT"
+"$PYTHON_BIN" "$ROOT/scripts/apply_mihomo_adapter.py" "$MIHOMO_ROOT" "$ROOT"
 
 (
   cd "$MIHOMO_ROOT"

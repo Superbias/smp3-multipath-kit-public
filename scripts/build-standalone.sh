@@ -8,14 +8,14 @@ RELEASE_VERSION="$(awk -F= '$1 == "kit_version" { print $2; exit }' "$ROOT/VERSI
 test -n "$RELEASE_VERSION" || { echo "missing kit_version in $ROOT/VERSION" >&2; exit 2; }
 
 command -v go >/dev/null || { echo 'missing go' >&2; exit 2; }
-command -v python3 >/dev/null || { echo 'missing python3' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'missing sha256sum' >&2; exit 2; }
 export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.25.5+auto}"
 mkdir -p "$OUT" "$WORK"
 source "$ROOT/scripts/build-external-common.sh"
+PYTHON_BIN="$(r18_python_bin)"
 
 cd "$ROOT"
-python3 "$ROOT/scripts/check-standalone-dependencies.py" "$ROOT"
+"$PYTHON_BIN" "$ROOT/scripts/check-standalone-dependencies.py" "$ROOT"
 
 build_target() {
   local goos="$1" output="$2" package_path="$3" ldflags="$4"

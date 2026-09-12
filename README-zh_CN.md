@@ -1,4 +1,4 @@
-# SMP3 Multipath Kit v2.3.4
+# SMP3 Multipath Kit v2.4.0
 
 [English](README.md) | 简体中文
 
@@ -33,12 +33,13 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 
 ## 当前发布版本
 
-- Release：`v2.3.4`（R18 双模式发布加固；数据面语义不变）
-- Native：Mihomo `v2.3.4`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
+- Release：`v2.4.0`（Android Standalone 打包/UI；数据面语义不变）
+- Native：Mihomo `v2.4.0`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
 - Standalone：`smp3-client`、`smp3-server`
+- Android Standalone：`smp3-android-standalone-2.4.0-debug.apk`（`arm64-v8a`）
 - 兼容：`smp3-proxy`（固定 sing-box 运行时，版本后缀包含 SMP3 版本）
 - 监控：集成在 `smp3-server` 中，独立 `smp3-panel` 已退役
-- 官方下载：[GitHub Releases v2.3.4](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4)
+- 官方下载：[GitHub Releases v2.4.0](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.0)
 - 下载后先用 `SHA256SUMS` 校验文件，不要直接使用示例配置中的占位密码。
 
 ## 当前资格化拓扑
@@ -92,6 +93,13 @@ Standalone：应用 → 127.0.0.1:18080 → smp3-client
 ```
 
 Windows 使用同名 `.exe`。应用代理设置为 `socks5://127.0.0.1:18080`。
+
+### Android Standalone
+
+在 ARM64 Android 设备安装 `smp3-android-standalone-2.4.0-debug.apk`。先让
+外部代理核心提供 Carrier-A、Carrier-B 两个本机 SOCKS5 监听，再在 App 中
+填写 SMP3 server 地址、相同密码和两个监听端口。App 自身的本地 SOCKS5
+入口是 `127.0.0.1:18080`。详细步骤见 [Android 使用说明](docs/android/README.md)。
 
 ### Server
 

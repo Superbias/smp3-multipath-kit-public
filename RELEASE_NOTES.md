@@ -1,3 +1,29 @@
+# SMP3 2.4.0
+
+v2.4.0 publishes the unified Standalone, Native, Android Standalone, and
+server Dashboard product lines. SMP3 Core, wire protocol, scheduler, routing,
+and carrier semantics remain unchanged.
+
+## Included
+
+- Standalone `smp3-client` and `smp3-server` for Linux/amd64 and Windows/amd64.
+- Native Mihomo SMP3 builds for Linux/amd64 and Windows/amd64.
+- The pinned `smp3-proxy` compatibility builds with their sing-box runtime
+  identity and SMP3 `v2.4.0` suffix.
+- `smp3-android-standalone-2.4.0-debug.apk` for Android `arm64-v8a`, with the
+  card-based Status/Configuration/Logs/About UI, foreground supervision, and
+  the fixed off-main-thread readiness probe.
+- The R16 integrated server Dashboard with read-only realtime telemetry,
+  cumulative traffic accounting, history, events, SSE, and health status.
+
+The Android APK is debug-signed because no release signing credential is stored
+in the repository. Verify every asset with `SHA256SUMS` before running it.
+
+## Official binary assets
+
+The release contains eight amd64 binaries and one Android APK, plus
+`SHA256SUMS`. The retired standalone `smp3-panel` is not shipped.
+
 # SMP3 2.3.4
 
 R18 release hardening normalizes the dual-mode product identity in this

@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+r18_python_bin() {
+  local candidate="${PYTHON_BIN:-python3}"
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  candidate=python
+  command -v "$candidate" >/dev/null 2>&1 || {
+    echo 'missing Python 3' >&2
+    return 1
+  }
+  printf '%s' "$candidate"
+}
+
 r18_prepare_checkout() {
   local path="$1" url="$2" tag="$3" revision="$4"
   if [ ! -d "$path/.git" ]; then

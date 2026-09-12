@@ -1,4 +1,4 @@
-# SMP3 v2.3.4 product build workflows
+# SMP3 v2.4.0 product build workflows
 
 The product lines have explicit build ownership. `build.sh` is the canonical
 Standalone build and does not fetch, build, or import any proxy core.
