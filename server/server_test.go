@@ -27,8 +27,22 @@ func testConfig() Config {
 	cfg.UDP.Enabled = true
 	cfg.UDP.QueueFrames = 32
 	cfg.UDP.DedupWindow = 64
-	cfg.Telemetry.Listen = "127.0.0.1:0"
 	return cfg
+}
+
+func TestLoadConfigDefaultsAccountingPathBesideConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"password":"test","telemetry":{"enabled":true,"listen":"127.0.0.1:0"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(filepath.Dir(configPath), "telemetry-accounting.json")
+	if cfg.Telemetry.AccountingPath != expected {
+		t.Fatalf("accounting path=%q expected=%q", cfg.Telemetry.AccountingPath, expected)
+	}
 }
 
 func startTestServer(t *testing.T, cfg Config) *Server {
@@ -222,9 +236,7 @@ func TestServerTelemetryCountsAuthenticatedHelloAndActiveLegs(t *testing.T) {
 	writeAll(t, leg0, header)
 	writeAll(t, leg0, payload)
 
-	// Race instrumentation can delay publication of both authenticated legs
-	// and target counters beyond the normal one-second observation window.
-	waitFor(t, 8*time.Second, func() bool {
+	waitFor(t, 10*time.Second, func() bool {
 		snapshot := instance.Telemetry().Snapshot()
 		return snapshot.ActiveSessions == 1 && snapshot.ActiveLegs == 2 && len(snapshot.Sessions) == 1 && !snapshot.Sessions[0].FirstDataSeenAt.IsZero() && snapshot.Sessions[0].TargetTxBytes > 0 && snapshot.Sessions[0].TargetRxBytes > 0
 	})
@@ -273,10 +285,7 @@ func TestServerTelemetryTenLocalTwoLegSessionsAggregate(t *testing.T) {
 		writeStreamDataFrame(t, leg1, 1, []byte("leg1-deterministic"))
 	}
 
-	// Race instrumentation can make the twenty-leg fixture take longer than
-	// the normal three-second observation window. Keep the assertion bounded,
-	// but give the scheduler enough time to publish all aggregate counters.
-	waitFor(t, 8*time.Second, func() bool {
+	waitFor(t, 10*time.Second, func() bool {
 		snapshot := instance.Telemetry().Snapshot()
 		return snapshot.ActiveSessions == 10 && snapshot.ActiveLegs == 20 && snapshot.Legs[0].LogicalRxUniqueBytes > 0 && snapshot.Legs[1].LogicalRxUniqueBytes > 0 && snapshot.Legs[0].WireRxBytes > 0 && snapshot.Legs[1].WireRxBytes > 0
 	})

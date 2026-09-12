@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.3.3 — integrated server Dashboard and accurate accounting
+
+- Integrated the read-only Dashboard into `smp3-server`.
+- Added realtime Leg0/Leg1 state and rate views, Sessions, Traffic, History,
+  Events/SSE, Native/Standalone classification, and health/staleness status.
+- Added restart/reset/session-replacement-safe cumulative Carrier and Useful
+  traffic accounting with gap detection and period aggregation.
+- Retired the standalone `smp3-panel` process and `:24600` production path.
+- Preserved SMP3 wire protocol, Core transfer, scheduler, per-leg routing,
+  Native routing, and Standalone routing semantics.
+
 ## 2.1.1 — bidirectional Stream activation
 
 - Fixed adaptive Stream activation to observe application payload in both

@@ -127,7 +127,19 @@ func (s *Server) Start() error {
 	s.sidecarListeners = sidecarListeners
 	s.access.Unlock()
 	if s.telemetry.Enabled() {
-		httpServer := newTelemetryHTTPServer(s.telemetry, time.Now())
+		httpServer, err := newTelemetryHTTPServerWithConfig(s.telemetry, time.Now(), s.cfg.Telemetry.registryConfig())
+		if err != nil {
+			for _, listener := range listeners {
+				_ = listener.Close()
+			}
+			s.access.Lock()
+			s.listener = nil
+			s.listeners = nil
+			s.sidecarListeners = make(map[net.Listener]struct{})
+			s.access.Unlock()
+			s.telemetry.Close()
+			return fmt.Errorf("initialize telemetry accounting: %w", err)
+		}
 		if err := httpServer.Start(s.cfg.Telemetry.Listen); err != nil {
 			for _, listener := range listeners {
 				_ = listener.Close()
@@ -298,8 +310,9 @@ func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bo
 	releasePending()
 	if s.telemetry.Enabled() {
 		now := time.Now()
+		ingressRole := ingressRoleForListener(sidecar)
 		if created {
-			_ = s.telemetry.RegisterSession(hello.SessionID, modeName(hello.Mode), now)
+			_ = s.telemetry.RegisterSessionWithRole(hello.SessionID, modeName(hello.Mode), ingressRole, now)
 			if hello.Mode == smp3core.ModeDatagram {
 				s.telemetry.BindDatagram(hello.SessionID, session.dgram)
 			} else {
@@ -307,7 +320,7 @@ func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bo
 			}
 			session.telemetry = s.telemetry.record(hello.SessionID)
 		}
-		s.telemetry.AttachLeg(hello.SessionID, uint8(hello.LegID), 0, wireCounters, now)
+		s.telemetry.AttachLegWithRole(hello.SessionID, uint8(hello.LegID), 0, wireCounters, ingressRole, now)
 	}
 	if !created {
 		s.logger.Info("multipath leg joined/rejoined", "session", sessionLogID(hello.SessionID), "leg", hello.LegID, "mode", modeName(hello.Mode))

@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # server, sidecar, and Panel binaries receive it through -ldflags below.
 RELEASE_VERSION="$(awk -F= '$1 == "kit_version" { print $2; exit }' "$ROOT/VERSION")"
 test -n "$RELEASE_VERSION" || { echo "missing kit_version in $ROOT/VERSION" >&2; exit 2; }
-RUNTIME_SING_VERSION="1.14.0-beta.14-smp3-2.0.0"
+RUNTIME_SING_VERSION="1.14.0-beta.14-smp3-${RELEASE_VERSION}"
 SING_TAG="v1.14.0-beta.14"
 SING_REV="4902660f8424fef3c2a60dfcdce7aeadfe3f3b88"
 MIHOMO_TAG="v1.19.28"
@@ -61,18 +61,6 @@ build_workspace_target() {
     go build -trimpath -ldflags "$ldflags" -o "$output" "$package_path"
 }
 
-build_panel_target() {
-  local goos="$1" goarch="$2" output="$3"
-  echo "[+] build Panel target=$goos/$goarch output=$output"
-  (
-    cd "$ROOT/panel"
-    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOWORK=off \
-      go build -trimpath \
-        -ldflags "-X github.com/Superbias/smp3-multipath-kit-public/panel.Version=$RELEASE_VERSION -buildid=" \
-        -o "$output" ./cmd/smp3-panel
-  )
-}
-
 prepare_checkout "$SING_ROOT" https://github.com/SagerNet/sing-box.git "$SING_TAG" "$SING_REV"
 prepare_checkout "$MIHOMO_ROOT" https://github.com/MetaCubeX/mihomo.git "$MIHOMO_TAG" "$MIHOMO_REV"
 
@@ -90,15 +78,13 @@ build_workspace_target linux amd64 "$OUT/smp3-server-linux-amd64" ./cmd/smp3-ser
 build_workspace_target windows amd64 "$OUT/smp3-server-windows-amd64.exe" ./cmd/smp3-server "$SERVER_LDFLAGS"
 build_workspace_target linux amd64 "$OUT/smp3-client-linux-amd64" ./cmd/smp3-client "$CLIENT_LDFLAGS"
 build_workspace_target windows amd64 "$OUT/smp3-client-windows-amd64.exe" ./cmd/smp3-client "$CLIENT_LDFLAGS"
-build_panel_target linux amd64 "$OUT/smp3-panel-linux-amd64"
-build_panel_target windows amd64 "$OUT/smp3-panel-windows-amd64.exe"
 
 echo '[+] injecting and building pinned sing targets'
 python3 "$ROOT/scripts/apply_source.py" "$SING_ROOT" "$WORK/sing-source-work"
 SING_TAGS="$(cat "$SING_ROOT/release/DEFAULT_BUILD_TAGS_OTHERS")"
 SING_LDFLAGS_SHARED="$(cat "$SING_ROOT/release/LDFLAGS")"
-# 2.1.1 is a Stream activation bugfix release. Keep the accepted embedded
-# runtime identities and Wire/HELLO versions unchanged.
+# The compatibility binary keeps the pinned upstream runtime identity while
+# carrying the unified SMP3 product suffix for this release.
 SING_LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$RUNTIME_SING_VERSION $SING_LDFLAGS_SHARED -s -w -buildid="
 (
   cd "$SING_ROOT"
@@ -117,10 +103,11 @@ python3 "$ROOT/scripts/apply_mihomo_adapter.py" "$MIHOMO_ROOT" "$ROOT"
   cd "$MIHOMO_ROOT"
   GOWORK=off go test -mod=mod ./adapter/... ./config/...
   GOWORK=off go build -mod=mod .
+  MIHOMO_LDFLAGS="-X github.com/metacubex/mihomo/constant.Version=$RELEASE_VERSION -buildid="
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOWORK=off \
-    go build -trimpath -mod=mod -o "$OUT/mihomo-smp3-linux-amd64" .
+    go build -trimpath -mod=mod -ldflags "$MIHOMO_LDFLAGS" -o "$OUT/mihomo-smp3-linux-amd64" .
   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOWORK=off \
-    go build -trimpath -mod=mod -o "$OUT/mihomo-smp3-windows-amd64.exe" .
+    go build -trimpath -mod=mod -ldflags "$MIHOMO_LDFLAGS" -o "$OUT/mihomo-smp3-windows-amd64.exe" .
 )
 
 echo '[+] fail-closed artifact verification'
@@ -134,8 +121,6 @@ check_artifact linux/amd64 "$OUT/smp3-server-linux-amd64"
 check_artifact windows/amd64 "$OUT/smp3-server-windows-amd64.exe"
 check_artifact linux/amd64 "$OUT/smp3-client-linux-amd64"
 check_artifact windows/amd64 "$OUT/smp3-client-windows-amd64.exe"
-check_artifact linux/amd64 "$OUT/smp3-panel-linux-amd64"
-check_artifact windows/amd64 "$OUT/smp3-panel-windows-amd64.exe"
 check_artifact linux/amd64 "$OUT/mihomo-smp3-linux-amd64"
 check_artifact windows/amd64 "$OUT/mihomo-smp3-windows-amd64.exe"
 check_artifact linux/amd64 "$OUT/smp3-proxy-linux-amd64"
@@ -146,7 +131,6 @@ check_artifact windows/amd64 "$OUT/smp3-proxy-windows-amd64.exe"
   sha256sum \
     smp3-server-linux-amd64 smp3-server-windows-amd64.exe \
     smp3-client-linux-amd64 smp3-client-windows-amd64.exe \
-    smp3-panel-linux-amd64 smp3-panel-windows-amd64.exe \
     mihomo-smp3-linux-amd64 mihomo-smp3-windows-amd64.exe \
     smp3-proxy-linux-amd64 smp3-proxy-windows-amd64.exe > SHA256SUMS
   sha256sum -c SHA256SUMS

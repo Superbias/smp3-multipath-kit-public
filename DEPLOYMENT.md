@@ -1,4 +1,4 @@
-# SMP3 v2.3.2 Deployment and Usage
+# SMP3 v2.3.3 Deployment and Usage
 
 This is the short operational guide for the current release. Keep production
 passwords, PSKs, Reality keys, subscriptions, and real node configs outside
@@ -10,7 +10,7 @@ the repository.
 Native:     application -> Mihomo / Clash Party -> SMP3 server
 Standalone: application -> 127.0.0.1:18080 -> smp3-client
             -> Carrier-A / Carrier-B -> SMP3 server
-Panel:      browser -> 127.0.0.1:24600 -> telemetry 127.0.0.1:24500
+Dashboard:  browser -> SMP3 server -> telemetry 127.0.0.1:24500
 ```
 
 `smp3-server` handles SMP3 only. `smp3-client` handles SMP3 and local SOCKS5
@@ -20,15 +20,15 @@ dialing.
 
 ## 2. Download and verify
 
-Download the v2.3.2 assets from the
-[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2):
+Download the v2.3.3 assets from the
+[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3):
 
 | Asset | Purpose |
 | --- | --- |
 | `smp3-server-*` | Standalone server |
 | `smp3-client-*` | Standalone local SOCKS5 |
 | `mihomo-smp3-*` | Native / Clash Party |
-| `smp3-panel-*` | R15 Panel |
+| `smp3-proxy-*` | sing-box compatibility artifact |
 | `SHA256SUMS` | Integrity manifest |
 
 ```bash
@@ -46,7 +46,7 @@ cp config/standalone-server.example.json config/server.json
 Set the private listen address, a long random SMP3 password, and the required
 sidecar/telemetry settings. Check and run it:
 
-To enable the R15 Panel, include at least:
+To enable the integrated Dashboard and telemetry, include at least:
 
 ```json
 "telemetry": {
@@ -135,39 +135,34 @@ socks5://127.0.0.1:18080
 ## 6. Lifecycle management
 
 Use the existing service manager, scheduled tasks, or supervisor to manage
-Carrier-A, Carrier-B, `smp3-client`, and Panel together:
+Carrier-A, Carrier-B, and `smp3-client` together:
 
 ```text
-start: Carrier-A -> Carrier-B -> smp3-client -> Panel
-stop:  Panel -> smp3-client -> Carrier-B -> Carrier-A
+start: Carrier-A -> Carrier-B -> smp3-client
+stop:  smp3-client -> Carrier-B -> Carrier-A
 ```
 
 The client itself manages only its own SMP3 process. It does not create,
 start, or replace Carrier processes.
 
-## 7. R15 Panel
+## 7. Integrated Server Dashboard
 
-Run the read-only monitor against loopback telemetry:
-
-```bash
-./smp3-panel-linux-amd64 \
-  -listen 127.0.0.1:24600 \
-  -telemetry http://127.0.0.1:24500 \
-  -history monitor-history.jsonl
-```
-
-Open `http://127.0.0.1:24600/`. The read-only endpoints are:
+The Dashboard is served by `smp3-server`; do not start the retired standalone
+`smp3-panel` process or bind port `24600`. The read-only API surface is:
 
 ```text
-GET /api/monitor/status
-GET /api/monitor/history
-GET /api/monitor/events
-GET /api/monitor/stream   # SSE
+GET /api/v1/status
+GET /api/v1/legs
+GET /api/v1/sessions
+GET /api/v1/traffic
+GET /api/v1/traffic/history
+GET /api/v1/events       # SSE
 ```
 
-The UI shows leg and Carrier state, TX rate, Useful ACK rate, traffic share,
-events, health, and bounded history. It does not expose raw session IDs,
-destinations, payloads, passwords, or private keys.
+The UI shows leg and Carrier state, TX rate, Useful ACK rate, cumulative
+Carrier/Useful traffic, Native/Standalone breakdown, events, health, and
+bounded history. It does not expose raw session IDs, destinations, payloads,
+passwords, or private keys.
 
 ## 8. First-use checks
 
@@ -175,19 +170,19 @@ destinations, payloads, passwords, or private keys.
 2. Both Carrier endpoints are listening.
 3. Client `-check` succeeds and `18080` is listening.
 4. A normal TCP request succeeds through the local SOCKS5 endpoint.
-5. Panel status, history, events, and SSE are readable.
+5. Dashboard status, traffic, history, events, and SSE are readable.
 6. Observe Leg0 first; observe Leg1 only during a sufficiently long flow.
 
 Linux:
 
 ```bash
-ss -ltnp | grep -E '17898|17899|18080|24500|24600'
+ss -ltnp | grep -E '17898|17899|18080|24500'
 ```
 
 Windows PowerShell:
 
 ```powershell
-Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500,24600
+Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500
 ```
 
 ## 9. Troubleshooting
@@ -198,8 +193,8 @@ Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500,24600
 | Leg1 stays down | Flow rate/duration, activation condition, and Carrier-B listener |
 | Client appears to need VLESS/Reality | Those are dialed by Mihomo/Carrier, not the client |
 | Only TCP works | Application SOCKS5 UDP support and UDP settings on both sides |
-| Panel has no data | Telemetry `127.0.0.1:24500` and Panel telemetry URL |
-| SSE does not update | `/api/monitor/stream` and telemetry logs |
+| Dashboard has no data | Telemetry `127.0.0.1:24500` and server logs |
+| SSE does not update | `/api/v1/events` and telemetry logs |
 
 ## 10. Security
 

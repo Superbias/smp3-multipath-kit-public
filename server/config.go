@@ -8,14 +8,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Version is the public SMP3 server release version. Official builds inject
-// the same value from the repository VERSION file with -ldflags.
-var Version = "2.3.2"
+var Version = "2.3.3"
 
 type Duration time.Duration
 
@@ -121,6 +120,12 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, errors.New("config contains more than one JSON value")
 		}
 		return Config{}, fmt.Errorf("decode trailing config data: %w", err)
+	}
+	if config.Telemetry.Enabled && strings.TrimSpace(config.Telemetry.AccountingPath) == "" {
+		// A config-loaded server must retain lifetime accounting across process
+		// generations. Keep the default beside the config, while allowing an
+		// explicit path for service-managed data directories.
+		config.Telemetry.AccountingPath = filepath.Join(filepath.Dir(path), "telemetry-accounting.json")
 	}
 	if err := config.NormalizeAndValidate(); err != nil {
 		return Config{}, err

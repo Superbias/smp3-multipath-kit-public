@@ -1,9 +1,9 @@
-# SMP3 Multipath Kit v2.3.2
+# SMP3 Multipath Kit v2.3.3
 
 [English](README.md) | 简体中文
 
 SMP3 是一个独立的应用层多路径传输组件，包含 Standalone、Native 和
-R15 Panel 三条产品线。
+集成在服务端中的 Dashboard 三条产品线。
 
 ## 先选使用模式
 
@@ -12,7 +12,7 @@ R15 Panel 三条产品线。
 | Native | Clash Party / Mihomo 直接使用 SMP3，推荐 | 否 |
 | Standalone | 给普通应用提供本机 SOCKS5 入口 | 否 |
 | `smp3-proxy` | 兼容已有 sing-box 配置 | 是，仅此模式 |
-| R15 Panel | 查看状态、Leg、速率、Useful ACK 和历史 | 否 |
+| Integrated Dashboard | 查看状态、Leg、流量、事件和历史 | 否 |
 
 最重要的一点：`smp3-client` 只负责 SMP3 和本地 SOCKS5。它不会实现
 VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码。外层节点
@@ -21,11 +21,12 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 
 ## 当前发布版本
 
-- Release：`v2.3.2`（运行时版本标识已统一；数据面语义不变）
-- Native：Mihomo `v1.19.28` + SMP3 adapter
+- Release：`v2.3.3`（R16 Dashboard/流量统计；数据面语义不变）
+- Native：Mihomo `v2.3.3`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
 - Standalone：`smp3-client`、`smp3-server`
-- Panel：只读 REST/SSE 监控
-- 官方下载：[GitHub Releases v2.3.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2)
+- 兼容：`smp3-proxy`（固定 sing-box 运行时，版本后缀包含 SMP3 版本）
+- 监控：集成在 `smp3-server` 中，独立 `smp3-panel` 已退役
+- 官方下载：[GitHub Releases v2.3.3](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3)
 - 下载后先用 `SHA256SUMS` 校验文件，不要直接使用示例配置中的占位密码。
 
 ## 当前资格化拓扑
@@ -36,7 +37,7 @@ Native：应用 → Mihomo / Clash Party → Leg0 + Leg1 → SMP3 server
 Standalone：应用 → 127.0.0.1:18080 → smp3-client
             → Carrier-A / Carrier-B → SMP3 server
 
-监控：SMP3 telemetry 127.0.0.1:24500 → R15 Panel 127.0.0.1:24600
+监控：浏览器 → SMP3 server Dashboard → 127.0.0.1:24500 telemetry
 ```
 
 当前生产约定端口如下；如果你的部署配置不同，以实际配置为准：
@@ -49,7 +50,7 @@ Standalone：应用 → 127.0.0.1:18080 → smp3-client
 | Carrier-B | `127.0.0.1:17899` | Leg1 外层代理入口 |
 | `smp3-client` | `127.0.0.1:18080` | 应用使用的 SOCKS5 |
 | telemetry | `127.0.0.1:24500` | 仅本机监控数据 |
-| R15 Panel | `127.0.0.1:24600` | 浏览器访问地址 |
+| Integrated Dashboard | `127.0.0.1:24500` | 服务端 loopback REST/SSE 和页面 |
 
 ## 快速开始
 
@@ -89,18 +90,20 @@ cp config/standalone-server.example.json config/server.json
 ./smp3-server-linux-amd64 -c config/server.json -check
 ```
 
-### R15 Panel
+### Integrated Dashboard
 
-Panel 只读读取 `127.0.0.1:24500`，不会直接读取或修改数据面：
+Dashboard 由 `smp3-server` 直接提供，不需要再启动独立 Panel。可读接口包括：
 
-```bash
-./smp3-panel-linux-amd64 \
-  -listen 127.0.0.1:24600 \
-  -telemetry http://127.0.0.1:24500 \
-  -history monitor-history.jsonl
+```text
+GET /api/v1/status
+GET /api/v1/legs
+GET /api/v1/sessions
+GET /api/v1/traffic
+GET /api/v1/traffic/history
+GET /api/v1/events       # SSE
 ```
 
-浏览器打开 `http://127.0.0.1:24600/`。
+保持 telemetry 只绑定 `127.0.0.1:24500`。原独立 `smp3-panel` 和 `24600` 已退役。
 
 ## 启动和停止顺序
 
@@ -108,8 +111,8 @@ Panel 只读读取 `127.0.0.1:24500`，不会直接读取或修改数据面：
 计划任务或 supervisor 统一管理，推荐顺序为：
 
 ```text
-启动：Carrier-A → Carrier-B → smp3-client → Panel
-停止：Panel → smp3-client → Carrier-B → Carrier-A
+启动：Carrier-A → Carrier-B → smp3-client
+停止：smp3-client → Carrier-B → Carrier-A
 ```
 
 如果只手动启动 `smp3-client`，需要先保证两个 Carrier 入口已经监听。
@@ -118,12 +121,12 @@ Panel 只读读取 `127.0.0.1:24500`，不会直接读取或修改数据面：
 
 ```bash
 sha256sum -c SHA256SUMS
-curl http://127.0.0.1:24600/api/monitor/status
-curl http://127.0.0.1:24600/api/monitor/history
-curl http://127.0.0.1:24600/api/monitor/events
+curl http://127.0.0.1:24500/api/v1/status
+curl 'http://127.0.0.1:24500/api/v1/traffic?period=today'
+curl 'http://127.0.0.1:24500/api/v1/traffic/history?resolution=hour'
 ```
 
-Panel 页面应能看到 Leg0、Leg1、Carrier-A、Carrier-B、实时速率、Useful ACK、
+Dashboard 页面应能看到 Leg0、Leg1、Carrier-A、Carrier-B、实时速率、Useful ACK、
 流量占比、历史和事件。短连接或低流量请求可能不会触发 Leg1，这是正常的；
 不要把“未激活”直接当作 Leg1 故障。
 
@@ -131,7 +134,7 @@ Panel 页面应能看到 Leg0、Leg1、Carrier-A、Carrier-B、实时速率、Us
 
 - [中文部署与使用教程](DEPLOYMENT.zh-CN.md)
 - [Standalone Sidecar 说明](SIDECAR.zh-CN.md)
-- [Panel 说明](panel/README.md)
+- [部署与使用教程](DEPLOYMENT.md)
 - [安全说明](SECURITY.md)
 - [发布说明](RELEASE_NOTES.md)
 

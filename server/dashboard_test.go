@@ -79,7 +79,7 @@ func TestDashboardVisualStructureAndAccessibilityContract(t *testing.T) {
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
 	html := page.Body.String()
-	for _, required := range []string{"dashboard-sidebar", "overview", "legs", "sessions", "detail-drawer", "detail-close", "aria-label"} {
+	for _, required := range []string{"dashboard-sidebar", "overview", "legs", "sessions", "traffic", "traffic-period", "detail-drawer", "detail-close", "aria-label"} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("dashboard HTML missing visual/accessibility marker %q", required)
 		}
@@ -87,7 +87,7 @@ func TestDashboardVisualStructureAndAccessibilityContract(t *testing.T) {
 	js := httptest.NewRecorder()
 	handler.ServeHTTP(js, httptest.NewRequest(http.MethodGet, "/dashboard.js", nil))
 	jsBody := js.Body.String()
-	for _, required := range []string{"Escape", "detail-close", "sessions-next", "sessions-prev", "renderStartup", "preferred_arrived_within_grace", "Session closed before release", "Startup Status"} {
+	for _, required := range []string{"Escape", "detail-close", "sessions-next", "sessions-prev", "renderStartup", "renderTrafficVolume", "traffic-period", "combined_carrier_bytes", "preferred_arrived_within_grace", "Session closed before release", "Startup Status"} {
 		if !strings.Contains(jsBody, required) {
 			t.Fatalf("dashboard JS missing UX behavior marker %q", required)
 		}
@@ -95,7 +95,7 @@ func TestDashboardVisualStructureAndAccessibilityContract(t *testing.T) {
 	css := httptest.NewRecorder()
 	handler.ServeHTTP(css, httptest.NewRequest(http.MethodGet, "/dashboard.css", nil))
 	cssBody := css.Body.String()
-	for _, required := range []string{"font-variant-numeric: tabular-nums", "@media (max-width: 1024px)", "overflow-x: auto", "prefers-reduced-motion", ".startup-card", ".late-marker"} {
+	for _, required := range []string{"font-variant-numeric: tabular-nums", "@media (max-width: 1024px)", "overflow-x: auto", "prefers-reduced-motion", ".startup-card", ".late-marker", ".accounting-status", ".traffic-columns"} {
 		if !strings.Contains(cssBody, required) {
 			t.Fatalf("dashboard CSS missing visual marker %q", required)
 		}

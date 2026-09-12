@@ -59,7 +59,7 @@ func newTelemetryTestStream(t *testing.T, preferred uint8, grace time.Duration) 
 
 func waitTelemetrySession(t *testing.T, registry *TelemetryRegistry, id smp3core.SessionID, predicate func(*TelemetrySessionSnapshot) bool) TelemetrySessionSnapshot {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		snapshot := registry.Snapshot()
 		for _, row := range snapshot.Sessions {

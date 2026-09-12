@@ -62,6 +62,135 @@ func TestTelemetryHTTPStatusAndHEADShareGETHeaders(t *testing.T) {
 	}
 }
 
+func TestTelemetryHTTPTrafficAndHistoryExposeAuthoritativeAccounting(t *testing.T) {
+	registry := NewTelemetryRegistry(TelemetryConfig{Enabled: true, HMACSecret: []byte("traffic-http-test")})
+	defer registry.Close()
+	httpServer := newTelemetryHTTPServer(registry, time.Now())
+	at := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	httpServer.accounting.Collect(accountingTestSnapshot(at, accountingTestSession("session-a", TelemetryIngressStandalone, 100, 80, 200, 160)))
+	httpServer.accounting.Collect(accountingTestSnapshot(at.Add(time.Second), accountingTestSession("session-a", TelemetryIngressStandalone, 1100, 880, 2200, 1760)))
+
+	traffic := httptest.NewRecorder()
+	httpServer.ServeHTTP(traffic, httptest.NewRequest(http.MethodGet, "/api/v1/traffic?period=all_recorded", nil))
+	if traffic.Code != http.StatusOK || !strings.Contains(traffic.Body.String(), `"combined_carrier_bytes":3000`) || !strings.Contains(traffic.Body.String(), `"accounting_status":"COMPLETE"`) {
+		t.Fatalf("traffic response=%d %q", traffic.Code, traffic.Body.String())
+	}
+
+	history := httptest.NewRecorder()
+	httpServer.ServeHTTP(history, httptest.NewRequest(http.MethodGet, "/api/v1/traffic/history?resolution=hour", nil))
+	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), `"resolution":"hour"`) || !strings.Contains(history.Body.String(), `"items":[`) {
+		t.Fatalf("history response=%d %q", history.Code, history.Body.String())
+	}
+
+	status := httptest.NewRecorder()
+	httpServer.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))
+	for _, marker := range []string{"telemetry_generation", "role_stats", "traffic"} {
+		if !strings.Contains(status.Body.String(), marker) {
+			t.Fatalf("status missing %q: %q", marker, status.Body.String())
+		}
+	}
+}
+
+func TestTelemetryHTTPAPIsShareOneAuthoritativeSnapshot(t *testing.T) {
+	registry := NewTelemetryRegistry(TelemetryConfig{Enabled: true, SnapshotInterval: time.Hour, HMACSecret: []byte("api-consistency-test")})
+	defer registry.Close()
+	var id smp3core.SessionID
+	id[0] = 0x73
+	created := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	if !registry.RegisterSession(id, "stream", created) {
+		t.Fatal("RegisterSession failed")
+	}
+	nativeCounters := &WireCounters{}
+	standaloneCounters := &WireCounters{}
+	registry.AttachLegWithRole(id, 0, 11, nativeCounters, TelemetryIngressNative, created.Add(time.Millisecond))
+	registry.AttachLegWithRole(id, 1, 22, standaloneCounters, TelemetryIngressStandalone, created.Add(2*time.Millisecond))
+	nativeCounters.txBytes.Store(101)
+	nativeCounters.rxBytes.Store(11)
+	standaloneCounters.txBytes.Store(202)
+	standaloneCounters.rxBytes.Store(22)
+	registry.mu.Lock()
+	registry.sessions[id].legs[0].dataSentBytes = 1000
+	registry.sessions[id].legs[0].logicalTxAckedBytes = 900
+	registry.sessions[id].legs[0].logicalRxUniqueBytes = 800
+	registry.sessions[id].legs[1].dataSentBytes = 2000
+	registry.sessions[id].legs[1].logicalTxAckedBytes = 1800
+	registry.sessions[id].legs[1].logicalRxUniqueBytes = 1600
+	registry.mu.Unlock()
+
+	h := newTelemetryHTTPServer(registry, created)
+	defer h.Close()
+	expected := registry.Snapshot()
+	handler := h.Handler()
+
+	var status struct {
+		Generation     string `json:"telemetry_generation"`
+		ActiveSessions uint64 `json:"active_sessions"`
+		ActiveLegs     uint64 `json:"active_legs"`
+		WireTxBytes    uint64 `json:"wire_tx_bytes"`
+		RoleStats      []struct {
+			Role          string `json:"role"`
+			ActiveLegs    uint64 `json:"active_legs"`
+			DataSentBytes uint64 `json:"data_sent_bytes"`
+			UsefulBytes   uint64 `json:"logical_tx_acked_bytes"`
+			Legs          []struct {
+				DataSentBytes uint64 `json:"data_sent_bytes"`
+				UsefulBytes   uint64 `json:"logical_tx_acked_bytes"`
+			} `json:"legs"`
+		} `json:"role_stats"`
+	}
+	statusRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))
+	if statusRecorder.Code != http.StatusOK || json.Unmarshal(statusRecorder.Body.Bytes(), &status) != nil {
+		t.Fatalf("status response=%d %q", statusRecorder.Code, statusRecorder.Body.String())
+	}
+	if status.Generation != h.generation || status.ActiveSessions != expected.ActiveSessions || status.ActiveLegs != expected.ActiveLegs || status.WireTxBytes != expected.TotalWireTx {
+		t.Fatalf("status drift: got=%+v expected generation=%s sessions=%d legs=%d wire_tx=%d", status, h.generation, expected.ActiveSessions, expected.ActiveLegs, expected.TotalWireTx)
+	}
+	if len(status.RoleStats) != len(expected.Roles) {
+		t.Fatalf("role count=%d expected=%d", len(status.RoleStats), len(expected.Roles))
+	}
+	for index, role := range expected.Roles {
+		got := status.RoleStats[index]
+		if got.Role != role.Role || got.ActiveLegs != role.ActiveLegs || got.DataSentBytes != role.DataSentBytes || got.UsefulBytes != role.LogicalTxAckedBytes {
+			t.Fatalf("role[%d] drift: got=%+v expected=%+v", index, got, role)
+		}
+		for leg := range role.Legs {
+			if len(got.Legs) <= leg || got.Legs[leg].DataSentBytes != role.Legs[leg].DataSentBytes || got.Legs[leg].UsefulBytes != role.Legs[leg].LogicalTxAckedBytes {
+				t.Fatalf("role[%d] leg[%d] drift: got=%+v expected=%+v", index, leg, got.Legs, role.Legs)
+			}
+		}
+	}
+
+	var legs struct {
+		Items []struct {
+			LegID         int    `json:"leg_id"`
+			IngressRole   string `json:"ingress_role"`
+			DataSentBytes uint64 `json:"data_sent_bytes"`
+			UsefulBytes   uint64 `json:"logical_tx_acked_bytes"`
+		} `json:"items"`
+	}
+	legsRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(legsRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/legs", nil))
+	if legsRecorder.Code != http.StatusOK || json.Unmarshal(legsRecorder.Body.Bytes(), &legs) != nil || len(legs.Items) != len(expected.Legs) {
+		t.Fatalf("legs response=%d %q", legsRecorder.Code, legsRecorder.Body.String())
+	}
+	for index, expectedLeg := range expected.Legs {
+		got := legs.Items[index]
+		if got.LegID != index || got.IngressRole != legIngressRole(expected, index) || got.DataSentBytes != expectedLeg.DataSentBytes || got.UsefulBytes != expectedLeg.LogicalTxAckedBytes {
+			t.Fatalf("leg[%d] drift: got=%+v expected=%+v", index, got, expectedLeg)
+		}
+	}
+
+	var sessions struct {
+		Items []map[string]any `json:"items"`
+	}
+	sessionsRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(sessionsRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/sessions?limit=50", nil))
+	if sessionsRecorder.Code != http.StatusOK || json.Unmarshal(sessionsRecorder.Body.Bytes(), &sessions) != nil || len(sessions.Items) != len(expected.Sessions) {
+		t.Fatalf("sessions response=%d %q", sessionsRecorder.Code, sessionsRecorder.Body.String())
+	}
+}
+
 func TestTelemetryHTTPRejectsMutationAndRedactsSentinel(t *testing.T) {
 	registry := NewTelemetryRegistry(TelemetryConfig{Enabled: true, HMACSecret: []byte("http-test")})
 	defer registry.Close()

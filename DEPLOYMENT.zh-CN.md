@@ -1,4 +1,4 @@
-# SMP3 v2.3.2 部署与使用教程
+# SMP3 v2.3.3 部署与使用教程
 
 这是一份面向实际使用的简明教程。生产密码、PSK、Reality 私钥和真实节点
 参数只放在本机配置中，不要提交到仓库。
@@ -11,21 +11,21 @@ Native：应用 → Mihomo / Clash Party → SMP3 server
 Standalone：应用 → 127.0.0.1:18080 → smp3-client
             → 本机 Carrier-A / Carrier-B → SMP3 server
 
-Panel：浏览器 → 127.0.0.1:24600 → telemetry 127.0.0.1:24500
+Dashboard：浏览器 → SMP3 server → telemetry 127.0.0.1:24500
 ```
 
 - `smp3-server`：只处理 SMP3，不是 sing-box server。
 - `smp3-client`：提供本机 SOCKS5 和 SMP3 Leg，不实现 VLESS、Reality、
   Hysteria2、Snell 等外层协议。
 - Mihomo/Carrier：保存真正的节点信息，并负责拨号和外层协议。
-- R15 Panel：只读展示 telemetry，不修改 client、Carrier 或 server。
+- Integrated Dashboard：集成在 SMP3 server 中，只读展示 telemetry。
 
 因此，Standalone 的 Leg0/Leg1 不是节点配置本身，而是通过两个 Carrier
 入口去连接 SMP3 server。节点信息配置在 Mihomo/Carrier。
 
 ## 2. 下载和校验
 
-从 [v2.3.2 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.2)
+从 [v2.3.3 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3)
 下载教程和产品制品。该版本只统一运行时版本标识，不改变数据面语义：
 
 | 文件 | 用途 |
@@ -33,7 +33,7 @@ Panel：浏览器 → 127.0.0.1:24600 → telemetry 127.0.0.1:24500
 | `smp3-server-linux-amd64` / Windows 版 | Standalone 服务端 |
 | `smp3-client-linux-amd64` / Windows 版 | Standalone 本地 SOCKS5 |
 | `mihomo-smp3-linux-amd64` / Windows 版 | Native / Clash Party |
-| `smp3-panel-linux-amd64` / Windows 版 | R15 Panel |
+| `smp3-proxy-linux-amd64` / Windows 版 | sing-box 兼容模式 |
 | `SHA256SUMS` | 文件完整性校验 |
 
 ```bash
@@ -62,7 +62,7 @@ cp config/standalone-server.example.json config/server.json
 - `password`：与客户端一致的长随机密码；
 - `sidecar_listeners`、telemetry：按你的部署方案配置。
 
-如果要启用 R15 Panel，至少加入以下 telemetry 配置；它只能绑定 loopback：
+要启用集成 Dashboard，至少加入以下 telemetry 配置；它只能绑定 loopback：
 
 ```json
 "telemetry": {
@@ -163,41 +163,28 @@ SOCKS5: 127.0.0.1:18080
 ## 6. 启动、停止和持久化
 
 推荐由同一个服务管理器、计划任务或 supervisor 管理外部 Carrier、
-`smp3-client` 和 Panel：
+`smp3-client` 和集成 Dashboard：
 
 ```text
-启动：Carrier-A → Carrier-B → smp3-client → Panel
-停止：Panel → smp3-client → Carrier-B → Carrier-A
+启动：Carrier-A → Carrier-B → smp3-client
+停止：smp3-client → Carrier-B → Carrier-A
 ```
 
 `smp3-client` 自身只管理 SMP3 client 进程，不会自动创建或启动 Carrier
 进程。若 Carrier-A/B 已经有独立服务定义，应由上层服务管理器负责依赖关系、
 自动重启和开机启动。
 
-## 7. R15 Panel
+## 7. 集成 Dashboard
 
-Panel 只读连接 loopback telemetry：
-
-```bash
-./smp3-panel-linux-amd64 \
-  -listen 127.0.0.1:24600 \
-  -telemetry http://127.0.0.1:24500 \
-  -history monitor-history.jsonl
-```
-
-浏览器访问：
+Dashboard 由 `smp3-server` 提供，不要再启动已经退役的独立 `smp3-panel`，也不要使用 `24600`：
 
 ```text
-http://127.0.0.1:24600/
-```
-
-只读接口：
-
-```text
-GET /api/monitor/status
-GET /api/monitor/history
-GET /api/monitor/events
-GET /api/monitor/stream   # SSE
+GET /api/v1/status
+GET /api/v1/legs
+GET /api/v1/sessions
+GET /api/v1/traffic
+GET /api/v1/traffic/history
+GET /api/v1/events       # SSE
 ```
 
 页面可以查看：
@@ -207,7 +194,7 @@ GET /api/monitor/stream   # SSE
 - TX 速率、Useful ACK 速率、流量占比；
 - 事件、健康分类和有限历史。
 
-Panel 不展示 raw SessionID、目标地址、payload、密码或私钥。
+Dashboard 不展示 raw SessionID、目标地址、payload、密码或私钥。
 
 ## 8. 首次验证
 
@@ -217,19 +204,19 @@ Panel 不展示 raw SessionID、目标地址、payload、密码或私钥。
 2. Carrier-A/B 的监听端口正常；
 3. `smp3-client -check` 成功且 `18080` 已监听；
 4. 应用通过 `127.0.0.1:18080` 发起一个普通 TCP 请求；
-5. Panel 能读取 status、history、events，SSE 页面保持更新；
+5. Dashboard 能读取 status、traffic、history、events，SSE 页面保持更新；
 6. 确认 Leg0 先 ready；产生足够持续流量后再观察 Leg1 是否加入。
 
 推荐端口检查：
 
 ```bash
-ss -ltnp | grep -E '17898|17899|18080|24500|24600'
+ss -ltnp | grep -E '17898|17899|18080|24500'
 ```
 
 Windows PowerShell：
 
 ```powershell
-Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500,24600
+Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500
 ```
 
 ## 9. 常见问题
@@ -240,8 +227,8 @@ Get-NetTCPConnection -State Listen -LocalPort 17898,17899,18080,24500,24600
 | Leg1 一直 down | 流量是否足够、是否达到 activation threshold、Carrier-B 是否监听 |
 | 误以为 client 需要 VLESS/Reality | 这些由 Mihomo/Carrier 拨号，client 不实现 |
 | 只能访问 TCP | 应用是否支持 SOCKS5 UDP，且两端 UDP 已启用 |
-| Panel 无数据 | `24500` 是否监听、Panel telemetry URL 是否正确 |
-| Panel 页面能开但 SSE 不更新 | 检查 `/api/monitor/stream` 和 telemetry 日志 |
+| Dashboard 无数据 | `24500` 是否监听、服务端 telemetry 是否启用 |
+| Dashboard 页面能开但 SSE 不更新 | 检查 `/api/v1/events` 和 telemetry 日志 |
 
 ## 10. 安全要求
 

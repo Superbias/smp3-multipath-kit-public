@@ -48,7 +48,7 @@ func (h *telemetryHTTPServer) handleEvents(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if err := writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
+	if err := h.writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
 		return
 	}
 	if events, snapshot, activationStale, closed := h.registry.activateSSE(subscriber); !closed {
@@ -56,7 +56,7 @@ func (h *telemetryHTTPServer) handleEvents(w http.ResponseWriter, r *http.Reques
 			if err := writeSSEReset(w); err != nil {
 				return
 			}
-			if err := writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
+			if err := h.writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
 				return
 			}
 		}
@@ -64,7 +64,7 @@ func (h *telemetryHTTPServer) handleEvents(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if snapshot {
-			if err := writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
+			if err := h.writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
 				return
 			}
 		}
@@ -90,7 +90,7 @@ func (h *telemetryHTTPServer) handleEvents(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			if snapshot {
-				if err := writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
+				if err := h.writeSSESnapshot(w, h.registry.LatestSnapshot()); err != nil {
 					return
 				}
 			}
@@ -143,6 +143,31 @@ func writeSSEReset(w http.ResponseWriter) error {
 	return writeSSEFrame(w, "reset", 0, map[string]any{"reason": "history_expired"}, false)
 }
 
+func (h *telemetryHTTPServer) writeSSESnapshot(w http.ResponseWriter, snapshot TelemetrySnapshot) error {
+	h.accountSnapshot(snapshot)
+	var traffic *TrafficReport
+	if h.accounting != nil {
+		report := h.trafficReport("today", snapshot)
+		traffic = &report
+	}
+	return writeSSEAggregate(w, telemetrySSEAggregate{
+		SnapshotAt:             snapshot.Timestamp,
+		Generation:             h.generation,
+		WindowDuration:         snapshot.WindowDuration,
+		ActiveSessions:         snapshot.ActiveSessions,
+		TotalSessions:          snapshot.TotalSessions,
+		ActiveLegs:             snapshot.ActiveLegs,
+		TotalWireTx:            snapshot.TotalWireTx,
+		TotalWireRx:            snapshot.TotalWireRx,
+		CurrentWireTxRate:      snapshot.CurrentWireTxRate,
+		CurrentWireRxRate:      snapshot.CurrentWireRxRate,
+		TelemetryDroppedEvents: snapshot.TelemetryDroppedEvents,
+		Legs:                   snapshot.Legs,
+		Roles:                  snapshot.Roles,
+		Traffic:                traffic,
+	})
+}
+
 func writeSSESnapshot(w http.ResponseWriter, snapshot TelemetrySnapshot) error {
 	return writeSSEAggregate(w, telemetrySSEAggregate{
 		SnapshotAt:             snapshot.Timestamp,
@@ -164,29 +189,35 @@ func writeSSEAggregate(w http.ResponseWriter, aggregate telemetrySSEAggregate) e
 	for leg := range aggregate.Legs {
 		a := aggregate.Legs[leg]
 		legs[leg] = map[string]any{
-			"leg_id":                  leg,
-			"active_sessions":         a.ActiveSessions,
-			"active_connections":      a.ActiveConnections,
-			"wire_tx_bytes":           a.WireTxBytes,
-			"wire_rx_bytes":           a.WireRxBytes,
-			"wire_tx_rate_bps":        a.WireTxRate,
-			"wire_rx_rate_bps":        a.WireRxRate,
-			"wire_share":              shareValue(a.WireShare),
-			"wire_tx_share":           shareValue(a.WireTxShare),
-			"wire_rx_share":           shareValue(a.WireRxShare),
-			"logical_tx_acked_bytes":  a.LogicalTxAckedBytes,
-			"logical_rx_unique_bytes": a.LogicalRxUniqueBytes,
-			"logical_tx_share":        shareValue(a.LogicalTxShare),
-			"logical_rx_share":        shareValue(a.LogicalRxShare),
-			"retransmit_bytes":        a.RetransmitBytes,
-			"retransmit_frames":       a.RetransmitFrames,
-			"rescue_frames":           a.RescueAttemptFrames,
-			"rescue_bytes":            a.RescueAttemptBytes,
-			"data_attempt_frames":     a.DataAttemptFrames,
+			"leg_id":                     leg,
+			"ingress_role":               legIngressRoleFromAggregate(aggregate.Roles, leg),
+			"active_sessions":            a.ActiveSessions,
+			"active_connections":         a.ActiveConnections,
+			"wire_tx_bytes":              a.WireTxBytes,
+			"wire_rx_bytes":              a.WireRxBytes,
+			"wire_tx_rate_bps":           a.WireTxRate,
+			"wire_rx_rate_bps":           a.WireRxRate,
+			"data_sent_bytes":            a.DataSentBytes,
+			"data_sent_rate_bps":         a.DataSentRate,
+			"wire_share":                 shareValue(a.WireShare),
+			"wire_tx_share":              shareValue(a.WireTxShare),
+			"wire_rx_share":              shareValue(a.WireRxShare),
+			"logical_tx_acked_bytes":     a.LogicalTxAckedBytes,
+			"logical_tx_acked_rate_bps":  a.LogicalTxAckedRate,
+			"logical_rx_unique_bytes":    a.LogicalRxUniqueBytes,
+			"logical_rx_unique_rate_bps": a.LogicalRxUniqueRate,
+			"logical_tx_share":           shareValue(a.LogicalTxShare),
+			"logical_rx_share":           shareValue(a.LogicalRxShare),
+			"retransmit_bytes":           a.RetransmitBytes,
+			"retransmit_frames":          a.RetransmitFrames,
+			"rescue_frames":              a.RescueAttemptFrames,
+			"rescue_bytes":               a.RescueAttemptBytes,
+			"data_attempt_frames":        a.DataAttemptFrames,
 		}
 	}
 	payload := map[string]any{
 		"snapshot_at":              nullableTimeString(aggregate.SnapshotAt),
+		"telemetry_generation":     aggregate.Generation,
 		"window_ms":                aggregate.WindowDuration.Milliseconds(),
 		"active_sessions":          aggregate.ActiveSessions,
 		"total_sessions":           aggregate.TotalSessions,
@@ -197,8 +228,34 @@ func writeSSEAggregate(w http.ResponseWriter, aggregate telemetrySSEAggregate) e
 		"wire_rx_rate_bps":         aggregate.CurrentWireRxRate,
 		"telemetry_dropped_events": aggregate.TelemetryDroppedEvents,
 		"legs":                     legs,
+		"role_stats":               roleStatsJSON(TelemetrySnapshot{Roles: aggregate.Roles}),
+	}
+	if aggregate.Traffic != nil {
+		payload["traffic"] = aggregate.Traffic
 	}
 	return writeSSEFrame(w, "snapshot", 0, payload, false)
+}
+
+func legIngressRoleFromAggregate(roles [4]TelemetryRoleAggregate, leg int) string {
+	seen := make(map[string]struct{}, 2)
+	for _, role := range roles {
+		if role.Role == TelemetryIngressUnknown || role.Role == TelemetryIngressMixed {
+			continue
+		}
+		value := role.Legs[leg]
+		if value.DataSentBytes > 0 || value.LogicalTxAckedBytes > 0 || value.LogicalRxUniqueBytes > 0 || role.ActiveLegs > 0 {
+			seen[role.Role] = struct{}{}
+		}
+	}
+	if len(seen) == 1 {
+		for role := range seen {
+			return role
+		}
+	}
+	if len(seen) > 1 {
+		return TelemetryIngressMixed
+	}
+	return TelemetryIngressUnknown
 }
 
 func writeSSEKeepalive(w http.ResponseWriter) error {

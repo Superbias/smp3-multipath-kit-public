@@ -22,9 +22,14 @@ const (
 )
 
 type telemetryHTTPServer struct {
-	registry  *TelemetryRegistry
-	version   string
-	startedAt time.Time
+	registry          *TelemetryRegistry
+	version           string
+	startedAt         time.Time
+	generation        string
+	accounting        *trafficAccounting
+	accountingStop    chan struct{}
+	accountingDone    chan struct{}
+	accountingStarted bool
 
 	cacheMu sync.Mutex
 	cache   map[string]TelemetrySnapshot
@@ -36,12 +41,29 @@ type telemetryHTTPServer struct {
 }
 
 func newTelemetryHTTPServer(registry *TelemetryRegistry, startedAt time.Time) *telemetryHTTPServer {
-	return &telemetryHTTPServer{
-		registry:  registry,
-		version:   Version,
-		startedAt: startedAt,
-		cache:     make(map[string]TelemetrySnapshot),
+	server, err := newTelemetryHTTPServerWithConfig(registry, startedAt, registry.cfg)
+	if err != nil {
+		panic(err)
 	}
+	return server
+}
+
+func newTelemetryHTTPServerWithConfig(registry *TelemetryRegistry, startedAt time.Time, config TelemetryConfig) (*telemetryHTTPServer, error) {
+	generation := startedAt.UTC().Format(time.RFC3339Nano)
+	accounting, err := newTrafficAccounting(config.AccountingPath, config.AccountingTimezone, generation, config.AccountingInterval)
+	if err != nil {
+		return nil, err
+	}
+	return &telemetryHTTPServer{
+		registry:       registry,
+		version:        Version,
+		startedAt:      startedAt,
+		generation:     generation,
+		accounting:     accounting,
+		accountingStop: make(chan struct{}),
+		accountingDone: make(chan struct{}),
+		cache:          make(map[string]TelemetrySnapshot),
+	}, nil
 }
 
 func (h *telemetryHTTPServer) Handler() http.Handler { return h }
@@ -52,6 +74,7 @@ func (h *telemetryHTTPServer) Start(listen string) error {
 		return err
 	}
 	h.listener = listener
+	h.startAccounting()
 	h.server = &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: 2 * time.Second,
@@ -79,6 +102,19 @@ func (h *telemetryHTTPServer) Close() error {
 	}
 	var err error
 	h.closeOne.Do(func() {
+		if h.accountingStop != nil && h.accountingStarted {
+			close(h.accountingStop)
+			<-h.accountingDone
+		} else if h.accountingDone != nil {
+			select {
+			case <-h.accountingDone:
+			default:
+				close(h.accountingDone)
+			}
+		}
+		if h.accounting != nil {
+			_ = h.accounting.Flush()
+		}
 		if h.server != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			err = h.server.Shutdown(ctx)
@@ -109,6 +145,10 @@ func (h *telemetryHTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		h.handleLegs(w, head)
 	case r.URL.Path == "/api/v1/sessions":
 		h.handleSessions(w, r, head)
+	case r.URL.Path == "/api/v1/traffic":
+		h.handleTraffic(w, r, head)
+	case r.URL.Path == "/api/v1/traffic/history":
+		h.handleTrafficHistory(w, r, head)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/sessions/"):
 		h.handleSessionDetail(w, r, head)
 	case r.URL.Path == "/" || r.URL.Path == "/dashboard.js" || r.URL.Path == "/dashboard.css":
@@ -148,6 +188,7 @@ func writeTelemetryJSON(w http.ResponseWriter, status int, value any, head bool)
 
 func (h *telemetryHTTPServer) captureSnapshot() TelemetrySnapshot {
 	snapshot := h.registry.LatestSnapshot()
+	h.accountSnapshot(snapshot)
 	key := snapshot.Timestamp.UTC().Format(time.RFC3339Nano)
 	h.cacheMu.Lock()
 	if key != "0001-01-01T00:00:00Z" {
@@ -162,6 +203,39 @@ func (h *telemetryHTTPServer) captureSnapshot() TelemetrySnapshot {
 	}
 	h.cacheMu.Unlock()
 	return snapshot
+}
+
+func (h *telemetryHTTPServer) startAccounting() {
+	if h.accounting == nil || h.registry == nil || !h.registry.Enabled() {
+		close(h.accountingDone)
+		return
+	}
+	h.accountingStarted = true
+	interval := h.registry.cfg.SnapshotInterval
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	go func() {
+		defer close(h.accountingDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-h.accountingStop:
+				return
+			case <-ticker.C:
+				h.accountSnapshot(h.registry.LatestSnapshot())
+			}
+		}
+	}()
+}
+
+func (h *telemetryHTTPServer) accountSnapshot(snapshot TelemetrySnapshot) {
+	if h.accounting == nil {
+		return
+	}
+	h.accounting.Collect(snapshot)
+	_ = h.accounting.persistIfDue(snapshot.Timestamp)
 }
 
 func (h *telemetryHTTPServer) snapshotForCursor(cursor string) (TelemetrySnapshot, *telemetryErrorBody) {
@@ -196,6 +270,7 @@ func (h *telemetryHTTPServer) handleStatus(w http.ResponseWriter, head bool) {
 	}
 	value := map[string]any{
 		"version":                  h.version,
+		"telemetry_generation":     h.generation,
 		"uptime_ms":                uptime,
 		"snapshot_at":              nullableTimeString(snapshot.Timestamp),
 		"window_ms":                snapshot.WindowDuration.Milliseconds(),
@@ -207,6 +282,10 @@ func (h *telemetryHTTPServer) handleStatus(w http.ResponseWriter, head bool) {
 		"wire_tx_rate_bps":         snapshot.CurrentWireTxRate,
 		"wire_rx_rate_bps":         snapshot.CurrentWireRxRate,
 		"telemetry_dropped_events": snapshot.TelemetryDroppedEvents,
+		"role_stats":               roleStatsJSON(snapshot),
+	}
+	if h.accounting != nil {
+		value["traffic"] = h.trafficReport("today", snapshot)
 	}
 	writeTelemetryJSON(w, http.StatusOK, value, head)
 }
@@ -217,29 +296,75 @@ func (h *telemetryHTTPServer) handleLegs(w http.ResponseWriter, head bool) {
 	for leg := range snapshot.Legs {
 		a := snapshot.Legs[leg]
 		items[leg] = map[string]any{
-			"leg_id":                  leg,
-			"active_sessions":         a.ActiveSessions,
-			"active_connections":      a.ActiveConnections,
-			"wire_tx_bytes":           a.WireTxBytes,
-			"wire_rx_bytes":           a.WireRxBytes,
-			"wire_tx_rate_bps":        a.WireTxRate,
-			"wire_rx_rate_bps":        a.WireRxRate,
-			"wire_share":              shareValue(a.WireShare),
-			"wire_tx_share":           shareValue(a.WireTxShare),
-			"wire_rx_share":           shareValue(a.WireRxShare),
-			"logical_tx_acked_bytes":  a.LogicalTxAckedBytes,
-			"logical_rx_unique_bytes": a.LogicalRxUniqueBytes,
-			"logical_tx_share":        shareValue(a.LogicalTxShare),
-			"logical_rx_share":        shareValue(a.LogicalRxShare),
-			"retransmit_bytes":        a.RetransmitBytes,
-			"retransmit_frames":       a.RetransmitFrames,
-			"rescue_frames":           a.RescueAttemptFrames,
-			"rescue_bytes":            a.RescueAttemptBytes,
-			"data_attempt_frames":     a.DataAttemptFrames,
-			"first_data_count":        firstDataCount(snapshot, leg),
+			"leg_id":                     leg,
+			"ingress_role":               legIngressRole(snapshot, leg),
+			"active_sessions":            a.ActiveSessions,
+			"active_connections":         a.ActiveConnections,
+			"wire_tx_bytes":              a.WireTxBytes,
+			"wire_rx_bytes":              a.WireRxBytes,
+			"wire_tx_rate_bps":           a.WireTxRate,
+			"wire_rx_rate_bps":           a.WireRxRate,
+			"data_sent_bytes":            a.DataSentBytes,
+			"data_sent_rate_bps":         a.DataSentRate,
+			"wire_share":                 shareValue(a.WireShare),
+			"wire_tx_share":              shareValue(a.WireTxShare),
+			"wire_rx_share":              shareValue(a.WireRxShare),
+			"logical_tx_acked_bytes":     a.LogicalTxAckedBytes,
+			"logical_tx_acked_rate_bps":  a.LogicalTxAckedRate,
+			"logical_rx_unique_bytes":    a.LogicalRxUniqueBytes,
+			"logical_rx_unique_rate_bps": a.LogicalRxUniqueRate,
+			"logical_tx_share":           shareValue(a.LogicalTxShare),
+			"logical_rx_share":           shareValue(a.LogicalRxShare),
+			"retransmit_bytes":           a.RetransmitBytes,
+			"retransmit_frames":          a.RetransmitFrames,
+			"rescue_frames":              a.RescueAttemptFrames,
+			"rescue_bytes":               a.RescueAttemptBytes,
+			"data_attempt_frames":        a.DataAttemptFrames,
+			"first_data_count":           firstDataCount(snapshot, leg),
 		}
 	}
 	writeTelemetryJSON(w, http.StatusOK, map[string]any{"snapshot_at": nullableTimeString(snapshot.Timestamp), "items": items}, head)
+}
+
+func (h *telemetryHTTPServer) handleTraffic(w http.ResponseWriter, r *http.Request, head bool) {
+	snapshot := h.captureSnapshot()
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "today"
+	}
+	if h.accounting == nil {
+		writeTelemetryJSON(w, http.StatusServiceUnavailable, telemetryError{Error: telemetryErrorBody{"ACCOUNTING_UNAVAILABLE", "traffic accounting is unavailable"}}, head)
+		return
+	}
+	writeTelemetryJSON(w, http.StatusOK, h.trafficReport(period, snapshot), head)
+}
+
+func (h *telemetryHTTPServer) handleTrafficHistory(w http.ResponseWriter, r *http.Request, head bool) {
+	if h.accounting == nil {
+		writeTelemetryJSON(w, http.StatusServiceUnavailable, telemetryError{Error: telemetryErrorBody{"ACCOUNTING_UNAVAILABLE", "traffic accounting is unavailable"}}, head)
+		return
+	}
+	resolution := r.URL.Query().Get("resolution")
+	writeTelemetryJSON(w, http.StatusOK, h.accounting.History(resolution, time.Now().UTC()), head)
+}
+
+func (h *telemetryHTTPServer) trafficReport(period string, snapshot TelemetrySnapshot) TrafficReport {
+	report := h.accounting.Report(period, snapshot.Timestamp, snapshot)
+	if h.registry != nil {
+		report.SamplingIntervalMS = h.registry.cfg.SnapshotInterval.Milliseconds()
+	}
+	report.RateWindowMS = snapshot.WindowDuration.Milliseconds()
+	report.HistoryBucketResolution = "minute buckets; API history aggregates to hour or day"
+	report.TrafficShareBasis = "per-leg carrier bytes and useful bytes; shares are calculated within the selected period"
+	if !snapshot.Timestamp.IsZero() {
+		report.LastTelemetryUpdate = snapshot.Timestamp.UTC().Format(time.RFC3339Nano)
+		age := time.Since(snapshot.Timestamp)
+		if age < 0 {
+			age = 0
+		}
+		report.SnapshotAgeMS = age.Milliseconds()
+	}
+	return report
 }
 
 type telemetryCursor struct {
@@ -344,8 +469,10 @@ func nullableTimeString(value time.Time) any {
 func sessionCompactJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[string]any {
 	result := map[string]any{
 		"display_session_id":    row.DisplaySessionID,
+		"ingress_role":          row.IngressRole,
 		"mode":                  row.Mode,
 		"created_at":            nullableTimeString(row.CreatedAt),
+		"closed_at":             nullableTimeString(row.ClosedAt),
 		"duration_ms":           durationAt(row.CreatedAt, row.ClosedAt, snapshotAt),
 		"leg0_state":            row.Legs[0].State,
 		"leg1_state":            row.Legs[1].State,
@@ -353,8 +480,14 @@ func sessionCompactJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[
 		"leg1_attach_at":        nullableTimeString(row.Legs[1].AttachAt),
 		"leg0_wire_tx_bytes":    row.Legs[0].WireTxBytes,
 		"leg0_wire_rx_bytes":    row.Legs[0].WireRxBytes,
+		"leg0_ingress_role":     row.Legs[0].IngressRole,
+		"leg0_generation":       row.Legs[0].Generation,
+		"leg0_data_sent_bytes":  row.Legs[0].DataSentBytes,
 		"leg1_wire_tx_bytes":    row.Legs[1].WireTxBytes,
 		"leg1_wire_rx_bytes":    row.Legs[1].WireRxBytes,
+		"leg1_ingress_role":     row.Legs[1].IngressRole,
+		"leg1_generation":       row.Legs[1].Generation,
+		"leg1_data_sent_bytes":  row.Legs[1].DataSentBytes,
 		"leg0_logical_tx_bytes": row.Legs[0].LogicalTxAckedBytes,
 		"leg0_logical_rx_bytes": row.Legs[0].LogicalRxUniqueBytes,
 		"leg1_logical_tx_bytes": row.Legs[1].LogicalTxAckedBytes,
@@ -461,4 +594,52 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func roleStatsJSON(snapshot TelemetrySnapshot) []map[string]any {
+	items := make([]map[string]any, 0, len(snapshot.Roles))
+	for _, role := range snapshot.Roles {
+		legs := make([]map[string]any, 2)
+		for leg := range role.Legs {
+			value := role.Legs[leg]
+			legs[leg] = map[string]any{
+				"leg_id":                  leg,
+				"data_sent_bytes":         value.DataSentBytes,
+				"logical_tx_acked_bytes":  value.LogicalTxAckedBytes,
+				"logical_rx_unique_bytes": value.LogicalRxUniqueBytes,
+			}
+		}
+		items = append(items, map[string]any{
+			"role":                    role.Role,
+			"active_sessions":         role.ActiveSessions,
+			"active_legs":             role.ActiveLegs,
+			"data_sent_bytes":         role.DataSentBytes,
+			"logical_tx_acked_bytes":  role.LogicalTxAckedBytes,
+			"logical_rx_unique_bytes": role.LogicalRxUniqueBytes,
+			"legs":                    legs,
+		})
+	}
+	return items
+}
+
+func legIngressRole(snapshot TelemetrySnapshot, leg int) string {
+	roles := make(map[string]struct{}, 2)
+	for _, row := range snapshot.Sessions {
+		if leg < 0 || leg >= len(row.Legs) {
+			continue
+		}
+		role := row.Legs[leg].IngressRole
+		if role != "" && role != TelemetryIngressUnknown {
+			roles[role] = struct{}{}
+		}
+	}
+	if len(roles) == 1 {
+		for role := range roles {
+			return role
+		}
+	}
+	if len(roles) > 1 {
+		return TelemetryIngressMixed
+	}
+	return TelemetryIngressUnknown
 }

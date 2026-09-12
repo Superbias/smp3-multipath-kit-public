@@ -1,3 +1,29 @@
+# SMP3 2.3.3
+
+R16 integrates the read-only Dashboard and accurate telemetry accounting into
+`smp3-server`. The standalone `smp3-panel` process is retired and is not a
+v2.3.3 release asset.
+
+## Included
+
+- Realtime status, Sessions, Traffic, History, Events, and SSE views.
+- Native/Standalone ingress classification from authoritative listener role.
+- Leg0/Leg1 rates and cumulative Carrier/Useful traffic.
+- Current Session, Today, Last 24 Hours, 7 Days, and All Recorded periods.
+- Restart-safe, counter-reset-safe, session-replacement-safe accounting with
+  explicit telemetry gap and staleness status.
+- Standalone and Native routing, Core transfer semantics, scheduler semantics,
+  per-leg routing, and SMP3 wire protocol are unchanged.
+- All official v2.3.3 product binaries use the unified package version. Mihomo
+  is built from pinned upstream `v1.19.28`; `smp3-proxy` retains its pinned
+  sing-box runtime identity with the SMP3 release suffix.
+
+## Official binary assets
+
+The release contains eight binaries: `smp3-client`, `smp3-server`,
+`smp3-proxy`, and `mihomo-smp3`, each for Linux/amd64 and Windows/amd64,
+plus `SHA256SUMS`. No standalone `smp3-panel` binary is shipped.
+
 # SMP3 2.3.2
 
 This release unifies the public runtime version metadata across the
