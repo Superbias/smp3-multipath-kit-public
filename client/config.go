@@ -14,9 +14,9 @@ import (
 	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
 
-// Version is the public SMP3 sidecar release version. Official builds inject
-// the same value from the repository VERSION file with -ldflags.
-var Version = "2.3.2"
+// Version is the public SMP3 Standalone client release version. Official builds
+// inject the same value from the repository VERSION file with -ldflags.
+var Version = "2.3.4"
 
 type Duration time.Duration
 
@@ -70,6 +70,17 @@ type UpstreamSocksOptions struct {
 	ConnectTimeout Duration               `json:"connect_timeout"`
 	Leg0           *UpstreamSocksOverride `json:"leg0,omitempty"`
 	Leg1           *UpstreamSocksOverride `json:"leg1,omitempty"`
+}
+
+// LegUpstreamAddresses returns only the safe endpoint identities used by each
+// logical leg. It intentionally excludes upstream credentials and other
+// protocol-specific settings so callers can log or display binding state
+// without exposing secrets.
+func (c Config) LegUpstreamAddresses() [2]string {
+	return [2]string{
+		c.effectiveUpstream(0).Address,
+		c.effectiveUpstream(1).Address,
+	}
 }
 
 // UpstreamSocksOverride selects a carrier SOCKS5 endpoint for one logical

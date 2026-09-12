@@ -1,3 +1,21 @@
+# SMP3 2.3.4 (release candidate)
+
+R18 release hardening normalizes the dual-mode product identity for the next
+release. Standalone and Native remain separate product lines; the optional
+sing-box compatibility artifact remains isolated from the Standalone build.
+
+## Included
+
+- Standalone: `smp3-client` and `smp3-server` with independent per-leg generic
+  SOCKS5 endpoint configuration.
+- Native: `mihomo-smp3` with the pinned Mihomo adapter workflow.
+- Compatibility: `smp3-proxy` remains optional and uses its pinned sing-box
+  runtime with an SMP3 `2.3.4` release suffix.
+- `build.sh` builds Standalone only; Native and Compatibility have explicit
+  separate workflows.
+- Core, wire, scheduler, ACK, retransmission, server data-plane, and Native
+  child-outbound semantics are unchanged.
+
 # SMP3 2.3.3
 
 R16 integrates the read-only Dashboard and accurate telemetry accounting into

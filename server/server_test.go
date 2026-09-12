@@ -219,6 +219,10 @@ func TestServerTelemetryCountsAuthenticatedHelloAndActiveLegs(t *testing.T) {
 	target := startTCPEcho(t)
 	cfg := testConfig()
 	cfg.Telemetry.Enabled = true
+	// This test exercises telemetry aggregation, not the production port
+	// reservation. Use an ephemeral loopback port so an already-running
+	// production telemetry listener cannot make the disposable test fail.
+	cfg.Telemetry.Listen = "127.0.0.1:0"
 	cfg.Telemetry.MaxActiveSessions = 8
 	instance := startTestServer(t, cfg)
 	var id smp3core.SessionID
@@ -266,6 +270,9 @@ func TestServerTelemetryTenLocalTwoLegSessionsAggregate(t *testing.T) {
 	target := startTCPEcho(t)
 	cfg := testConfig()
 	cfg.Telemetry.Enabled = true
+	// Keep this disposable aggregate fixture isolated from the production
+	// default 127.0.0.1:24500 listener.
+	cfg.Telemetry.Listen = "127.0.0.1:0"
 	cfg.Telemetry.MaxActiveSessions = 32
 	instance := startTestServer(t, cfg)
 

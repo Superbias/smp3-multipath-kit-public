@@ -1,4 +1,4 @@
-# SMP3 v2.3.3 Deployment and Usage
+# SMP3 v2.3.4 Deployment and Usage
 
 This is the short operational guide for the current release. Keep production
 passwords, PSKs, Reality keys, subscriptions, and real node configs outside
@@ -20,8 +20,8 @@ dialing.
 
 ## 2. Download and verify
 
-Download the v2.3.3 assets from the
-[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3):
+Download the v2.3.4 assets from the
+[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4):
 
 | Asset | Purpose |
 | --- | --- |
@@ -108,7 +108,8 @@ Copy [examples/smp3-client-config.example.json](examples/smp3-client-config.exam
 to a private config and set:
 
 - `listen`, normally `127.0.0.1:18080`;
-- the upstream SOCKS5 address;
+- `upstream_socks.leg0`, the SOCKS5 listener identity for Leg0;
+- `upstream_socks.leg1`, the SOCKS5 listener identity for Leg1;
 - the SMP3 password;
 - `smp3.routes.leg0` and `leg1`;
 - optional `leg1_fallback`.
@@ -123,6 +124,14 @@ On Windows use the `.exe` with the same arguments. Point applications to:
 ```text
 socks5://127.0.0.1:18080
 ```
+
+The legacy global `upstream_socks.address`, username/password, and timeout
+fields remain supported. A missing per-leg override uses that global endpoint;
+when an override is present it applies only to its own leg. The client does not
+switch Leg1 to Leg0's SOCKS endpoint automatically.
+
+See [the Standalone external proxy contract](docs/standalone/EXTERNAL_PROXY.md)
+for the one-process/two-listener model and vendor-neutral responsibility split.
 
 ### 5.3 Leg behavior
 

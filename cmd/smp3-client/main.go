@@ -29,7 +29,8 @@ func main() {
 		os.Exit(1)
 	}
 	if *check {
-		fmt.Printf("config OK: listen=%s upstream_socks=%s connect_timeout=%s\n", cfg.Listen, cfg.UpstreamSocks.Address, cfg.UpstreamSocks.ConnectTimeout.Time())
+		upstreams := cfg.LegUpstreamAddresses()
+		fmt.Printf("config OK: mode=Standalone listen=%s leg0_upstream_socks=%s leg1_upstream_socks=%s connect_timeout=%s\n", cfg.Listen, upstreams[0], upstreams[1], cfg.UpstreamSocks.ConnectTimeout.Time())
 		return
 	}
 	instance, err := smp3client.New(cfg)

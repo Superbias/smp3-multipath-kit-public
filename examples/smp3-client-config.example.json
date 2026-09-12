@@ -2,7 +2,13 @@
   "listen": "127.0.0.1:18080",
   "upstream_socks": {
     "address": "socks-gateway.example.invalid:7898",
-    "connect_timeout": "10s"
+    "connect_timeout": "10s",
+    "leg0": {
+      "address": "127.0.0.1:10001"
+    },
+    "leg1": {
+      "address": "127.0.0.1:10002"
+    }
   },
   "smp3": {
     "password": "CHANGE_ME",

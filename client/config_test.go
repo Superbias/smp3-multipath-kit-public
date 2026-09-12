@@ -197,3 +197,19 @@ func TestPerLegUpstreamOverrideValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestLegUpstreamAddressesExposeOnlySafeBindingIdentities(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.UpstreamSocks.Address = "127.0.0.1:10001"
+	cfg.UpstreamSocks.Username = "hidden-user"
+	cfg.UpstreamSocks.Password = "hidden-password"
+	cfg.UpstreamSocks.Leg1 = &UpstreamSocksOverride{
+		Address:  "127.0.0.1:10002",
+		Username: "hidden-leg-user",
+		Password: "hidden-leg-password",
+	}
+	addresses := cfg.LegUpstreamAddresses()
+	if addresses != [2]string{"127.0.0.1:10001", "127.0.0.1:10002"} {
+		t.Fatalf("safe leg upstream addresses = %v", addresses)
+	}
+}

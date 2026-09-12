@@ -2,4 +2,4 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-exec "$ROOT/scripts/build-phase6-artifacts.sh" "$@"
+exec "$ROOT/scripts/build-standalone.sh" "$@"

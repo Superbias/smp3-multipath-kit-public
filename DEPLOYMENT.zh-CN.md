@@ -1,4 +1,4 @@
-# SMP3 v2.3.3 部署与使用教程
+# SMP3 v2.3.4 部署与使用教程
 
 这是一份面向实际使用的简明教程。生产密码、PSK、Reality 私钥和真实节点
 参数只放在本机配置中，不要提交到仓库。
@@ -25,7 +25,7 @@ Dashboard：浏览器 → SMP3 server → telemetry 127.0.0.1:24500
 
 ## 2. 下载和校验
 
-从 [v2.3.3 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3)
+从 [v2.3.4 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4)
 下载教程和产品制品。该版本只统一运行时版本标识，不改变数据面语义：
 
 | 文件 | 用途 |
@@ -128,7 +128,8 @@ cp examples/smp3-client-config.example.json config/smp3-client.json
 修改以下内容：
 
 - `listen`：默认 `127.0.0.1:18080`；
-- `upstream_socks`：Carrier 提供的 SOCKS5 地址；
+- `upstream_socks.leg0`：Leg0 的 SOCKS5 listener；
+- `upstream_socks.leg1`：Leg1 的 SOCKS5 listener；
 - `smp3.password`：与 server 相同；
 - `smp3.routes.leg0`、`leg1`：分别指向 SMP3 server 的两个入口；
 - `leg1_fallback`：可选备用路径。
@@ -152,6 +153,14 @@ Windows：
 ```text
 SOCKS5: 127.0.0.1:18080
 ```
+
+旧配置中的 `upstream_socks.address`、账号密码和 timeout 仍然兼容。缺少某条
+Leg override 时，该 Leg 使用全局地址；存在 override 时只作用于自己的 Leg，
+不会把 Leg1 自动切换到 Leg0 的 SOCKS5 endpoint。
+
+一个外部代理进程可以同时提供两个独立 listener，也可以由两个进程分别提供。
+Standalone 不读取节点协议配置，只连接通用 SOCKS5。详见
+[Standalone 外部代理 contract](docs/standalone/EXTERNAL_PROXY.md)。
 
 ### 5.3 Leg0/Leg1 行为
 

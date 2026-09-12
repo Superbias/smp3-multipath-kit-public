@@ -12,7 +12,7 @@ OUT_ZIP="${1:-$ROOT/$NAME-source.zip}"
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$STAGE/config" "$STAGE/patches" "$STAGE/scripts" \
   "$STAGE/src" "$STAGE/core" "$STAGE/server" "$STAGE/cmd" "$STAGE/adapters" "$STAGE/examples" \
-  "$STAGE/tools/check-binary-target" "$STAGE/panel" "$STAGE/dist"
+  "$STAGE/tools/check-binary-target" "$STAGE/panel" "$STAGE/docs" "$STAGE/dist"
 
 for file in \
   README.md README-zh_CN.md README.zh-CN.md RELEASE_NOTES.md CHANGELOG.md \
@@ -35,6 +35,7 @@ cp -a "$ROOT/server/." "$STAGE/server/"
 cp -a "$ROOT/cmd/." "$STAGE/cmd/"
 cp -a "$ROOT/adapters/." "$STAGE/adapters/"
 cp -a "$ROOT/examples/." "$STAGE/examples/"
+cp -a "$ROOT/docs/." "$STAGE/docs/"
 cp -a "$ROOT/panel/." "$STAGE/panel/"
 cp -a "$ROOT/tools/check-binary-target/." "$STAGE/tools/check-binary-target/"
 cp -a "$ROOT/dist/BUILD_REQUIRED.md" "$STAGE/dist/"

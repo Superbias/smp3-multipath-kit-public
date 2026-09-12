@@ -1,9 +1,21 @@
-# SMP3 Multipath Kit v2.3.3
+# SMP3 Multipath Kit v2.3.4
 
 [简体中文](README-zh_CN.md) | English
 
 SMP3 is an independent application-layer multipath transport with three
 product lines: Standalone, Native, and the integrated server Dashboard.
+
+The formal product split is:
+
+```text
+Standalone     = Universal External Proxy Compatibility
+Native         = High-Performance Mihomo Integration
+Compatibility  = optional legacy smp3-proxy / sing-box integration
+```
+
+See [the product architecture](docs/PRODUCT_ARCHITECTURE.md),
+[Standalone](docs/standalone/README.md), [Native](docs/native/README.md), and
+[Compatibility](docs/compatibility/README.md).
 
 ## Choose a mode
 
@@ -21,12 +33,12 @@ legs through the Carrier SOCKS5 endpoints.
 
 ## Release
 
-- Version: `v2.3.3` (R16 Dashboard/accounting; data-plane semantics unchanged)
-- Native artifact: Mihomo `v2.3.3` built from pinned upstream `v1.19.28` with the SMP3 adapter
+- Version: `v2.3.4` (R18 dual-mode release hardening; data-plane semantics unchanged)
+- Native artifact: Mihomo `v2.3.4` built from pinned upstream `v1.19.28` with the SMP3 adapter
 - Standalone artifacts: `smp3-client` and `smp3-server`
 - Compatibility artifact: `smp3-proxy` with its pinned sing-box runtime suffix
 - Observability: integrated into `smp3-server`; standalone `smp3-panel` is retired
-- [Download v2.3.3](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3)
+- [Download v2.3.4](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4)
 - Verify every download with `SHA256SUMS` before running it.
 
 ## Qualified deployment shape
@@ -66,7 +78,8 @@ See the complete [deployment guide](DEPLOYMENT.md) or the
 
 ### Standalone
 
-Start Carrier-A and Carrier-B first, then configure and run:
+Start or supervise two external SOCKS5 listeners first, then configure and run
+the vendor-neutral client:
 
 ```bash
 ./smp3-client-linux-amd64 -c ./config/smp3-client.json -check
@@ -74,6 +87,20 @@ Start Carrier-A and Carrier-B first, then configure and run:
 ```
 
 Point applications to `socks5://127.0.0.1:18080`.
+
+Use `upstream_socks.leg0` and `upstream_socks.leg1` for deterministic per-leg
+listener identities. The listeners may belong to one external proxy process or
+to two processes; the client never needs node-protocol configuration.
+
+### Build ownership
+
+```bash
+./build.sh                         # Standalone only
+./scripts/build-native.sh          # Native only
+./scripts/build-compatibility.sh  # optional Compatibility only
+```
+
+`build.sh` does not fetch or build Mihomo, sing-box, or `smp3-proxy`.
 
 ### Server
 
@@ -108,6 +135,8 @@ stop:  smp3-client -> Carrier-B -> Carrier-A
 
 - [Deployment and usage](DEPLOYMENT.md)
 - [Standalone Sidecar](SIDECAR.md)
+- [Dual-mode product architecture](docs/PRODUCT_ARCHITECTURE.md)
+- [Standalone external proxy contract](docs/standalone/EXTERNAL_PROXY.md)
 - [Integrated Dashboard deployment](DEPLOYMENT.md)
 - [Security](SECURITY.md)
 - [Release notes](RELEASE_NOTES.md)

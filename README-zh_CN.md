@@ -1,9 +1,21 @@
-# SMP3 Multipath Kit v2.3.3
+# SMP3 Multipath Kit v2.3.4
 
 [English](README.md) | 简体中文
 
 SMP3 是一个独立的应用层多路径传输组件，包含 Standalone、Native 和
 集成在服务端中的 Dashboard 三条产品线。
+
+正式产品划分：
+
+```text
+Standalone     = Universal External Proxy Compatibility
+Native         = High-Performance Mihomo Integration
+Compatibility  = 可选的 legacy smp3-proxy / sing-box 集成
+```
+
+详细架构见 [产品架构](docs/PRODUCT_ARCHITECTURE.md)、
+[Standalone](docs/standalone/README.md)、[Native](docs/native/README.md) 和
+[Compatibility](docs/compatibility/README.md)。
 
 ## 先选使用模式
 
@@ -21,12 +33,12 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 
 ## 当前发布版本
 
-- Release：`v2.3.3`（R16 Dashboard/流量统计；数据面语义不变）
-- Native：Mihomo `v2.3.3`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
+- Release：`v2.3.4`（R18 双模式发布加固；数据面语义不变）
+- Native：Mihomo `v2.3.4`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
 - Standalone：`smp3-client`、`smp3-server`
 - 兼容：`smp3-proxy`（固定 sing-box 运行时，版本后缀包含 SMP3 版本）
 - 监控：集成在 `smp3-server` 中，独立 `smp3-panel` 已退役
-- 官方下载：[GitHub Releases v2.3.3](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.3)
+- 官方下载：[GitHub Releases v2.3.4](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.3.4)
 - 下载后先用 `SHA256SUMS` 校验文件，不要直接使用示例配置中的占位密码。
 
 ## 当前资格化拓扑
@@ -70,7 +82,8 @@ Standalone：应用 → 127.0.0.1:18080 → smp3-client
 
 1. 启动 Carrier-A、Carrier-B，确保它们分别提供本机 `17898`、`17899`。
 2. 复制并修改 [examples/smp3-client-config.example.json](examples/smp3-client-config.example.json)，
-   设置 SMP3 密码、服务端地址和两个 route。
+   为 `upstream_socks.leg0` 和 `upstream_socks.leg1` 分别填写两个 SOCKS5
+   监听地址，并设置 SMP3 密码、服务端地址和两个 route。
 3. 检查并启动：
 
 ```bash
@@ -117,6 +130,9 @@ GET /api/v1/events       # SSE
 
 如果只手动启动 `smp3-client`，需要先保证两个 Carrier 入口已经监听。
 
+Standalone 不认识 VLESS、Reality、HY2、Snell 等节点协议，只认识每条 Leg
+对应的 SOCKS5 endpoint。节点和协议仍由外部代理软件负责。
+
 ## 常用检查
 
 ```bash
@@ -134,6 +150,8 @@ Dashboard 页面应能看到 Leg0、Leg1、Carrier-A、Carrier-B、实时速率�
 
 - [中文部署与使用教程](DEPLOYMENT.zh-CN.md)
 - [Standalone Sidecar 说明](SIDECAR.zh-CN.md)
+- [双模式产品架构](docs/PRODUCT_ARCHITECTURE.md)
+- [Standalone 外部代理 contract](docs/standalone/EXTERNAL_PROXY.md)
 - [部署与使用教程](DEPLOYMENT.md)
 - [安全说明](SECURITY.md)
 - [发布说明](RELEASE_NOTES.md)
