@@ -1,6 +1,6 @@
-# SMP3 2.3.4 (release candidate)
+# SMP3 2.3.4
 
-R18 release hardening normalizes the dual-mode product identity for the next
+R18 release hardening normalizes the dual-mode product identity in this
 release. Standalone and Native remain separate product lines; the optional
 sing-box compatibility artifact remains isolated from the Standalone build.
 
