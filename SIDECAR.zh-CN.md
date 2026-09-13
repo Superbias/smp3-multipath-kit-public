@@ -1,4 +1,4 @@
-# SMP3 v2.4.0 Standalone SOCKS5 Sidecar
+# SMP3 v2.4.1 Standalone SOCKS5 Sidecar
 
 Standalone Sidecar 为普通应用提供本机 SOCKS5 入口。它负责 SMP3，不负责
 实现或保存 VLESS、Reality、Hysteria2、Snell 等外层节点协议。

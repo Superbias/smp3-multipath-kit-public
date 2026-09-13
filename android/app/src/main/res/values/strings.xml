@@ -2,4 +2,10 @@
     <string name="app_name">SMP3 Standalone</string>
     <string name="notification_channel_name">SMP3 runtime</string>
     <string name="notification_channel_description">SMP3 standalone transport status</string>
+    <string name="confirm_stop_all">Confirm before Stop all</string>
+    <string name="start_enabled_instances">Start with Start enabled</string>
+    <plurals name="instances_summary">
+        <item quantity="one">%1$d running · %2$d instances</item>
+        <item quantity="other">%1$d running · %2$d instances</item>
+    </plurals>
 </resources>

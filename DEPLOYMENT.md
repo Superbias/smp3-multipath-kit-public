@@ -1,4 +1,4 @@
-# SMP3 v2.4.0 Deployment and Usage
+# SMP3 v2.4.1 Deployment and Usage
 
 This is the short operational guide for the current release. Keep production
 passwords, PSKs, Reality keys, subscriptions, and real node configs outside
@@ -20,8 +20,8 @@ dialing.
 
 ## 2. Download and verify
 
-Download the v2.4.0 assets from the
-[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.0):
+Download the v2.4.1 assets from the
+[GitHub Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.1):
 
 | Asset | Purpose |
 | --- | --- |
@@ -29,7 +29,7 @@ Download the v2.4.0 assets from the
 | `smp3-client-*` | Standalone local SOCKS5 |
 | `mihomo-smp3-*` | Native / Clash Party |
 | `smp3-proxy-*` | sing-box compatibility artifact |
-| `smp3-android-standalone-2.4.0-debug.apk` | Android ARM64 Standalone |
+| `smp3-android-standalone-2.4.1-debug.apk` | Android ARM64 Standalone |
 | `SHA256SUMS` | Integrity manifest |
 
 ```bash
@@ -136,7 +136,7 @@ for the one-process/two-listener model and vendor-neutral responsibility split.
 
 ## 6. Android Standalone
 
-Install `smp3-android-standalone-2.4.0-debug.apk` on an `arm64-v8a` Android
+Install `smp3-android-standalone-2.4.1-debug.apk` on an `arm64-v8a` Android
 device. In the external proxy core, expose two local SOCKS5 listeners (for
 example `127.0.0.1:20001` and `127.0.0.1:20002`) backed by the desired nodes.
 The APK does not implement VLESS, Reality, Hysteria2, Snell, or other node

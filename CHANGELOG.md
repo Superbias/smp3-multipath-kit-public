@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.1 — Android multi-instance manager
+
+- Added multi-instance Android Standalone management with stable instance IDs,
+  per-instance configuration, local SOCKS ports, carrier endpoints, state, and
+  bounded redacted logs.
+- Added one foreground supervisor service with isolated start, stop, restart,
+  cleanup, and enabled-instance operations.
+- Added migration from the existing single-instance Android configuration,
+  automatic port recommendations, and cross-instance port validation.
+- Redesigned the Android UI around Instances, Details, Editor, Logs, Settings,
+  and About with dark-theme status and clock-skew troubleshooting guidance.
+- Preserved independent native-process execution, the standard SOCKS5 boundary,
+  external Carrier ownership, SMP3 Core, wire, scheduler, and Carrier semantics.
+
 ## 2.4.0 — unified Android Standalone release
 
 - Added the Android ARM64 Standalone APK and its configuration/status/log UI.

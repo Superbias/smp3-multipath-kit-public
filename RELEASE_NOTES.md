@@ -1,3 +1,30 @@
+# SMP3 2.4.1
+
+v2.4.1 publishes the qualified Android multi-instance Standalone manager on
+top of the existing Standalone, Native, Compatibility, and integrated server
+Dashboard product lines. SMP3 Core, wire protocol, scheduler, routing, and
+carrier semantics remain unchanged.
+
+## Included
+
+- Android `arm64-v8a` debug APK with up to eight configured SMP3 instances.
+- One foreground supervisor service managing independent native client
+  processes, with per-instance SOCKS, server, carriers, state, and logs.
+- Existing single-instance configuration migration, port allocation and
+  conflict validation, isolated lifecycle actions, and bounded log redaction.
+- Redesigned dark Android UI for Instances, Details, Editor, Logs, Settings,
+  and About.
+- Standalone, Native Mihomo, optional sing-box Compatibility, and integrated
+  server Dashboard artifacts rebuilt with unified release version `2.4.1`.
+
+The Android APK is debug-signed because no release signing credential is stored
+in the repository. Verify every asset with `SHA256SUMS` before running it.
+
+## Official binary assets
+
+The release contains eight amd64 binaries and one Android APK, plus
+`SHA256SUMS`. The retired standalone `smp3-panel` is not shipped.
+
 # SMP3 2.4.0
 
 v2.4.0 publishes the unified Standalone, Native, Android Standalone, and

@@ -16,7 +16,7 @@ import (
 
 // Version is the public SMP3 Standalone client release version. Official builds
 // inject the same value from the repository VERSION file with -ldflags.
-var Version = "2.4.0"
+var Version = "2.4.1"
 
 type Duration time.Duration
 

@@ -1,4 +1,4 @@
-# SMP3 Multipath Kit v2.4.0
+# SMP3 Multipath Kit v2.4.1
 
 [简体中文](README-zh_CN.md) | English
 
@@ -33,13 +33,13 @@ legs through the Carrier SOCKS5 endpoints.
 
 ## Release
 
-- Version: `v2.4.0` (Android Standalone packaging/UI; data-plane semantics unchanged)
-- Native artifact: Mihomo `v2.4.0` built from pinned upstream `v1.19.28` with the SMP3 adapter
+- Version: `v2.4.1` (Android multi-instance Standalone manager; data-plane semantics unchanged)
+- Native artifact: Mihomo `v2.4.1` built from pinned upstream `v1.19.28` with the SMP3 adapter
 - Standalone artifacts: `smp3-client` and `smp3-server`
-- Android Standalone: `smp3-android-standalone-2.4.0-debug.apk` for `arm64-v8a`
+- Android Standalone: `smp3-android-standalone-2.4.1-debug.apk` for `arm64-v8a`
 - Compatibility artifact: `smp3-proxy` with its pinned sing-box runtime suffix
 - Observability: integrated into `smp3-server`; standalone `smp3-panel` is retired
-- [Download v2.4.0](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.0)
+- [Download v2.4.1](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.1)
 - Verify every download with `SHA256SUMS` before running it.
 
 ## Qualified deployment shape
@@ -91,7 +91,7 @@ Point applications to `socks5://127.0.0.1:18080`.
 
 ### Android Standalone
 
-Download `smp3-android-standalone-2.4.0-debug.apk` for an ARM64 Android
+Download `smp3-android-standalone-2.4.1-debug.apk` for an ARM64 Android
 device. Install it, ensure the external proxy core exposes Carrier-A and
 Carrier-B as local SOCKS5 listeners, then enter the SMP3 server endpoint,
 matching password, and listener ports in the app. The app provides its own

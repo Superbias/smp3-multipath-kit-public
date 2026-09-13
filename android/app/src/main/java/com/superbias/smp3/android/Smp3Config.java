@@ -20,6 +20,25 @@ public final class Smp3Config {
     /** This is the SMP3 protocol password, not a proxy-node credential. */
     public String smp3Password = "";
 
+    public static Smp3Config fromInstance(Smp3Instance instance) {
+        Smp3Config config = new Smp3Config();
+        config.localHost = instance.localSocksHost;
+        config.localPort = instance.localSocksPort;
+        config.server = instance.serverEndpoint;
+        if (!instance.carriers.isEmpty()) {
+            CarrierEndpoint carrier = instance.carriers.get(0);
+            config.carrierAHost = carrier.host;
+            config.carrierAPort = carrier.port;
+        }
+        if (instance.carriers.size() > 1) {
+            CarrierEndpoint carrier = instance.carriers.get(1);
+            config.carrierBHost = carrier.host;
+            config.carrierBPort = carrier.port;
+        }
+        config.smp3Password = instance.smp3Password;
+        return config;
+    }
+
     public static Smp3Config load(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         Smp3Config config = new Smp3Config();
@@ -116,11 +135,11 @@ public final class Smp3Config {
         return host + ":" + port;
     }
 
-    private static boolean validHost(String value) {
+    public static boolean validHost(String value) {
         return value != null && !value.trim().isEmpty() && !value.contains(" ");
     }
 
-    private static boolean validPort(String value) {
+    public static boolean validPort(String value) {
         if (value == null || value.isEmpty()) {
             return false;
         }
@@ -132,7 +151,7 @@ public final class Smp3Config {
         }
     }
 
-    private static boolean validEndpoint(String value) {
+    public static boolean validEndpoint(String value) {
         if (value == null || value.trim().isEmpty() || value.contains(" ")) {
             return false;
         }

@@ -1,4 +1,4 @@
-# SMP3 v2.4.0 部署与使用教程
+# SMP3 v2.4.1 部署与使用教程
 
 这是一份面向实际使用的简明教程。生产密码、PSK、Reality 私钥和真实节点
 参数只放在本机配置中，不要提交到仓库。
@@ -25,7 +25,7 @@ Dashboard：浏览器 → SMP3 server → telemetry 127.0.0.1:24500
 
 ## 2. 下载和校验
 
-从 [v2.4.0 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.0)
+从 [v2.4.1 Release](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.4.1)
 下载教程和产品制品。该版本加入 Android Standalone，同时不改变 SMP3 数据面语义：
 
 | 文件 | 用途 |
@@ -34,7 +34,7 @@ Dashboard：浏览器 → SMP3 server → telemetry 127.0.0.1:24500
 | `smp3-client-linux-amd64` / Windows 版 | Standalone 本地 SOCKS5 |
 | `mihomo-smp3-linux-amd64` / Windows 版 | Native / Clash Party |
 | `smp3-proxy-linux-amd64` / Windows 版 | sing-box 兼容模式 |
-| `smp3-android-standalone-2.4.0-debug.apk` | Android ARM64 Standalone |
+| `smp3-android-standalone-2.4.1-debug.apk` | Android ARM64 Standalone |
 | `SHA256SUMS` | 文件完整性校验 |
 
 ```bash
@@ -165,7 +165,7 @@ Standalone 不读取节点协议配置，只连接通用 SOCKS5。详见
 
 ## 6. Android Standalone
 
-在 `arm64-v8a` Android 设备安装 `smp3-android-standalone-2.4.0-debug.apk`。
+在 `arm64-v8a` Android 设备安装 `smp3-android-standalone-2.4.1-debug.apk`。
 先在外部代理核心中提供两个本机 SOCKS5 监听，例如
 `127.0.0.1:20001` 和 `127.0.0.1:20002`，分别连接你选择的两个节点。
 APK 不实现 VLESS、Reality、Hysteria2、Snell 等节点协议，这些仍由外部
