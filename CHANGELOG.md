@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.5.0 — opt-in aggregation scheduler
+
+- Added the explicit opt-in `smp3.stream.scheduler_mode: aggregation`.
+- Kept `adaptive` as the default and `static` unchanged.
+- Preserved wire framing, SOCKS5, Mihomo/external proxy integration, and the
+  standalone architecture.
+- Validated the exact standalone client/server pair with real SOCKS5 traffic,
+  Mihomo/browser HTTPS, recovery tests, and a 30-minute stable-carrier run.
+
 ## 2.4.0 — unified Android Standalone release
 
 - Added the Android ARM64 Standalone APK and its configuration/status/log UI.

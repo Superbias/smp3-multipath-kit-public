@@ -57,3 +57,7 @@ benchmark-only grace candidate were added; it passed in 4.590 s.
 
 It was rerun after the explicit production aggregation mode and internal
 decoupled admission extraction were added; it passed in 4.555 s.
+
+## Final RC equivalence
+The final RC runtime was race-qualified on native Linux and the v2.5.0 preparation preserves runtime behavior; only release metadata and documentation are changed in this preparation commit.
+

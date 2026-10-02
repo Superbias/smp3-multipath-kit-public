@@ -115,3 +115,7 @@ normally and require remote main to equal final local HEAD. The observed SHAs
 are recorded in the external provenance manifest. No automatic merge/rebase,
 force push, tag, release, asset upload, or deployment is authorized. Untracked
 historical files remain preserved and excluded from the clean source.
+
+## v2.5.0 release-preparation status
+The aggregation scheduler is explicit opt-in; adaptive remains default; static, wire framing, SOCKS5, and Mihomo/external proxy integration remain unchanged. The final RC source 4a1149ff1c1136027a81ce447de7b923519e3090 is real-world validated by SMP3_AGGREGATION_REALWORLD_RC_REPORT.md. Historical 2b0d02e262a5e33838cc1318df24d2c8217813c4 remains SOURCE-INCOMPLETE / NOT RC-ELIGIBLE.
+

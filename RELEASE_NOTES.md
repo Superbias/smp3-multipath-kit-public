@@ -1,4 +1,39 @@
-# SMP3 2.4.0
+# SMP3 2.5.0
+
+v2.5.0 adds an explicit opt-in aggregation stream scheduler. Existing
+adaptive behavior remains the default; static mode, wire framing, SOCKS5,
+Mihomo/external proxy integration, and the standalone architecture remain
+compatible.
+
+## Aggregation scheduler
+
+- Enable with `smp3.stream.scheduler_mode: aggregation`.
+- Uses normalized assigned-service scheduling, bounded per-leg pending
+  admission, independent per-leg feeders, failure reassignment before physical
+  admission, reconnect epoch rebasing, and frontier-exposure-aware repair.
+- No abandoned benchmark scheduler is part of the product surface.
+
+## Validation
+
+- Tracked-only builds and native Linux race validation: PASS.
+- Synthetic 50+200 aggregation: 245.77 Mbps, 1.000x amplification, retry 0,
+  rescue 0, ledger 0, reorder 0.
+- Real standalone SOCKS5, Mihomo, browser/HTTPS, 1 GiB, failure/reconnect,
+  and two-second interruption: PASS.
+- Stable-carrier 30-minute run: 10,706,152,518 bytes, no deadlock,
+  permanent disconnect, or reconnect loop.
+- Streaming/video: NOT_RUN_ENVIRONMENT_LIMITATION.
+
+The engineering report retains the external finding that local carrier
+`127.0.0.1:17899` has a reproducible physical long-stream stall and is excluded
+from final RC qualification. This is not an SMP3 defect.
+
+## Asset scope
+
+This release preparation covers the four standalone amd64 binaries and
+`SHA256SUMS`. Native Mihomo and legacy compatibility assets remain separate
+product lines and are not silently included.
+
 
 v2.4.0 publishes the unified Standalone, Native, Android Standalone, and
 server Dashboard product lines. SMP3 Core, wire protocol, scheduler, routing,

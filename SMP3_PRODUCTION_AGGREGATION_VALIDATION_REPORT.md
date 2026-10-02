@@ -81,3 +81,7 @@ behavior remains in use.
 - `go test ./...` passed for core, client, server, and cmd/smp3-server.
 - Native Linux `CGO_ENABLED=1 /usr/local/go/bin/go test -race ./...` passed.
 - No default scheduler or release artifact was changed.
+
+## v2.5.0 release-preparation status
+Aggregation remains explicit opt-in; adaptive remains the default; static is unchanged. Wire framing, SOCKS5, Mihomo/external proxy integration, and the standalone architecture are unchanged. The final RC has real-world validation recorded in SMP3_AGGREGATION_REALWORLD_RC_REPORT.md.
+

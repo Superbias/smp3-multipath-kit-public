@@ -1,4 +1,4 @@
-# SMP3 Multipath Kit v2.4.0
+# SMP3 Multipath Kit v2.5.0
 
 [简体中文](README-zh_CN.md) | English
 
@@ -33,7 +33,7 @@ legs through the Carrier SOCKS5 endpoints.
 
 ## Release
 
-- Version: `v2.4.0` (Android Standalone packaging/UI; data-plane semantics unchanged)
+- Version: `v2.5.0` (opt-in aggregation scheduler; data-plane compatibility preserved)
 - Native artifact: Mihomo `v2.4.0` built from pinned upstream `v1.19.28` with the SMP3 adapter
 - Standalone artifacts: `smp3-client` and `smp3-server`
 - Android Standalone: `smp3-android-standalone-2.4.0-debug.apk` for `arm64-v8a`

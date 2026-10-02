@@ -75,3 +75,7 @@ assigned-service planner
   non-repeatable outlier.
 - Continuous forward-progress smoke gate passed; deterministic failure, drop,
   stall, low-leg failure, and native Linux race gates passed.
+
+## v2.5.0 release-preparation status
+The aggregation runtime is an explicit opt-in feature. Adaptive remains default, static is unchanged, and wire/SOCKS5/Mihomo/external proxy contracts remain unchanged. Real-world validation is complete on the final RC; release preparation does not alter runtime behavior.
+

@@ -1,4 +1,4 @@
-# SMP3 Multipath Kit v2.4.0
+# SMP3 Multipath Kit v2.5.0
 
 [English](README.md) | 简体中文
 
@@ -33,7 +33,7 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 
 ## 当前发布版本
 
-- Release：`v2.4.0`（Android Standalone 打包/UI；数据面语义不变）
+- Release：`v2.5.0`（聚合调度器显式 opt-in；数据面兼容性保持）
 - Native：Mihomo `v2.4.0`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
 - Standalone：`smp3-client`、`smp3-server`
 - Android Standalone：`smp3-android-standalone-2.4.0-debug.apk`（`arm64-v8a`）
