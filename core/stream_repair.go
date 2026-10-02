@@ -80,10 +80,20 @@ func DecideStreamTXFrontierRepair(candidate StreamTXFrontierCandidate, live Stre
 	if !candidate.exists || candidate.rescueInTransit || !candidate.overdue {
 		return StreamTXFrontierPlan{}
 	}
-	if live.Count() == 1 {
-		return StreamTXFrontierPlan{Action: StreamTXFrontierNeedActivation}
+	if live.Count() == 0 {
+		return StreamTXFrontierPlan{}
 	}
-	if live.Count() < 2 || candidate.owner < 0 || !live.Has(LegID(candidate.owner)) {
+	if live.Count() == 1 {
+		// A lost frontier must still be retransmitted when the session has only
+		// one live leg. Activation is optional; withholding repair here can leave
+		// a cumulative ACK stream permanently stalled after a single loss.
+		for id, present := range live {
+			if present {
+				return StreamTXFrontierPlan{Action: StreamTXFrontierRescue, Record: candidate.record, Avoid: int16(id) - 1}
+			}
+		}
+	}
+	if candidate.owner < 0 || !live.Has(LegID(candidate.owner)) {
 		return StreamTXFrontierPlan{}
 	}
 	return StreamTXFrontierPlan{Action: StreamTXFrontierRescue, Record: candidate.record, Avoid: candidate.owner}

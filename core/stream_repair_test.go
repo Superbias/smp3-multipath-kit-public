@@ -28,8 +28,11 @@ func TestStreamTXRepairPolicyMatrix(t *testing.T) {
 	if plan := DecideStreamTXFrontierRepair(candidate, StreamLegAvailability{true, true}); plan.Action != StreamTXFrontierRescue || plan.Record != r0 || plan.Avoid != 0 {
 		t.Fatalf("rescue plan=%+v", plan)
 	}
-	if plan := DecideStreamTXFrontierRepair(candidate, StreamLegAvailability{true, false}); plan.Action != StreamTXFrontierNeedActivation {
-		t.Fatalf("activation plan=%+v", plan)
+	if plan := DecideStreamTXFrontierRepair(candidate, StreamLegAvailability{true, false}); plan.Action != StreamTXFrontierRescue || plan.Record != r0 {
+		t.Fatalf("single-leg rescue plan=%+v", plan)
+	}
+	if plan := DecideStreamTXFrontierRepair(candidate, StreamLegAvailability{false, true}); plan.Action != StreamTXFrontierRescue || plan.Record != r0 {
+		t.Fatalf("leg1-only rescue plan=%+v", plan)
 	}
 	if plan := DecideStreamTXFrontierRepair(candidate, StreamLegAvailability{}); plan.Action != StreamTXFrontierNone {
 		t.Fatalf("zero-leg plan=%+v", plan)
@@ -108,7 +111,7 @@ func TestStreamTXRepairPolicyRandomizedDifferential10000(t *testing.T) {
 		timeout := time.Duration(rng.Intn(3)) * time.Second
 		candidate := ledger.FrontierCandidate(base.Add(timeout), timeout)
 		plan := DecideStreamTXFrontierRepair(candidate, live)
-		if plan.Action == StreamTXFrontierRescue && (live.Count() != 2 || plan.Record == nil || plan.Avoid < 0) {
+		if plan.Action == StreamTXFrontierRescue && (live.Count() == 0 || plan.Record == nil) {
 			t.Fatalf("case %d invalid rescue plan=%+v", caseIndex, plan)
 		}
 		if plan.Action == StreamTXFrontierNeedActivation && live.Count() != 1 {

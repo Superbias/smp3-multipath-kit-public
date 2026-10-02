@@ -133,6 +133,25 @@ func TestStreamTXLedgerAttemptLifecycleAndInvalidate(t *testing.T) {
 	}
 }
 
+func TestStreamTXLedgerAllowsSingleLegRescue(t *testing.T) {
+	start := time.Unix(2450000000, 0)
+	ledger := NewStreamTXLedger()
+	record := ledger.Add([]byte("single-leg-loss"), start)
+	if !ledger.MarkTransit(record, 0, start.Add(time.Second)) {
+		t.Fatal("initial transit failed")
+	}
+	if result := ledger.MarkAttemptSent(record, 0, false, start.Add(2*time.Second)); !result.Applied {
+		t.Fatal("initial send failed")
+	}
+	started, ok := ledger.MarkRescueTransit(record, 0, start.Add(3*time.Second))
+	if !ok || !ledger.MarkRescueQueued(record, 0, started) {
+		t.Fatal("same-leg rescue was rejected")
+	}
+	if result := ledger.MarkAttemptSent(record, 0, true, start.Add(4*time.Second)); !result.Applied || !result.Retransmit {
+		t.Fatalf("same-leg rescue result=%+v", result)
+	}
+}
+
 func TestStreamTXLedgerStaleCompletionKeepsNewerOwner(t *testing.T) {
 	start := time.Unix(2500000000, 0)
 	ledger := NewStreamTXLedger()
@@ -198,9 +217,6 @@ func (r *txReference) markRescueTransit(record *txReferenceRecord, leg uint8, no
 		return time.Time{}, false
 	}
 	if record.inTransit && record.transitLeg == leg {
-		return time.Time{}, false
-	}
-	if !record.inTransit && record.lastSentLeg == int16(leg) {
 		return time.Time{}, false
 	}
 	record.rescueInTransit, record.rescueLeg, record.rescueSince = true, leg, now

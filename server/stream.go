@@ -14,6 +14,9 @@ func streamSchedulerMode(value string) smp3core.StreamSchedulerMode {
 	if value == "static" {
 		return smp3core.StreamSchedulerStatic
 	}
+	if value == "aggregation" {
+		return smp3core.StreamSchedulerAggregation
+	}
 	return smp3core.StreamSchedulerAdaptive
 }
 

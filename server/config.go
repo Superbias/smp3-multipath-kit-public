@@ -209,7 +209,7 @@ func validateStream(c *StreamOptions) error {
 	if c.SchedulerMode == "" {
 		c.SchedulerMode = "adaptive"
 	}
-	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" {
+	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" && c.SchedulerMode != "aggregation" {
 		return fmt.Errorf("invalid scheduler_mode %q", c.SchedulerMode)
 	}
 	if c.ActivationWindow.Time() <= 0 {

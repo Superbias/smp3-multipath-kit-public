@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,13 @@ type StreamSchedulerMode uint8
 const (
 	StreamSchedulerStatic StreamSchedulerMode = iota
 	StreamSchedulerAdaptive
+	// StreamSchedulerCapacityFirst keeps adaptive delivery feedback but does
+	// not apply the latency penalty. It is an explicit experiment mode; it is
+	// not a production default.
+	StreamSchedulerCapacityFirst
+	// StreamSchedulerAggregation enables normalized assigned-service scheduling
+	// with bounded per-leg admission and frontier exposure repair.
+	StreamSchedulerAggregation
 )
 
 const (
@@ -88,26 +96,107 @@ func (p *streamLegPerf) snapshot() (writeBPS, ackedBPS float64, latency time.Dur
 }
 
 type StreamConfig struct {
-	SchedulerMode        StreamSchedulerMode
-	ChunkSize            int
-	QueueFrames          int
-	ThresholdBytesPS     uint64
-	ActivationWindow     time.Duration
-	BandwidthMbps        []uint32
-	MaxReorderFrames     int
-	MaxInflightFrames    int
-	AckInterval          time.Duration
-	RetransmitTimeout    time.Duration
-	RecoveryTimeout      time.Duration
-	OnActivate           func()
-	OnLegDown            func(uint8, error)
-	OnFutureAck          func(next, max, count uint64)
-	NotifyPeerOnActivate bool
-	Telemetry            *StreamTelemetry
-	StartupPolicy        StreamStartupPolicy
-	StartupPreferredLeg  LegID
-	StartupGrace         time.Duration
-	startupTimerFactory  func(time.Duration) streamStartupTimer
+	frontierProbe *benchmarkFrontierProbe
+	SchedulerMode StreamSchedulerMode
+	// BenchmarkFixedRatio enables a benchmark-only deterministic 1:4 ordinary
+	// dispatch pattern. It is intentionally false by default and is not used by
+	// production constructors.
+	BenchmarkFixedRatio        bool
+	BenchmarkReadyFallback     bool
+	BenchmarkWeightedDeficit   bool
+	BenchmarkWeightedCommit    bool
+	BenchmarkAssignedCommit    bool
+	BenchmarkAssignedService   bool
+	BenchmarkAssignedReady     bool
+	BenchmarkAssignedDecoupled bool
+	BenchmarkPendingFrames     int
+	benchmarkEpochRebase       bool
+	assignmentTrace            *benchmarkAssignmentTrace
+	BenchmarkInServiceScore    bool
+	loadProbe                  *streamLoadProbe
+	HandoffTelemetry           *StreamHandoffTelemetry
+	wakeTelemetry              *streamWakeTelemetry
+	ChunkSize                  int
+	QueueFrames                int
+	ThresholdBytesPS           uint64
+	ActivationWindow           time.Duration
+	BandwidthMbps              []uint32
+	MaxReorderFrames           int
+	MaxInflightFrames          int
+	AckInterval                time.Duration
+	RetransmitTimeout          time.Duration
+	RecoveryTimeout            time.Duration
+	OnActivate                 func()
+	OnLegDown                  func(uint8, error)
+	OnFutureAck                func(next, max, count uint64)
+	NotifyPeerOnActivate       bool
+	Telemetry                  *StreamTelemetry
+	StartupPolicy              StreamStartupPolicy
+	StartupPreferredLeg        LegID
+	StartupGrace               time.Duration
+	startupTimerFactory        func(time.Duration) streamStartupTimer
+}
+
+func (c *StreamEngine) assignedDecoupledEnabled() bool {
+	return c.cfg.BenchmarkAssignedDecoupled || c.cfg.SchedulerMode == StreamSchedulerAggregation
+}
+
+// StreamHandoffTelemetry is a bounded benchmark diagnostic for ordinary DATA.
+// It is nil on all production configurations and has no hot-path allocation
+// when disabled.
+type StreamHandoffTelemetry struct {
+	mu      sync.Mutex
+	samples []*StreamTXRecord
+	bySeq   map[uint64]*StreamTXRecord
+	gapsNs  []int64
+}
+
+func (t *StreamHandoffTelemetry) track(r *StreamTXRecord) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.bySeq == nil {
+		t.bySeq = make(map[uint64]*StreamTXRecord)
+	}
+	if len(t.samples) < 8192 {
+		t.samples = append(t.samples, r)
+		t.bySeq[r.sequence] = r
+	}
+	t.mu.Unlock()
+}
+
+func (t *StreamHandoffTelemetry) markSerializerArrival(seq uint64, at int64) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if r := t.bySeq[seq]; r != nil {
+		atomic.StoreInt64(&r.traceT7Ns, at)
+	}
+	t.mu.Unlock()
+}
+
+func (t *StreamHandoffTelemetry) addGap(gap int64) {
+	if t == nil || gap <= 0 {
+		return
+	}
+	t.mu.Lock()
+	if len(t.gapsNs) < 8192 {
+		t.gapsNs = append(t.gapsNs, gap)
+	}
+	t.mu.Unlock()
+}
+
+func (t *StreamHandoffTelemetry) snapshot() (samples []*StreamTXRecord, gaps []int64) {
+	if t == nil {
+		return nil, nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	samples = append(samples, t.samples...)
+	gaps = append(gaps, t.gapsNs...)
+	return
 }
 
 // StreamStats is a point-in-time, logical-stream view of a core. Counters are
@@ -140,6 +229,8 @@ type StreamStats struct {
 	RxPendingFrames    int
 	RxPendingBytes     uint64
 	RxGapAge           time.Duration
+	RxMaxPendingFrames int
+	RxMaxGapAge        time.Duration
 
 	LegUp     [2]bool
 	Telemetry StreamTelemetryStats
@@ -152,8 +243,10 @@ type dataFrame struct {
 }
 
 type txSendAttempt struct {
-	record *StreamTXRecord
-	rescue bool
+	record   *StreamTXRecord
+	rescue   bool
+	queuedNs int64
+	ordinary bool
 }
 
 type legControl struct {
@@ -172,15 +265,27 @@ type streamLeg struct {
 	// ackPending is cumulative and monotonic. ACK producers only publish the
 	// newest value and wake this leg's writer; a blocked carrier can therefore
 	// never hold up ACK delivery on another carrier.
-	ackPending atomic.Uint64
-	ackForce   atomic.Bool
-	onClose    func(error)
-	once       sync.Once
-	closed     atomic.Bool
-	done       chan struct{}
-	workers    sync.WaitGroup
-	retired    chan struct{}
-	perf       streamLegPerf
+	ackPending               atomic.Uint64
+	ackForce                 atomic.Bool
+	onClose                  func(error)
+	once                     sync.Once
+	closed                   atomic.Bool
+	done                     chan struct{}
+	workers                  sync.WaitGroup
+	retired                  chan struct{}
+	perf                     streamLegPerf
+	debugWriterState         atomic.Int32 // 0 idle, 1 waiting, 2 writing
+	debugLastDequeueNs       atomic.Int64
+	debugLastWriteNs         atomic.Int64
+	debugLastWriteDurationNs atomic.Int64
+	debugOrdinaryDispatches  atomic.Uint64
+	debugRescueDispatches    atomic.Uint64
+	debugQueueFullRejects    atomic.Uint64
+	debugRescueFullRejects   atomic.Uint64
+	debugWriteErrors         atomic.Uint64
+	debugQueueWaitNs         atomic.Uint64
+	debugWriteBusyNs         atomic.Uint64
+	debugWriteCount          atomic.Uint64
 }
 
 func (l *streamLeg) close(err error) {
@@ -225,9 +330,10 @@ type StreamEngine struct {
 	gracefulOnce sync.Once
 	gracefulCh   chan struct{}
 
-	txLedger *StreamTXLedger
-	inflight chan struct{}
-	retryCh  chan struct{}
+	txLedger  *StreamTXLedger
+	inflight  chan struct{}
+	retryCh   chan struct{}
+	spaceWake chan streamSpaceNotification
 	// frontierRescueCh is a coalesced O(1) wakeup for the cumulative-ACK
 	// frontier. R10 uses it when ACK progress exposes a new overdue head so the
 	// next repair does not have to wait for the periodic retransmit ticker.
@@ -247,12 +353,55 @@ type StreamEngine struct {
 	txAckedUseful          [2]atomic.Uint64
 	txRetransmitBytes      [2]atomic.Uint64
 	frontierRescueAttempts atomic.Uint64
+	debugRescueChecks      atomic.Uint64
+	debugRescueOverdue     atomic.Uint64
+	debugRescuePlans       atomic.Uint64
 	rxUniqueBytes          [2]atomic.Uint64
 	rxDeliveredBytes       atomic.Uint64
 	rxPendingFrames        atomic.Int64
 	rxPendingBytes         atomic.Uint64
 	rxGapSinceUnixNs       atomic.Int64
+	rxMaxPendingFrames     atomic.Int64
+	rxMaxGapAgeNs          atomic.Int64
 	lastAckProgressNs      atomic.Int64
+	debugLastAckFrameNs    atomic.Int64
+	debugLastAckValue      atomic.Uint64
+	debugAckAdvances       atomic.Uint64
+	debugAckRetiredRecords atomic.Uint64
+	debugAckRetiredBytes   atomic.Uint64
+	debugLastAdmissionNs   atomic.Int64
+	debugLastDispatchNs    atomic.Int64
+	debugNewDispatches     atomic.Uint64
+	debugRetryScheduled    atomic.Uint64
+	debugRetryDispatches   atomic.Uint64
+	debugRetryRejects      atomic.Uint64
+	debugRescueDispatches  atomic.Uint64
+	debugRescueRejects     atomic.Uint64
+	benchmarkFixedDispatch atomic.Uint64
+	debugPrimarySuccess    atomic.Uint64
+	debugPrimaryFailure    atomic.Uint64
+	debugFallbackAttempts  atomic.Uint64
+	debugFallbackSuccess   atomic.Uint64
+	debugSpaceWakeEntries  atomic.Uint64
+	debugSpaceWakeWaitNs   atomic.Uint64
+	weightedMu             sync.Mutex
+	weightedFinish         [2]float64
+	assignedService        [2]uint64
+	assignedRecords        [2]uint64
+	assignedEpochMask      uint8
+	assignedEpochOrigin    [2]float64
+	pending                [2]chan *StreamTXRecord
+	pendingDepth           [2]atomic.Int64
+	pendingMax             [2]atomic.Int64
+	pendingFullWaitNs      [2]atomic.Uint64
+	plannerPendingWaitNs   atomic.Uint64
+	feederBlockedWaitNs    [2]atomic.Uint64
+	decoupledWake          [3]chan struct{}
+	decoupledStats         benchmarkAssignmentStats
+	readyStateDecisions    [4]atomic.Uint64 // both, low-only, high-only, none
+	readyRaceFailures      atomic.Uint64
+	debugRXExpected        atomic.Uint64
+	debugRXHighest         atomic.Uint64
 
 	// recoveryEpoch invalidates stale "no legs" recovery timers. A temporary
 	// recovery followed by a later outage must get a fresh RecoveryTimeout, not
@@ -263,6 +412,18 @@ type StreamEngine struct {
 }
 
 func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
+	if cfg.SchedulerMode == StreamSchedulerAggregation {
+		// Production aggregation is an explicit mode. Keep the older benchmark
+		// switches as internal implementation flags so existing static/adaptive
+		// behavior remains byte-for-byte unchanged.
+		cfg.benchmarkEpochRebase = true
+		if cfg.BenchmarkPendingFrames <= 0 {
+			cfg.BenchmarkPendingFrames = 32
+		}
+		if cfg.frontierProbe == nil {
+			cfg.frontierProbe = &benchmarkFrontierProbe{grace: true}
+		}
+	}
 	if cfg.ChunkSize <= 0 {
 		cfg.ChunkSize = 64 * 1024
 	}
@@ -282,7 +443,7 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		cfg.AckInterval = 20 * time.Millisecond
 	}
 	if cfg.RetransmitTimeout <= 0 {
-		cfg.RetransmitTimeout = 1500 * time.Millisecond
+		cfg.RetransmitTimeout = 1 * time.Second
 	}
 	if cfg.RecoveryTimeout <= 0 {
 		cfg.RecoveryTimeout = 15 * time.Second
@@ -303,8 +464,23 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		txLedger:         NewStreamTXLedger(),
 		inflight:         make(chan struct{}, cfg.MaxInflightFrames),
 		retryCh:          make(chan struct{}, 1),
+		spaceWake:        make(chan streamSpaceNotification, 1),
 		frontierRescueCh: make(chan struct{}, 1),
 		ackWakeCh:        make(chan struct{}, 1),
+	}
+	if cfg.BenchmarkAssignedDecoupled || cfg.SchedulerMode == StreamSchedulerAggregation {
+		depth := cfg.BenchmarkPendingFrames
+		if depth <= 0 {
+			depth = 32
+		}
+		for id := range c.decoupledWake {
+			c.decoupledWake[id] = make(chan struct{}, 1)
+		}
+		for id := 0; id < 2; id++ {
+			c.pending[id] = make(chan *StreamTXRecord, depth)
+			c.decoupledStats.feedersDone[id] = make(chan struct{})
+			go c.pendingFeeder(uint8(id))
+		}
 	}
 	c.startup = newStreamStartupGate(cfg)
 	if cfg.Telemetry != nil {
@@ -373,6 +549,9 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 		}
 		leg.workers.Add(2)
 		c.legs[id8] = leg
+		if c.cfg.wakeTelemetry != nil && id8 < 2 {
+			c.cfg.wakeTelemetry.legs[id8] = leg
+		}
 		c.legsMu.Unlock()
 		c.lifecycleMu.Unlock()
 
@@ -390,6 +569,7 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 			c.telemetry.markStartupAttached(id8, time.Now())
 		}
 		c.kickRetry()
+		c.kickSpaceSource("CONNECTION_ATTACH", -1)
 		c.startup.notify(id8)
 		c.forceAck()
 		return nil
@@ -423,6 +603,8 @@ func (c *StreamEngine) Snapshot() StreamStats {
 		RxDeliveredBytes:       c.rxDeliveredBytes.Load(),
 		RxPendingFrames:        int(c.rxPendingFrames.Load()),
 		RxPendingBytes:         c.rxPendingBytes.Load(),
+		RxMaxPendingFrames:     int(c.rxMaxPendingFrames.Load()),
+		RxMaxGapAge:            time.Duration(c.rxMaxGapAgeNs.Load()),
 	}
 	stats.Telemetry = c.telemetry.snapshot()
 	if timestamp := c.lastAckProgressNs.Load(); timestamp != 0 {
@@ -621,6 +803,18 @@ func (c *StreamEngine) txLoop() {
 				}
 			}
 			record := c.txLedger.Add(buffer[:n], time.Now())
+			if p := c.cfg.frontierProbe; p != nil {
+				p.observe(c.txLedger.frontierSnapshot(), time.Now())
+			}
+			if c.cfg.HandoffTelemetry != nil {
+				record.trace = c.cfg.HandoffTelemetry
+				record.traceT0Ns = record.createdAt.UnixNano()
+				c.cfg.HandoffTelemetry.track(record)
+			}
+			if record.trace != nil {
+				record.traceT1Ns = time.Now().UnixNano()
+			}
+			c.debugLastAdmissionNs.Store(time.Now().UnixNano())
 			var enqueueErr error
 			if startupHint >= 0 {
 				enqueueErr = c.enqueueRecordWithHint(record, -1, startupHint)
@@ -833,7 +1027,7 @@ func (c *StreamEngine) weightFor(id uint8) uint32 {
 
 func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 	base := float64(c.weightFor(leg.id))
-	if c.cfg.SchedulerMode != StreamSchedulerAdaptive {
+	if c.cfg.SchedulerMode != StreamSchedulerAdaptive && c.cfg.SchedulerMode != StreamSchedulerCapacityFirst {
 		return base
 	}
 	writeBPS, ackedBPS, latency := leg.perf.snapshot()
@@ -854,7 +1048,7 @@ func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 			base = observedMbps
 		}
 	}
-	if latency > 0 {
+	if c.cfg.SchedulerMode == StreamSchedulerAdaptive && latency > 0 {
 		// A leg that takes longer to drain a frame should receive fewer early
 		// sequence numbers. This directly reduces slow-path HOL pressure before
 		// frontier rescue is needed.
@@ -871,6 +1065,41 @@ func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 }
 
 func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
+	if c.cfg.BenchmarkWeightedDeficit {
+		legs := c.availableLegs()
+		c.weightedMu.Lock()
+		defer c.weightedMu.Unlock()
+		var best *streamLeg
+		bestFinish := math.MaxFloat64
+		for _, leg := range legs {
+			if len(legs) > 1 && int16(leg.id) == avoid {
+				continue
+			}
+			if c.weightedFinish[leg.id] < bestFinish {
+				best, bestFinish = leg, c.weightedFinish[leg.id]
+			}
+		}
+		if best != nil {
+			return best
+		}
+	}
+	if c.cfg.BenchmarkFixedRatio {
+		// One low-capacity record followed by four high-capacity records. The
+		// diagnostic preserves the normal enqueue, writer, ACK and ledger path.
+		legs := c.availableLegs()
+		if len(legs) >= 2 {
+			n := c.benchmarkFixedDispatch.Add(1) - 1
+			preferred := uint8(1)
+			if n%5 == 0 {
+				preferred = 0
+			}
+			for _, leg := range legs {
+				if leg.id == preferred && int16(leg.id) != avoid {
+					return leg
+				}
+			}
+		}
+	}
 	if !active {
 		if primary := c.getLeg(0); primary != nil && int16(primary.id) != avoid {
 			return primary
@@ -884,7 +1113,15 @@ func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 			continue
 		}
 		weight := c.effectiveSchedulerWeight(leg)
-		score := float64(len(leg.send)+1) / weight
+		dispatched := uint64(0)
+		if leg.id < uint8(len(c.txSentBytes)) {
+			dispatched = c.txSentBytes[leg.id].Load()
+		}
+		// A fast writer can make its channel look empty on every scheduler turn.
+		// Include the bytes already dispatched on this logical stream so weighted
+		// scheduling converges toward usable path capacity instead of selecting the
+		// same empty queue indefinitely.
+		score := (float64(dispatched) + float64(len(leg.send)+1)*float64(c.cfg.ChunkSize)) / weight
 		if best == nil || score < bestScore {
 			best = leg
 			bestScore = score
@@ -896,6 +1133,19 @@ func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 	return best
 }
 
+func (c *StreamEngine) chargeWeightedService(leg *streamLeg, bytes int) {
+	if !c.cfg.BenchmarkWeightedDeficit || leg == nil || bytes <= 0 {
+		return
+	}
+	weight := c.effectiveSchedulerWeight(leg)
+	if weight <= 0 {
+		return
+	}
+	c.weightedMu.Lock()
+	c.weightedFinish[leg.id] += float64(bytes) / weight
+	c.weightedMu.Unlock()
+}
+
 func (c *StreamEngine) chooseLegWithStartupHint(active bool, avoid, preferred int16) *streamLeg {
 	if preferred >= 0 && preferred < 2 && preferred != avoid {
 		if leg := c.getLeg(uint8(preferred)); leg != nil && !leg.closed.Load() {
@@ -903,6 +1153,89 @@ func (c *StreamEngine) chooseLegWithStartupHint(active bool, avoid, preferred in
 		}
 	}
 	return c.chooseLeg(active, avoid)
+}
+
+func (c *StreamEngine) chooseOrdinaryLeg(active bool, avoid int16, payload int) *streamLeg {
+	if c.cfg.BenchmarkAssignedCommit || c.cfg.BenchmarkAssignedService {
+		return c.chooseAssignedLeg(avoid, payload)
+	}
+	if c.cfg.loadProbe != nil {
+		return c.cfg.loadProbe.choose(c, payload)
+	}
+	return c.chooseLeg(active, avoid)
+}
+
+func (c *StreamEngine) chooseAssignedLeg(avoid int16, payload int) *streamLeg {
+	legs := c.availableLegs()
+	c.weightedMu.Lock()
+	defer c.weightedMu.Unlock()
+	var best *streamLeg
+	bestScore := math.MaxFloat64
+	for _, leg := range legs {
+		if len(legs) > 1 && int16(leg.id) == avoid {
+			continue
+		}
+		weight := c.effectiveSchedulerWeight(leg)
+		if weight <= 0 {
+			continue
+		}
+		score := float64(c.assignedService[leg.id]+uint64(payload)) / weight
+		if best == nil || score < bestScore {
+			best, bestScore = leg, score
+		}
+	}
+	return best
+}
+
+func (c *StreamEngine) assignedSnapshot() ([2]uint64, [2]uint64) {
+	c.weightedMu.Lock()
+	defer c.weightedMu.Unlock()
+	return c.assignedService, c.assignedRecords
+}
+
+func (c *StreamEngine) readyLegs() ([]*streamLeg, uint8) {
+	legs := c.availableLegs()
+	ready := make([]*streamLeg, 0, len(legs))
+	for _, leg := range legs {
+		if leg.closed.Load() || cap(leg.send) == 0 || len(leg.send) >= cap(leg.send) {
+			continue
+		}
+		ready = append(ready, leg)
+	}
+	state := uint8(3)
+	if len(ready) == 2 {
+		state = 0
+	} else if len(ready) == 1 {
+		if ready[0].id == 0 {
+			state = 1
+		} else {
+			state = 2
+		}
+	}
+	c.readyStateDecisions[state].Add(1)
+	return ready, state
+}
+
+func (c *StreamEngine) chooseAssignedReadyLeg(avoid int16, payload int) (*streamLeg, uint8) {
+	ready, state := c.readyLegs()
+	c.weightedMu.Lock()
+	defer c.weightedMu.Unlock()
+	var best *streamLeg
+	bestScore := math.MaxFloat64
+	for _, leg := range ready {
+		if len(ready) > 1 && int16(leg.id) == avoid {
+			continue
+		}
+		weight := c.effectiveSchedulerWeight(leg)
+		if weight <= 0 {
+			continue
+		}
+		score := float64(c.assignedService[leg.id]+uint64(payload)) / weight
+		if best == nil || score < bestScore {
+			best, bestScore = leg, score
+		}
+	}
+	return best, state
 }
 
 func (c *StreamEngine) markTransit(record *StreamTXRecord, legID uint8) bool {
@@ -948,19 +1281,66 @@ func (c *StreamEngine) isOutstanding(record *StreamTXRecord) bool {
 	return c.txLedger.IsOutstanding(record)
 }
 
-func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord) bool {
+func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bool) bool {
 	if leg.closed.Load() {
 		return false
+	}
+	if !retry && record.trace != nil {
+		record.traceLeg = leg.id
+		record.traceT3Ns = time.Now().UnixNano()
 	}
 	if !c.markTransit(record, leg.id) {
 		return !c.isOutstanding(record)
 	}
-	attempt := txSendAttempt{record: record}
+	attempt := txSendAttempt{record: record, queuedNs: time.Now().UnixNano(), ordinary: !retry}
 	select {
 	case <-leg.done:
 		c.clearAttempt(record, leg.id, false)
 		return false
 	case leg.send <- attempt:
+		if retry && c.cfg.frontierProbe != nil {
+			c.cfg.frontierProbe.retry(record, time.Now())
+		}
+		if !retry && c.assignedDecoupledEnabled() {
+			if assignment := record.benchmarkAssignment.Load(); assignment != nil {
+				assignment.admitted.Store(true)
+				c.decoupledStats.admitted[leg.id].Add(uint64(len(record.Payload())))
+			}
+		}
+		if !retry && c.cfg.loadProbe != nil {
+			c.cfg.loadProbe.assignedRecord(leg.id, len(record.Payload()))
+		}
+		if !retry {
+			if c.cfg.BenchmarkAssignedCommit || c.cfg.BenchmarkAssignedService || c.cfg.BenchmarkAssignedReady {
+				c.weightedMu.Lock()
+				c.assignedService[leg.id] += uint64(len(record.Payload()))
+				c.assignedRecords[leg.id]++
+				c.weightedMu.Unlock()
+			}
+			c.chargeWeightedService(leg, len(record.Payload()))
+		}
+		if !retry && c.cfg.wakeTelemetry != nil {
+			c.cfg.wakeTelemetry.dispatched(record, leg)
+		}
+		if retry {
+			c.debugRetryDispatches.Add(1)
+		} else {
+			c.debugNewDispatches.Add(1)
+		}
+		dispatchNow := time.Now().UnixNano()
+		previousDispatch := int64(0)
+		if !retry {
+			previousDispatch = c.debugLastDispatchNs.Swap(dispatchNow)
+		} else {
+			c.debugLastDispatchNs.Store(dispatchNow)
+		}
+		leg.debugOrdinaryDispatches.Add(1)
+		if !retry && record.trace != nil {
+			record.traceT4Ns = dispatchNow
+			if previousDispatch > 0 {
+				record.trace.addGap(dispatchNow - previousDispatch)
+			}
+		}
 		// A buffered send can win the select while the leg is closing. Recheck
 		// after enqueue so a record never remains pinned to a retired writer.
 		if leg.closed.Load() {
@@ -969,6 +1349,10 @@ func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord) bool {
 		}
 		return true
 	default:
+		leg.debugQueueFullRejects.Add(1)
+		if retry {
+			c.debugRetryRejects.Add(1)
+		}
 		c.clearAttempt(record, leg.id, false)
 		return false
 	}
@@ -983,12 +1367,18 @@ func (c *StreamEngine) tryQueueRescue(leg *streamLeg, record *StreamTXRecord) bo
 		already := !c.txLedger.IsOutstanding(record) || c.txLedger.RescueInTransit(record)
 		return already
 	}
-	attempt := txSendAttempt{record: record, rescue: true}
+	attempt := txSendAttempt{record: record, rescue: true, queuedNs: time.Now().UnixNano()}
 	select {
 	case <-leg.done:
 		c.clearAttempt(record, leg.id, true)
 		return false
 	case leg.rescue <- attempt:
+		if p := c.cfg.frontierProbe; p != nil {
+			p.rescue(c, record, time.Now())
+		}
+		c.debugRescueDispatches.Add(1)
+		c.debugLastDispatchNs.Store(time.Now().UnixNano())
+		leg.debugRescueDispatches.Add(1)
 		// Commit cooldown/diagnostic state only after the priority queue accepted
 		// this attempt. A full queue therefore remains immediately retryable.
 		c.markRescueQueued(record, leg.id, started)
@@ -998,12 +1388,124 @@ func (c *StreamEngine) tryQueueRescue(leg *streamLeg, record *StreamTXRecord) bo
 		}
 		return true
 	default:
+		leg.debugRescueFullRejects.Add(1)
+		c.debugRescueRejects.Add(1)
 		c.clearAttempt(record, leg.id, true)
 		return false
 	}
 }
 
 func (c *StreamEngine) enqueueRecord(record *StreamTXRecord, avoid int16) error {
+	if c.assignedDecoupledEnabled() {
+		return c.enqueueAssignedDecoupled(record, avoid)
+	}
+	if c.cfg.BenchmarkAssignedReady {
+		for {
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			default:
+			}
+			if !c.isOutstanding(record) {
+				return nil
+			}
+			leg, _ := c.chooseAssignedReadyLeg(avoid, len(record.Payload()))
+			if leg == nil {
+				select {
+				case <-c.done:
+					return ErrStreamClosed
+				case <-c.spaceWake:
+				}
+				continue
+			}
+			if record.trace != nil {
+				record.traceT2Ns = time.Now().UnixNano()
+			}
+			if c.tryQueue(leg, record, false) {
+				return nil
+			}
+			c.readyRaceFailures.Add(1)
+			runtime.Gosched()
+			// The ready set is advisory. Rebuild it and make a new weighted
+			// decision; never reuse a stale fallback chain.
+		}
+	}
+	if c.cfg.BenchmarkAssignedCommit {
+		leg := c.chooseAssignedLeg(avoid, len(record.Payload()))
+		if record.trace != nil {
+			record.traceT2Ns = time.Now().UnixNano()
+		}
+		for {
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			default:
+			}
+			if !c.isOutstanding(record) {
+				return nil
+			}
+			if leg != nil && c.tryQueue(leg, record, false) {
+				return nil
+			}
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			case <-c.spaceWake:
+			}
+		}
+	}
+	if c.cfg.BenchmarkWeightedCommit {
+		leg := c.chooseOrdinaryLeg(c.active.Load(), avoid, len(record.Payload()))
+		if record.trace != nil {
+			record.traceT2Ns = time.Now().UnixNano()
+		}
+		for {
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			default:
+			}
+			if !c.isOutstanding(record) {
+				return nil
+			}
+			if leg != nil && c.tryQueue(leg, record, false) {
+				return nil
+			}
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			case <-c.spaceWake:
+			}
+		}
+	}
+	if c.cfg.BenchmarkFixedRatio {
+		// Pin each logical record to the diagnostic assignment until its ordinary
+		// enqueue succeeds. This prevents a full preferred queue from turning the
+		// intended 1:4 pattern into an accidental fallback ratio.
+		leg := c.chooseLeg(c.active.Load(), avoid)
+		if record.trace != nil {
+			record.traceT2Ns = time.Now().UnixNano()
+		}
+		for {
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			default:
+			}
+			if !c.isOutstanding(record) {
+				return nil
+			}
+			if leg != nil && c.tryQueue(leg, record, false) {
+				return nil
+			}
+			select {
+			case <-c.done:
+				return ErrStreamClosed
+			case <-c.spaceWake:
+			case <-c.retryCh:
+			}
+		}
+	}
 	for {
 		select {
 		case <-c.done:
@@ -1014,7 +1516,10 @@ func (c *StreamEngine) enqueueRecord(record *StreamTXRecord, avoid int16) error 
 			return nil
 		}
 		active := c.active.Load()
-		leg := c.chooseLeg(active, avoid)
+		leg := c.chooseOrdinaryLeg(active, avoid, len(record.Payload()))
+		if record.trace != nil {
+			record.traceT2Ns = time.Now().UnixNano()
+		}
 		if leg == nil {
 			select {
 			case <-c.done:
@@ -1024,8 +1529,14 @@ func (c *StreamEngine) enqueueRecord(record *StreamTXRecord, avoid int16) error 
 			}
 			continue
 		}
-		if c.tryQueue(leg, record) {
+		if c.tryQueue(leg, record, false) {
+			if c.cfg.HandoffTelemetry != nil {
+				c.debugPrimarySuccess.Add(1)
+			}
 			return nil
+		}
+		if c.cfg.HandoffTelemetry != nil {
+			c.debugPrimaryFailure.Add(1)
 		}
 		if !active && leg != nil && leg.id == 0 && cap(leg.send) > 0 && len(leg.send) >= cap(leg.send) {
 			// A saturated preferred queue is direct evidence that the single-path data
@@ -1040,15 +1551,58 @@ func (c *StreamEngine) enqueueRecord(record *StreamTXRecord, avoid int16) error 
 				if other == leg || (c.legCount() > 1 && int16(other.id) == avoid) {
 					continue
 				}
-				if c.tryQueue(other, record) {
+				if c.cfg.HandoffTelemetry != nil {
+					c.debugFallbackAttempts.Add(1)
+				}
+				if c.tryQueue(other, record, false) {
+					if c.cfg.HandoffTelemetry != nil {
+						c.debugFallbackSuccess.Add(1)
+					}
 					return nil
 				}
 			}
 		}
+		if c.cfg.BenchmarkReadyFallback {
+			// Benchmark-only race-window probe: give another healthy queue a few
+			// scheduler turns to become writable before entering spaceWake.
+			for pass := 0; pass < 4; pass++ {
+				runtime.Gosched()
+				for _, other := range c.availableLegs() {
+					if other == leg || (c.legCount() > 1 && int16(other.id) == avoid) {
+						continue
+					}
+					if c.cfg.HandoffTelemetry != nil {
+						c.debugFallbackAttempts.Add(1)
+					}
+					if c.tryQueue(other, record, false) {
+						if c.cfg.HandoffTelemetry != nil {
+							c.debugFallbackSuccess.Add(1)
+						}
+						return nil
+					}
+				}
+			}
+		}
+		var waitStarted time.Time
+		if c.cfg.wakeTelemetry != nil {
+			c.cfg.wakeTelemetry.begin(c, leg)
+		}
+		if c.cfg.HandoffTelemetry != nil {
+			waitStarted = time.Now()
+		}
+		if c.cfg.HandoffTelemetry != nil {
+			c.debugSpaceWakeEntries.Add(1)
+		}
 		select {
 		case <-c.done:
 			return ErrStreamClosed
-		case <-time.After(time.Millisecond):
+		case notification := <-c.spaceWake:
+			if c.cfg.wakeTelemetry != nil {
+				c.cfg.wakeTelemetry.received(notification)
+			}
+			if c.cfg.HandoffTelemetry != nil {
+				c.debugSpaceWakeWaitNs.Add(uint64(time.Since(waitStarted)))
+			}
 		}
 	}
 }
@@ -1059,7 +1613,7 @@ func (c *StreamEngine) enqueueRecordWithHint(record *StreamTXRecord, avoid, pref
 	}
 	active := c.active.Load()
 	leg := c.chooseLegWithStartupHint(active, avoid, preferred)
-	if leg != nil && c.tryQueue(leg, record) {
+	if leg != nil && c.tryQueue(leg, record, false) {
 		return nil
 	}
 	// The one-shot hint is consumed by this decision. Any unavailable or
@@ -1091,7 +1645,7 @@ func (c *StreamEngine) tryEnqueueRecord(record *StreamTXRecord, avoid int16) boo
 	if leg == nil {
 		return false
 	}
-	if c.tryQueue(leg, record) {
+	if c.tryQueue(leg, record, true) {
 		return true
 	}
 	if !active && leg.id == 0 && cap(leg.send) > 0 && len(leg.send) >= cap(leg.send) {
@@ -1103,7 +1657,7 @@ func (c *StreamEngine) tryEnqueueRecord(record *StreamTXRecord, avoid int16) boo
 			if other == leg || (c.legCount() > 1 && int16(other.id) == avoid) {
 				continue
 			}
-			if c.tryQueue(other, record) {
+			if c.tryQueue(other, record, true) {
 				return true
 			}
 		}
@@ -1121,11 +1675,18 @@ func (c *StreamEngine) enqueueRescue(record *StreamTXRecord, avoid int16) error 
 		return nil
 	}
 	legs := c.availableLegs()
-	if len(legs) < 2 {
+	if len(legs) == 0 {
 		return nil
 	}
-	leg := c.chooseLeg(true, avoid)
-	if leg == nil || int16(leg.id) == avoid {
+	var leg *streamLeg
+	if len(legs) == 1 {
+		// With one live leg, retry the overdue frontier on that same leg. The
+		// alternative is an unrecoverable cumulative-ACK stall after loss.
+		leg = legs[0]
+	} else {
+		leg = c.chooseLeg(true, avoid)
+	}
+	if leg == nil || (len(legs) > 1 && int16(leg.id) == avoid) {
 		return nil
 	}
 	_ = c.tryQueueRescue(leg, record)
@@ -1133,6 +1694,8 @@ func (c *StreamEngine) enqueueRescue(record *StreamTXRecord, avoid int16) error 
 }
 
 func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
+	leg.debugWriterState.Store(0)
+	defer leg.debugWriterState.Store(0)
 	var ackSent uint64
 
 	writeControl := func(control legControl) bool {
@@ -1167,20 +1730,47 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 	}
 
 	writeAttempt := func(attempt txSendAttempt) bool {
+		leg.debugLastDequeueNs.Store(time.Now().UnixNano())
+		if !attempt.rescue && attempt.record != nil && attempt.record.trace != nil {
+			attempt.record.traceT5Ns = time.Now().UnixNano()
+		}
+		if attempt.queuedNs != 0 {
+			queuedAt := time.Unix(0, attempt.queuedNs)
+			if wait := time.Since(queuedAt); wait > 0 {
+				leg.debugQueueWaitNs.Add(uint64(wait))
+			}
+		}
 		record := attempt.record
 		if record == nil {
 			return true
 		}
 		if !c.attemptCurrent(record, leg.id, attempt.rescue) {
+			if attempt.ordinary && c.cfg.loadProbe != nil {
+				c.cfg.loadProbe.complete(leg.id, len(record.Payload()))
+			}
 			return true
 		}
+		if attempt.ordinary && c.cfg.loadProbe != nil {
+			defer c.cfg.loadProbe.complete(leg.id, len(record.Payload()))
+		}
 		writeStarted := time.Now()
+		if !attempt.rescue && record.trace != nil {
+			record.traceT6Ns = writeStarted.UnixNano()
+		}
+		leg.debugWriterState.Store(2)
 		if err := writeDataFrame(leg.conn, dataFrame{seq: record.Sequence(), data: record.Payload()}); err != nil {
+			leg.debugWriteErrors.Add(1)
+			leg.debugWriterState.Store(0)
 			c.clearAttempt(record, leg.id, attempt.rescue)
 			c.handleLegFailure(leg, err)
 			return false
 		}
 		leg.perf.observeWrite(len(record.Payload()), time.Since(writeStarted))
+		leg.debugWriteBusyNs.Add(uint64(time.Since(writeStarted)))
+		leg.debugWriteCount.Add(1)
+		leg.debugLastWriteDurationNs.Store(int64(time.Since(writeStarted)))
+		leg.debugLastWriteNs.Store(time.Now().UnixNano())
+		leg.debugWriterState.Store(0)
 		c.markAttemptSent(record, leg.id, attempt.rescue)
 		return true
 	}
@@ -1196,6 +1786,7 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 		// Explicit control is next. Frontier-rescue DATA is also a priority lane:
 		// it exists specifically to repair a cumulative-ACK hole and must not wait
 		// behind an ordinary per-leg DATA queue that may already be backpressured.
+		leg.debugWriterState.Store(1)
 		select {
 		case <-c.done:
 			return
@@ -1235,6 +1826,13 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 				return
 			}
 		case attempt := <-leg.send:
+			if attempt.ordinary && c.cfg.loadProbe != nil {
+				c.cfg.loadProbe.dequeue(leg.id, len(attempt.record.Payload()))
+			}
+			if c.cfg.wakeTelemetry != nil {
+				c.cfg.wakeTelemetry.released(leg)
+			}
+			c.kickSpaceSource("QUEUE_SPACE_RELEASE", int(leg.id))
 			// ACK/control/rescue wakes can race with ordinary DATA becoming selectable.
 			// Recheck those lanes before starting a normal DATA frame.
 			if !writePendingAck() {
@@ -1275,6 +1873,8 @@ func (c *StreamEngine) legReadLoop(leg *streamLeg) {
 			}
 			c.activate()
 		case frameTypeAck:
+			c.debugLastAckFrameNs.Store(time.Now().UnixNano())
+			c.debugLastAckValue.Store(frame.seq)
 			if c.telemetry != nil {
 				c.telemetry.markControlRx(leg.id, frame.typ)
 			}
@@ -1323,7 +1923,13 @@ func (c *StreamEngine) handleLegFailure(leg *streamLeg, err error) {
 
 	// Any record queued/writing on the dead leg must become retryable. A frame
 	// that actually arrived before the failure is harmlessly deduplicated by seq.
+	if p := c.cfg.frontierProbe; p != nil {
+		p.failure(c, leg.id, time.Now())
+	}
 	c.txLedger.InvalidateLeg(LegID(leg.id))
+	if c.assignedDecoupledEnabled() {
+		go c.reassignFailedPending(leg.id)
+	}
 
 	// Do not allow a same-ID replacement to attach until *both* old worker
 	// goroutines have exited. The old read/write loops use only an 8-bit leg ID
@@ -1368,6 +1974,7 @@ func (c *StreamEngine) handleLegFailure(leg *streamLeg, err error) {
 		go c.cfg.OnLegDown(leg.id, err)
 	}
 	c.kickRetry()
+	c.kickSpaceSource("CONNECTION_FAILURE", -1)
 	c.forceAck()
 	if remaining == 0 {
 		epoch := c.recoveryEpoch.Add(1)
@@ -1392,6 +1999,28 @@ func (c *StreamEngine) kickRetry() {
 	select {
 	case c.retryCh <- struct{}{}:
 	default:
+	}
+}
+
+func (c *StreamEngine) kickSpace() {
+	c.kickSpaceSource("OTHER", -1)
+}
+
+func (c *StreamEngine) kickSpaceSource(source string, leg int) {
+	c.wakeDecoupled()
+	notification := streamSpaceNotification{}
+	if c.cfg.wakeTelemetry != nil {
+		notification = streamSpaceNotification{source: source, leg: leg, at: time.Now()}
+	}
+	select {
+	case c.spaceWake <- notification:
+		if c.cfg.wakeTelemetry != nil {
+			c.cfg.wakeTelemetry.signal(source, true)
+		}
+	default:
+		if c.cfg.wakeTelemetry != nil {
+			c.cfg.wakeTelemetry.signal(source, false)
+		}
 	}
 }
 
@@ -1463,6 +2092,10 @@ func (c *StreamEngine) scheduleRetries() {
 		return
 	}
 	for _, candidate := range c.txLedger.PlanRetries(streamLegAvailability(legs)) {
+		if c.benchmarkPendingOnly(candidate.Record) {
+			continue
+		}
+		c.debugRetryScheduled.Add(1)
 		// A full ordinary retry queue is deferred to the next scheduler turn.
 		// Do not let it delay frontier rescue below.
 		_ = c.tryEnqueueRecord(candidate.Record, candidate.Avoid)
@@ -1480,11 +2113,25 @@ func (c *StreamEngine) scheduleRetries() {
 // already-overdue blocker can be repaired immediately rather than waiting up to
 // another retransmit-loop interval.
 func (c *StreamEngine) scheduleFrontierRescue() {
+	c.debugRescueChecks.Add(1)
 	now := time.Now()
 	var live StreamLegAvailability
 	live[0] = c.hasLeg(0)
 	live[1] = c.hasLeg(1)
-	plan := DecideStreamTXFrontierRepair(c.txLedger.FrontierCandidate(now, c.cfg.RetransmitTimeout), live)
+	candidate := c.txLedger.FrontierCandidate(now, c.cfg.RetransmitTimeout)
+	if p := c.cfg.frontierProbe; p != nil {
+		candidate = p.apply(candidate, now, c.cfg.RetransmitTimeout)
+	}
+	if c.benchmarkPendingOnly(candidate.record) {
+		return
+	}
+	if candidate.overdue {
+		c.debugRescueOverdue.Add(1)
+	}
+	plan := DecideStreamTXFrontierRepair(candidate, live)
+	if plan.Action == StreamTXFrontierRescue {
+		c.debugRescuePlans.Add(1)
+	}
 	switch plan.Action {
 	case StreamTXFrontierNeedActivation:
 		if !c.active.Load() {
@@ -1515,6 +2162,15 @@ func (c *StreamEngine) handleAck(next uint64) error {
 		return nil
 	}
 	if result.Released > 0 {
+		if p := c.cfg.frontierProbe; p != nil {
+			p.ack(result.AckedNext, time.Now())
+			p.observe(c.txLedger.frontierSnapshot(), time.Now())
+		}
+		c.debugAckAdvances.Add(1)
+		c.debugAckRetiredRecords.Add(uint64(result.Released))
+		for _, bytes := range result.AckedBytesByLeg {
+			c.debugAckRetiredBytes.Add(bytes)
+		}
 		now := result.LastACKProgress
 		c.lastAckProgressNs.Store(now.UnixNano())
 		for legID, bytes := range result.AckedBytesByLeg {
@@ -1528,6 +2184,12 @@ func (c *StreamEngine) handleAck(next uint64) error {
 		}
 	}
 	c.releaseInflight(result.Released)
+	// ACK retirement releases logical admission capacity. A producer may be
+	// asleep in enqueueRecord after all physical queues rejected its attempt;
+	// wake it even when no leg writer happened to dequeue another record.
+	if result.Released > 0 {
+		c.kickSpaceSource("ACK_LEDGER_RELEASE", -1)
+	}
 	// R10: cumulative ACK progress can expose another already-overdue blocker.
 	// Wake the O(1) frontier checker immediately instead of waiting for the next
 	// retransmit ticker. Duplicate/non-progress ACKs returned above and do not
@@ -1706,13 +2368,29 @@ func (c *StreamEngine) sendControlFrame(typ byte, value uint64) bool {
 }
 
 func (c *StreamEngine) syncRXStatsFromWindow(window *StreamRXWindow) {
-	c.rxPendingFrames.Store(int64(window.PendingFrames()))
+	pending := int64(window.PendingFrames())
+	c.rxPendingFrames.Store(pending)
+	for {
+		old := c.rxMaxPendingFrames.Load()
+		if pending <= old || c.rxMaxPendingFrames.CompareAndSwap(old, pending) {
+			break
+		}
+	}
 	c.rxPendingBytes.Store(window.PendingBytes())
 	gapSince := window.GapSince()
 	if gapSince.IsZero() {
 		c.rxGapSinceUnixNs.Store(0)
 	} else {
 		c.rxGapSinceUnixNs.Store(gapSince.UnixNano())
+		age := time.Since(gapSince)
+		if age > 0 {
+			for {
+				old := c.rxMaxGapAgeNs.Load()
+				if int64(age) <= old || c.rxMaxGapAgeNs.CompareAndSwap(old, int64(age)) {
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -1737,7 +2415,11 @@ func (c *StreamEngine) rxLoop() {
 				Leg:      LegID(frame.leg),
 				Payload:  frame.data,
 			}
+			if frame.seq > c.debugRXHighest.Load() {
+				c.debugRXHighest.Store(frame.seq)
+			}
 			disposition, err := window.Insert(rxFrame, time.Now())
+			c.debugRXExpected.Store(window.Expected())
 			if err != nil {
 				c.putBuffer(frame.data)
 				c.fail(err)

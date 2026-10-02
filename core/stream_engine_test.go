@@ -2,6 +2,7 @@ package smp3core
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -211,6 +212,55 @@ type schedulerStubLeg struct{}
 func (schedulerStubLeg) Read([]byte) (int, error)    { return 0, io.EOF }
 func (schedulerStubLeg) Write(p []byte) (int, error) { return len(p), nil }
 func (schedulerStubLeg) Close() error                { return nil }
+
+func TestStreamSchedulerWeightedDispatchUsesBothAsymmetricLegs(t *testing.T) {
+	cfg := testStreamConfig()
+	cfg.SchedulerMode = StreamSchedulerStatic
+	cfg.QueueFrames = 64
+	core, app := NewStreamEngine(cfg)
+	defer core.Close()
+	defer app.Close()
+	for id := uint8(0); id < 2; id++ {
+		core.legs[id] = &streamLeg{id: id, conn: schedulerStubLeg{}, send: make(chan txSendAttempt, cfg.QueueFrames), rescue: make(chan txSendAttempt, 8), control: make(chan legControl, 8), ackWake: make(chan struct{}, 1), done: make(chan struct{}), retired: make(chan struct{})}
+	}
+	core.active.Store(true)
+	for i := 0; i < 12; i++ {
+		record := core.txLedger.Add(make([]byte, cfg.ChunkSize), time.Now())
+		if err := core.enqueueRecord(record, -1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(core.legs[0].send) == 0 || len(core.legs[1].send) == 0 {
+		t.Fatalf("weighted scheduler did not use both legs: leg0=%d leg1=%d", len(core.legs[0].send), len(core.legs[1].send))
+	}
+}
+
+func TestStreamSchedulerUsesHealthyAlternateWhenPreferredQueueFull(t *testing.T) {
+	for _, mode := range []StreamSchedulerMode{StreamSchedulerStatic, StreamSchedulerAdaptive} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			cfg := testStreamConfig()
+			cfg.SchedulerMode = mode
+			cfg.QueueFrames = 2
+			core, app := NewStreamEngine(cfg)
+			defer core.Close()
+			defer app.Close()
+			for id := uint8(0); id < 2; id++ {
+				core.legs[id] = &streamLeg{id: id, conn: schedulerStubLeg{}, send: make(chan txSendAttempt, cfg.QueueFrames), rescue: make(chan txSendAttempt, 8), control: make(chan legControl, 8), ackWake: make(chan struct{}, 1), done: make(chan struct{}), retired: make(chan struct{})}
+			}
+			core.active.Store(true)
+			for i := 0; i < cap(core.legs[0].send); i++ {
+				core.legs[0].send <- txSendAttempt{}
+			}
+			record := core.txLedger.Add([]byte("alternate"), time.Now())
+			if err := core.enqueueRecord(record, -1); err != nil {
+				t.Fatal(err)
+			}
+			if len(core.legs[1].send) != 1 {
+				t.Fatalf("healthy alternate was not used: leg0=%d leg1=%d", len(core.legs[0].send), len(core.legs[1].send))
+			}
+		})
+	}
+}
 
 func TestRetransmitLoopFrontierRescueSurvivesBlockedOrdinaryRetry(t *testing.T) {
 	cfg := testStreamConfig()

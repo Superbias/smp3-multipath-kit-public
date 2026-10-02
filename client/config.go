@@ -362,7 +362,7 @@ func validateStream(c *StreamOptions) error {
 	if c.SchedulerMode == "" {
 		c.SchedulerMode = "adaptive"
 	}
-	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" {
+	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" && c.SchedulerMode != "aggregation" {
 		return fmt.Errorf("invalid smp3.scheduler_mode %q", c.SchedulerMode)
 	}
 	if c.StartupPolicy == "" {
@@ -495,6 +495,9 @@ func (c SMP3Options) streamConfig(onActivate func(), onLegDown func(uint8, error
 func streamSchedulerMode(value string) smp3core.StreamSchedulerMode {
 	if value == "static" {
 		return smp3core.StreamSchedulerStatic
+	}
+	if value == "aggregation" {
+		return smp3core.StreamSchedulerAggregation
 	}
 	return smp3core.StreamSchedulerAdaptive
 }

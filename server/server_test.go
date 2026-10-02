@@ -216,6 +216,24 @@ func TestConfigValidationAndDurationParsing(t *testing.T) {
 	}
 }
 
+func TestStreamSchedulerModes(t *testing.T) {
+	for _, mode := range []string{"adaptive", "static", "aggregation"} {
+		cfg := testConfig()
+		cfg.Stream.SchedulerMode = mode
+		if err := cfg.NormalizeAndValidate(); err != nil {
+			t.Fatalf("scheduler mode %q rejected: %v", mode, err)
+		}
+	}
+	cfg := testConfig()
+	cfg.Stream.SchedulerMode = "invalid"
+	if err := cfg.NormalizeAndValidate(); err == nil {
+		t.Fatal("invalid scheduler mode accepted")
+	}
+	if got := streamSchedulerMode("aggregation"); got != smp3core.StreamSchedulerAggregation {
+		t.Fatalf("aggregation mapping = %v", got)
+	}
+}
+
 func TestServerTelemetryCountsAuthenticatedHelloAndActiveLegs(t *testing.T) {
 	target := startTCPEcho(t)
 	cfg := testConfig()

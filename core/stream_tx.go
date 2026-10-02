@@ -2,6 +2,7 @@ package smp3core
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -84,8 +85,9 @@ type StreamTXSnapshot struct {
 // copied and is never cleared on ACK retirement because stale retry queue
 // pointers may still refer to this record.
 type StreamTXRecord struct {
-	sequence uint64
-	payload  []byte
+	benchmarkAssignment atomic.Pointer[benchmarkAssignment]
+	sequence            uint64
+	payload             []byte
 
 	createdAt         time.Time
 	lastSentAt        time.Time
@@ -102,6 +104,16 @@ type StreamTXRecord struct {
 	lastRescueAt    time.Time
 
 	sendCount uint32
+	trace     *StreamHandoffTelemetry
+	traceLeg  uint8
+	traceT0Ns int64
+	traceT1Ns int64
+	traceT2Ns int64
+	traceT3Ns int64
+	traceT4Ns int64
+	traceT5Ns int64
+	traceT6Ns int64
+	traceT7Ns int64
 }
 
 // Sequence returns the immutable frame ordinal.
@@ -242,9 +254,8 @@ func (l *StreamTXLedger) MarkRescueTransit(record *StreamTXRecord, leg LegID, no
 	if record.inTransit && record.transitLeg == leg {
 		return time.Time{}, false
 	}
-	if !record.inTransit && record.lastSentLeg == int16(leg) {
-		return time.Time{}, false
-	}
+	// A same-leg rescue is valid when this is the only live carrier. The
+	// scheduler excludes same-leg rescue whenever an alternate leg exists.
 	record.rescueInTransit = true
 	record.rescueLeg = leg
 	record.rescueSince = now

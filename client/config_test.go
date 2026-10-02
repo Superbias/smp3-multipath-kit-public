@@ -198,6 +198,24 @@ func TestPerLegUpstreamOverrideValidation(t *testing.T) {
 	}
 }
 
+func TestStreamSchedulerModes(t *testing.T) {
+	for _, mode := range []string{"adaptive", "static", "aggregation"} {
+		cfg := validTestConfig()
+		cfg.SMP3.Stream.SchedulerMode = mode
+		if err := cfg.NormalizeAndValidate(); err != nil {
+			t.Fatalf("scheduler mode %q rejected: %v", mode, err)
+		}
+	}
+	cfg := validTestConfig()
+	cfg.SMP3.Stream.SchedulerMode = "invalid"
+	if err := cfg.NormalizeAndValidate(); err == nil {
+		t.Fatal("invalid scheduler mode accepted")
+	}
+	if got := streamSchedulerMode("aggregation"); got != smp3core.StreamSchedulerAggregation {
+		t.Fatalf("aggregation mapping = %v", got)
+	}
+}
+
 func TestLegUpstreamAddressesExposeOnlySafeBindingIdentities(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.UpstreamSocks.Address = "127.0.0.1:10001"
