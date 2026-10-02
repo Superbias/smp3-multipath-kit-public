@@ -17,6 +17,23 @@ protocols, node credentials, TLS/Reality/HY2/Snell handling, and child-outbound
 selection. R18 does not change Native routing, child-outbound semantics, wire
 behavior, or server primary listener semantics.
 
+Native uses adaptive scheduling by default. To opt into the v2.5 aggregation
+scheduler, set `scheduler-mode: aggregation` on the `smp3` proxy. The other
+supported values remain `adaptive` and `static`.
+
+```yaml
+proxies:
+  - name: smp3-main
+    type: smp3
+    server: 10.66.66.1
+    port: 24444
+    password: change-me
+    scheduler-mode: aggregation
+    legs:
+      - proxy: line-path
+      - proxy: public-hy2
+```
+
 Build and test Native separately:
 
 ```bash

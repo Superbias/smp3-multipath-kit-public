@@ -499,8 +499,10 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	case "", "adaptive":
 	case "static":
 		mode = smp3core.StreamSchedulerStatic
+	case "aggregation":
+		mode = smp3core.StreamSchedulerAggregation
 	default:
-		return smp3core.StreamConfig{}, fmt.Errorf("smp3: scheduler-mode must be adaptive or static")
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: scheduler-mode must be adaptive, static, or aggregation")
 	}
 	threshold := option.ActivationThresholdMbps
 	if threshold == 0 {
