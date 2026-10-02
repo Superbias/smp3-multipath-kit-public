@@ -1,67 +1,73 @@
-# SMP3 Aggregation RC Validation Report
+# SMP3 Aggregation Source Closure and RC Validation Report
 
 ## Decision
 
-`F. ARTIFACT_PROVENANCE_BLOCKER`
+`A. SOURCE_CLOSURE_VALIDATED`
 
-The frozen tracked source cannot build standalone binaries. Real-world gates
-have not been executed and cannot be classified as passing.
+The previously frozen commit `2b0d02e262a5e33838cc1318df24d2c8217813c4` is
+source-incomplete and is not RC eligible. Source closure was completed in
+separate commits on top of it; the latest tracked-only validation SHA is
+`4e695b0415d50f998a3ac03731041d1940a7093a`.
 
-## Source and build context
+No push, tag, release, deployment, or default scheduler change was performed.
 
-- Source SHA: `2b0d02e262a5e33838cc1318df24d2c8217813c4`
-- Branch: `main`; HEAD was unchanged throughout this gate.
-- Date: 2026-10-02 (Asia/Shanghai).
-- Builder: Go 1.22.6, Windows/amd64; cross-build CGO_ENABLED=0.
-- Clean source: `git archive --format=zip` of the exact SHA, extracted outside
-  the dirty checkout. No untracked research sources were copied into it.
+## Source closure
+
+- `36d474091ba297b5394192435a4468c2034c7cf3` adds the missing production
+  declarations and runtime state for `streamLoadProbe`, `streamWakeTelemetry`,
+  and `streamSpaceNotification`.
+- `4e695b0415d50f998a3ac03731041d1940a7093a` adds only the benchmark support
+  needed by committed aggregation tests: the backpressure snapshot and the
+  required pacing metric helpers.
+- Historical untracked debug/calibration files remain preserved as
+  `.historical`; they were not blindly included in the closure.
+
+## Clean archive provenance
+
+- Archive source: `git archive --format=zip` of `4e695b0`; extracted outside
+  the dirty checkout. No untracked research files were copied.
 - Archive SHA256:
-  `50dda0d8c527ec6615f5f73a327bbe301dc27f0f24edc186ea6d786dbe3c8db0`
+  `FF301808F9D987043B2488C41419D725840629EA061552DA057914B13315275B`
+- Build host: Windows/amd64, Go 1.22.x, `CGO_ENABLED=0`, explicit GOOS/GOARCH,
+  archived `go.work`, `go build -trimpath -buildid=`.
 
-## Build attempts
+## Standalone builds
 
-| Component | Target | Result |
-|---|---|---|
-| smp3-client | windows/amd64 | FAIL |
-| smp3-server | windows/amd64 | FAIL |
-| smp3-client | linux/amd64 | FAIL |
-| smp3-server | linux/amd64 | FAIL |
+| Artifact | Result | Size | SHA256 |
+|---|---:|---:|---|
+| `smp3-client-windows-amd64.exe` | PASS | 4,512,768 | `DD7E816B4E820004ED51E87EE1B904BA2474FD87837B7F3766EE0CD9F316ADB7` |
+| `smp3-client-linux-amd64` | PASS | 4,399,125 | `87714F7056B2A69861528D15541B6EC428D3838E7C02E62BC3D8C6348AC77D45` |
+| `smp3-server-windows-amd64.exe` | PASS | 8,630,272 | `9571892377018A53DFFD1C2D9B30440EE18C0BCE47CED5EF32A511E849EB794B` |
+| `smp3-server-linux-amd64` | PASS | 8,477,230 | `E6BCA5A7F28E4CEA6FB782035677A0E93F6CDD4BCEED540CB4CDE8C3BAAC82F4` |
 
-Commands used the repository's standalone flags: CGO_ENABLED=0, GOARCH=amd64,
-explicit GOOS and archived GOWORK, `go build -trimpath`, and `-buildid=`.
-The existing Version symbol was set to `2.4.0-aggregation-rc`; no version
-machinery or tracked source was changed.
+The complete checksum file is `D:\SMP3\aggregation-rc-4e695b0\SHA256SUMS`.
 
-All attempts fail while compiling core/stream_engine.go with undefined
-`streamLoadProbe`, `streamWakeTelemetry`, and `streamSpaceNotification`.
-Definitions reside in untracked `core/stream_load_debug.go` and
-`core/stream_wake_debug.go`, neither present in the committed tree.
+## Test gates
 
-Earlier tests on the dirty checkout and manually synced native tree do not
-establish that this committed source builds independently. The earlier commit
-closure omitted required dependencies; the previous merge-clean assessment
-must be read with this correction.
+- Clean archive `core`: `go test ./...` — PASS.
+- Clean archive `client`: `go test ./...` — PASS.
+- Clean archive `server`: `go test ./...` — PASS.
+- Clean archive `cmd/smp3-client`: `go test ./...` — PASS.
+- Clean archive `cmd/smp3-server`: `go test ./...` — PASS.
+- Native Linux `192.168.112.104`, `/usr/local/go/bin/go1.22.12`,
+  `CGO_ENABLED=1 GOWORK=off go test -race ./...` — PASS.
+  The host default `/usr/bin/go1.17.8` is too old for this source and was not
+  used for the gate.
 
-## Artifact provenance
+## Tracked-only aggregation regression
 
-No new RC binaries were successfully produced. Consequently there is no
-candidate binary SHA256SUMS and no tested artifact hash claim. Existing dist
-binaries are not substituted for the frozen-source build.
+Command ran from the extracted clean archive with production aggregation,
+serializer pacer, `bw_50_200`, one 64 MiB repetition, 32 pending frames,
+256 queue depth, and 32 KiB chunks.
 
-## Standalone and real-world gates
+Result: PASS. Raw aggregate `245.77 Mbps`; single-leg controls `49.81` and
+`197.02 Mbps`; useful and physical raw efficiency `98.31%`; payload efficiency
+`100.00%`; leg utilization `98.16%` / `98.34%`; share `19.97%` / `80.03%`;
+amplification `1.000x`; retransmit `0`; rescue `0`; ledger `0`; reorder `0`.
 
-Topology, single-leg controls, dual throughput, efficiency, leg distribution,
-browser interaction, sustained media, large download, high/low-leg failure,
-reconnect, temporary interruption, long-run memory stability, SOCKS5, Mihomo,
-and adaptive/static binary controls: NOT RUN due to the clean-source build
-blocker. No real-world validation claim is made.
+## Correction to the prior report
 
-## Required next action
-
-Repair committed-source completeness in a separate authorized source-closure
-step, verify builds and tests from a tracked-only checkout, then choose a new
-frozen source SHA for RC qualification. Do not mix untracked files into this
-SHA's build or claim the resulting binary came from the unchanged commit.
-
-No tag, release, upload, production deployment, commit amendment, or default
-scheduler switch was performed. Historical untracked files were preserved.
+The prior report classified `2b0d02e...` as an artifact provenance blocker and
+correctly recorded that its clean build failed. That SHA remains
+`SOURCE-INCOMPLETE / NOT RC-ELIGIBLE`. The validated source and artifacts in
+this report belong only to `4e695b0...` and its archive hash above.
