@@ -9,7 +9,9 @@ source-incomplete and is not RC eligible. Source closure was completed in
 separate commits on top of it; the latest tracked-only validation SHA is
 `4e695b0415d50f998a3ac03731041d1940a7093a`.
 
-No push, tag, release, deployment, or default scheduler change was performed.
+This decision records the prior source-closure gate. The final source freeze
+and normal remote synchronization gate below follows it. No tag, release,
+deployment, or default scheduler change is part of this gate.
 
 ## Source closure
 
@@ -69,5 +71,47 @@ amplification `1.000x`; retransmit `0`; rescue `0`; ledger `0`; reorder `0`.
 
 The prior report classified `2b0d02e...` as an artifact provenance blocker and
 correctly recorded that its clean build failed. That SHA remains
-`SOURCE-INCOMPLETE / NOT RC-ELIGIBLE`. The validated source and artifacts in
-this report belong only to `4e695b0...` and its archive hash above.
+`SOURCE-INCOMPLETE / NOT RC-ELIGIBLE`. The source-closure evidence above
+belongs to `4e695b0...` and its archive hash above.
+
+## Final RC source freeze
+
+- Broken historical SHA: `2b0d02e262a5e33838cc1318df24d2c8217813c4`.
+- Source-closure validation SHA: `4e695b0415d50f998a3ac03731041d1940a7093a`.
+- Intermediate report SHA: `31e2d36826196c8711c4c3210c9da42ae9cd7eec`.
+- Final RC source: the documentation commit containing this section. Its full
+  SHA, exact archive hash, test exits, artifact hashes, and observed remote SHA
+  are recorded after committing in
+  `D:\SMP3\aggregation-final-rc\provenance.json`. The new
+  `D:\SMP3\aggregation-final-rc\SHA256SUMS` explicitly identifies that SHA.
+  A commit cannot contain its own SHA; these external manifests resolve it.
+
+`4e695b0..31e2d36` changes only this Markdown report. All other tracked blobs
+are byte-identical: Go source, modules, workspace, build scripts, embedded
+assets, and configuration defaults (`NO_RUNTIME_CHANGE`). All four exact-SHA
+clean archive builds for `31e2d36` passed with hashes identical to the artifact
+table above. Its archive SHA256 is
+`D93CC4EA426F6DCEABAFA4CCE30E119015C8837F7D51AD5642744D41A46AC00B`.
+
+The final report commit must be archived, built, hashed, and smoke-tested
+independently before synchronization. The final artifact table uses the same
+four hashes above only if fresh exact-final-SHA binaries match them; the new
+manifest binds them to the final source. Required smoke modules are core,
+client, server, cmd/smp3-client, and cmd/smp3-server (`go test ./...`).
+
+Build settings retained for comparison: Go 1.22.6 Windows/amd64,
+CGO_ENABLED=0, explicit GOOS and GOARCH=amd64, archived go.work, `-trimpath`,
+and exact prior ldflags
+`-X github.com/Superbias/smp3-multipath-kit-public/core.Version=2.4.0-aggregation-rc -buildid=`.
+The legacy Version path is retained for reproducibility; it does not establish
+client/server version stamping (their Version symbols have different paths).
+
+Native Linux Go 1.22.12 race PASS and the 245.77 Mbps aggregation regression
+PASS are retained from `4e695b0` only after checking final runtime/build-input
+identity. They are inherited evidence, not new runs on the final commit.
+
+After clean gates pass, fetch origin and require behind=0, then push main
+normally and require remote main to equal final local HEAD. The observed SHAs
+are recorded in the external provenance manifest. No automatic merge/rebase,
+force push, tag, release, asset upload, or deployment is authorized. Untracked
+historical files remain preserved and excluded from the clean source.
