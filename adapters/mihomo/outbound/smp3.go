@@ -42,6 +42,7 @@ type SMP3Option struct {
 	Leg1Fallback        string          `proxy:"leg1-fallback,omitempty"`
 	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
 	CapacityMode        string          `proxy:"capacity-mode,omitempty"`
+	ActivationMode      string          `proxy:"activation-mode,omitempty"`
 	StartupPolicy       string          `proxy:"startup-policy,omitempty"`
 	StartupPreferredLeg uint8           `proxy:"startup-preferred-leg,omitempty"`
 	StartupGrace        string          `proxy:"startup-grace,omitempty"`
@@ -531,6 +532,17 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: capacity-mode must be fixed or dynamic")
 	}
+	activationMode := smp3core.StreamActivationLegacy
+	switch strings.ToLower(strings.TrimSpace(option.ActivationMode)) {
+	case "", "legacy":
+	case "dynamic":
+		if mode != smp3core.StreamSchedulerAggregation {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: activation-mode dynamic requires scheduler-mode aggregation")
+		}
+		activationMode = smp3core.StreamActivationDynamic
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: activation-mode must be legacy or dynamic")
+	}
 	threshold := option.ActivationThresholdMbps
 	if threshold == 0 {
 		threshold = 80
@@ -538,6 +550,7 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	return smp3core.StreamConfig{
 		SchedulerMode:       mode,
 		CapacityMode:        capacityMode,
+		ActivationMode:      activationMode,
 		ChunkSize:           option.ChunkSize,
 		QueueFrames:         option.QueueFrames,
 		ThresholdBytesPS:    threshold * 1000 * 1000 / 8,

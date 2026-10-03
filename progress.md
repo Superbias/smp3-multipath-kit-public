@@ -22,3 +22,14 @@
 - Added quantitative shared-carrier logs: 1/2/4/8 streams each converged at 91.0 Mbps versus 100 Mbps configured (same estimate across stream counts); 50/200 converged at 48.1/192.3 Mbps with 20/80 share.
 - Added 1200 lifecycle churn gate; registry held at 1024 entries.
 - Promotion remains in progress pending native Mihomo dependency completion, sustained 1+ GiB, CPU/RSS/contention, and process-level traffic smoke.
+
+## Dynamic activation implementation
+- Added capacity-relative activation and shared logical demand accounting in commit-in-progress.
+- Core scenario unit tests pass for low demand, near capacity, just-over-capacity, strong overload, high-capacity primary, capacity drop, step-up, short burst suppression, and shared demand aggregation.
+- Native adapter source now maps `activation-mode: dynamic` to canonical Core semantics through the pinned Mihomo checkout.
+
+## Dynamic leg activation final closure
+- Added explicit legacy/dynamic activation modes with capacity-relative overload qualification, shared logical demand, confidence, sustained evidence, hysteresis, and queue/loss fallback.
+- Completed dynamic global 1GiB closure: 212.903 Mbps useful throughput, amplification 1.000000, retry/rescue/ledger 0, payload PASS.
+- Added final report: `SMP3_DYNAMIC_LEG_ACTIVATION_REPORT.md`.
+- Remaining gate: commit locally and run tracked-source archive validation; no remote or release action.

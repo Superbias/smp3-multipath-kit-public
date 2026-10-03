@@ -17,6 +17,15 @@ type StreamCapacityProvider interface {
 	Telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time)
 }
 
+// StreamActivationProvider is an optional extension used by capacity-relative
+// leg activation. It is deliberately separate from StreamCapacityProvider so
+// existing provider implementations and compatibility callers remain valid.
+type StreamActivationProvider interface {
+	ActivationCapacity() (bytesPerSecond, confidence float64, valid bool)
+	ObserveActivationDemand(produced, retired uint64, now time.Time)
+	ActivationDemand(now time.Time) (bytesPerSecond float64, backlog uint64)
+}
+
 // CarrierCapacityRegistry owns shared state for one ownership domain (usually
 // one standalone client process). It is deliberately instantiated by a host,
 // rather than package-global, so independent clients and servers cannot mix.
@@ -31,9 +40,13 @@ const carrierCapacityIdleTTL = 10 * time.Minute
 const carrierCapacityMaxEntries = 1024
 
 type carrierCapacityEntry struct {
-	estimator *streamCapacityEstimator
-	refs      int
-	lastUsed  time.Time
+	estimator   *streamCapacityEstimator
+	refs        int
+	lastUsed    time.Time
+	demandStart time.Time
+	demandAt    time.Time
+	demandBytes uint64
+	backlog     uint64
 }
 
 func NewCarrierCapacityRegistry() *CarrierCapacityRegistry {
@@ -99,6 +112,81 @@ type carrierCapacityProvider struct {
 	registry *CarrierCapacityRegistry
 	keys     [2]string
 	once     sync.Once
+}
+
+func (p *carrierCapacityProvider) demandEntry() *carrierCapacityEntry {
+	if p == nil || p.registry == nil || p.keys[0] == "" {
+		return nil
+	}
+	p.registry.mu.Lock()
+	entry := p.registry.entries[p.keys[0]]
+	p.registry.mu.Unlock()
+	return entry
+}
+
+func (p *carrierCapacityProvider) ActivationCapacity() (bytesPerSecond, confidence float64, valid bool) {
+	if p == nil || p.states[0] == nil {
+		return
+	}
+	_, estimate, confidenceValues, validValues, _, _ := p.states[0].telemetry()
+	return estimate[0], confidenceValues[0], validValues[0]
+}
+
+func (p *carrierCapacityProvider) ObserveActivationDemand(produced, retired uint64, now time.Time) {
+	entry := p.demandEntry()
+	if entry == nil || (produced == 0 && retired == 0) {
+		return
+	}
+	p.registry.mu.Lock()
+	defer p.registry.mu.Unlock()
+	// Re-resolve under the registry lock; pruning can race with a stream that
+	// has just released its final reference.
+	entry = p.registry.entries[p.keys[0]]
+	if entry == nil {
+		return
+	}
+	if entry.demandStart.IsZero() {
+		entry.demandStart = now
+	}
+	if !entry.demandAt.IsZero() && now.Sub(entry.demandAt) > 2*time.Second {
+		entry.demandStart, entry.demandBytes = now, 0
+	}
+	entry.demandAt = now
+	entry.demandBytes += produced
+	if retired >= entry.backlog {
+		entry.backlog = 0
+	} else {
+		entry.backlog -= retired
+	}
+	entry.backlog += produced
+}
+
+func (p *carrierCapacityProvider) ActivationDemand(now time.Time) (bytesPerSecond float64, backlog uint64) {
+	entry := p.demandEntry()
+	if entry == nil {
+		return
+	}
+	p.registry.mu.Lock()
+	defer p.registry.mu.Unlock()
+	entry = p.registry.entries[p.keys[0]]
+	if entry == nil {
+		return
+	}
+	backlog = entry.backlog
+	if entry.demandAt.IsZero() || now.Sub(entry.demandAt) > 500*time.Millisecond {
+		return 0, backlog
+	}
+	if entry.demandStart.IsZero() || entry.demandBytes == 0 {
+		return 0, backlog
+	}
+	elapsed := now.Sub(entry.demandStart)
+	if elapsed <= 0 {
+		return 0, backlog
+	}
+	if elapsed > 2*time.Second {
+		return 0, backlog
+	}
+	return float64(entry.demandBytes) / elapsed.Seconds(), backlog
 }
 
 func (p *carrierCapacityProvider) Reset(id uint8, now time.Time) {
@@ -169,6 +257,7 @@ func (e *streamCapacityEstimator) windowStartEmpty() bool {
 
 var _ StreamCapacityProvider = (*streamCapacityEstimator)(nil)
 var _ StreamCapacityProvider = (*carrierCapacityProvider)(nil)
+var _ StreamActivationProvider = (*carrierCapacityProvider)(nil)
 
 func (e *streamCapacityEstimator) Reset(id uint8, now time.Time) { e.reset(id, now) }
 func (e *streamCapacityEstimator) Admit(id uint8, bytes uint64, saturated bool, now time.Time) {

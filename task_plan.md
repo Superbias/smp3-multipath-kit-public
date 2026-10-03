@@ -16,3 +16,23 @@
 - 不修改 release/tag/deployment；不自动 push/merge。
 - 保留 per-stream estimator 的现有语义与配置兼容性。
 - 不引入跨客户端、跨方向、跨物理载波的共享状态。
+
+## Dynamic Leg Activation continuation (2026-10-03)
+- [x] Audit legacy activation path and preserve legacy trigger as explicit compatibility mode.
+- [x] Add explicit `activation_mode` validation/mapping to standalone client/server and native Mihomo adapter.
+- [x] Add capacity-relative activation using logical demand, shared Carrier Capacity, margin, sustained evidence, and congestion fallback.
+- [x] Add shared demand aggregation and activation telemetry.
+- [ ] Complete final scenario matrix, tracked-only validation, race, and production candidate report.
+
+## Phase 5 — Dynamic activation final closure
+- [x] Implement explicit legacy/dynamic activation modes and shared capacity-relative demand logic
+- [x] Validate unit, integration, native Mihomo, standalone, global 1GiB, and race evidence
+- [x] Write `SMP3_DYNAMIC_LEG_ACTIVATION_REPORT.md`
+- [ ] Commit local candidate and validate a clean tracked-source archive
+- [ ] Final classification only after all gates pass
+
+## Final gate result
+- [x] Local candidate committed at `3609b7055c02218ec02fea71e70d2bef2bc8c390`
+- [x] Clean tracked-source archive tests and Windows/Linux amd64 builds passed
+- [x] Working tree clean; no push, tag, release, or deployment performed
+- [x] Final classification: `A. DYNAMIC_LEG_ACTIVATION_PRODUCTION_CANDIDATE_VALIDATED`

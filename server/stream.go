@@ -27,6 +27,13 @@ func streamCapacityMode(value string) smp3core.StreamCapacityMode {
 	return smp3core.StreamCapacityFixed
 }
 
+func streamActivationMode(value string) smp3core.StreamActivationMode {
+	if value == "dynamic" {
+		return smp3core.StreamActivationDynamic
+	}
+	return smp3core.StreamActivationLegacy
+}
+
 func (s *Server) startStreamHost(session *serverSession) error {
 	dialer := net.Dialer{}
 	target, err := dialer.DialContext(s.ctx, "tcp", session.destination)
