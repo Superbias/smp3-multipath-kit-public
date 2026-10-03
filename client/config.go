@@ -114,6 +114,7 @@ type HostCarrierOptions struct {
 
 type StreamOptions struct {
 	SchedulerMode           string              `json:"scheduler_mode"`
+	CapacityMode            string              `json:"capacity_mode,omitempty"`
 	StartupPolicy           string              `json:"startup_policy,omitempty"`
 	StartupPreferredLeg     uint8               `json:"startup_preferred_leg,omitempty"`
 	StartupGrace            NonNegativeDuration `json:"startup_grace,omitempty"`
@@ -155,6 +156,7 @@ func DefaultConfig() Config {
 			CarrierReadyTimeout: Duration(5 * time.Second),
 			Stream: StreamOptions{
 				SchedulerMode:           "adaptive",
+				CapacityMode:            "fixed",
 				ActivationThresholdMbps: 80,
 				ActivationWindow:        Duration(time.Second),
 				ChunkSize:               64 * 1024,
@@ -365,6 +367,15 @@ func validateStream(c *StreamOptions) error {
 	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" && c.SchedulerMode != "aggregation" {
 		return fmt.Errorf("invalid smp3.scheduler_mode %q", c.SchedulerMode)
 	}
+	if c.CapacityMode == "" {
+		c.CapacityMode = "fixed"
+	}
+	if c.CapacityMode != "fixed" && c.CapacityMode != "dynamic" {
+		return fmt.Errorf("invalid smp3.stream.capacity_mode %q", c.CapacityMode)
+	}
+	if c.CapacityMode == "dynamic" && c.SchedulerMode != "aggregation" {
+		return errors.New("smp3.stream.capacity_mode dynamic requires scheduler_mode aggregation")
+	}
 	if c.StartupPolicy == "" {
 		c.StartupPolicy = "first-ready"
 	}
@@ -474,6 +485,7 @@ func (c SMP3Options) streamConfig(onActivate func(), onLegDown func(uint8, error
 	}
 	return smp3core.StreamConfig{
 		SchedulerMode:       streamSchedulerMode(c.Stream.SchedulerMode),
+		CapacityMode:        streamCapacityMode(c.Stream.CapacityMode),
 		ChunkSize:           c.Stream.ChunkSize,
 		QueueFrames:         c.Stream.QueueFrames,
 		ThresholdBytesPS:    uint64(c.Stream.ActivationThresholdMbps) * 1000 * 1000 / 8,
@@ -490,6 +502,13 @@ func (c SMP3Options) streamConfig(onActivate func(), onLegDown func(uint8, error
 		StartupPreferredLeg: smp3core.LegID(c.Stream.StartupPreferredLeg),
 		StartupGrace:        c.Stream.StartupGrace.Time(),
 	}
+}
+
+func streamCapacityMode(value string) smp3core.StreamCapacityMode {
+	if value == "dynamic" {
+		return smp3core.StreamCapacityDynamic
+	}
+	return smp3core.StreamCapacityFixed
 }
 
 func streamSchedulerMode(value string) smp3core.StreamSchedulerMode {

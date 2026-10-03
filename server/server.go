@@ -444,6 +444,7 @@ func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSes
 	}
 	cfg := smp3core.StreamConfig{
 		SchedulerMode:        streamSchedulerMode(s.cfg.Stream.SchedulerMode),
+		CapacityMode:         streamCapacityMode(s.cfg.Stream.CapacityMode),
 		ChunkSize:            s.cfg.Stream.ChunkSize,
 		QueueFrames:          s.cfg.Stream.QueueFrames,
 		ThresholdBytesPS:     uint64(s.cfg.Stream.ActivationThresholdMbps) * 125000,

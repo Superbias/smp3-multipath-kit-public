@@ -41,6 +41,7 @@ type SMP3Option struct {
 	Legs                []SMP3LegOption `proxy:"legs"`
 	Leg1Fallback        string          `proxy:"leg1-fallback,omitempty"`
 	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
+	CapacityMode        string          `proxy:"capacity-mode,omitempty"`
 	StartupPolicy       string          `proxy:"startup-policy,omitempty"`
 	StartupPreferredLeg uint8           `proxy:"startup-preferred-leg,omitempty"`
 	StartupGrace        string          `proxy:"startup-grace,omitempty"`
@@ -504,12 +505,24 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: scheduler-mode must be adaptive, static, or aggregation")
 	}
+	capacityMode := smp3core.StreamCapacityFixed
+	switch strings.ToLower(strings.TrimSpace(option.CapacityMode)) {
+	case "", "fixed":
+	case "dynamic":
+		if mode != smp3core.StreamSchedulerAggregation {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: capacity-mode dynamic requires scheduler-mode aggregation")
+		}
+		capacityMode = smp3core.StreamCapacityDynamic
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: capacity-mode must be fixed or dynamic")
+	}
 	threshold := option.ActivationThresholdMbps
 	if threshold == 0 {
 		threshold = 80
 	}
 	return smp3core.StreamConfig{
 		SchedulerMode:       mode,
+		CapacityMode:        capacityMode,
 		ChunkSize:           option.ChunkSize,
 		QueueFrames:         option.QueueFrames,
 		ThresholdBytesPS:    threshold * 1000 * 1000 / 8,

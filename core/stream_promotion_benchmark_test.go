@@ -11,12 +11,17 @@ import (
 )
 
 func promotionConfig() StreamConfig {
-	return StreamConfig{ChunkSize: 32 << 10, QueueFrames: 256, MaxReorderFrames: 4096,
+	cfg := StreamConfig{ChunkSize: 32 << 10, QueueFrames: 256, MaxReorderFrames: 4096,
 		MaxInflightFrames: 2048, AckInterval: 5 * time.Millisecond, RetransmitTimeout: time.Second,
 		RecoveryTimeout: 5 * time.Second, BandwidthMbps: []uint32{50, 200}, SchedulerMode: StreamSchedulerStatic,
 		BenchmarkAssignedDecoupled: true, BenchmarkPendingFrames: 32,
 		benchmarkEpochRebase: os.Getenv("SMP3_BENCHMARK_EPOCH_REBASE") != "",
 		frontierProbe:        &benchmarkFrontierProbe{grace: true}, Telemetry: &StreamTelemetry{}}
+	if os.Getenv("SMP3_BENCHMARK_DYNAMIC_CAPACITY") != "" {
+		cfg.SchedulerMode = StreamSchedulerAggregation
+		cfg.CapacityMode = StreamCapacityDynamic
+	}
+	return cfg
 }
 
 func promotionWait(t *testing.T, what string, f func() bool) {
@@ -167,7 +172,11 @@ func TestBenchmarkPromotionLongFlow(t *testing.T) {
 		t.Skip("set SMP3_PROMOTION_GATE=1")
 	}
 	size := benchmarkIntEnv("SMP3_BENCHMARK_BYTES", 1<<30)
-	elapsed, s, err := runStreamAggregationSample(size, 2, 0, [2]int64{50_000_000, 200_000_000}, [2]time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, [2]benchmarkFault{})
+	mode := StreamSchedulerStatic
+	if os.Getenv("SMP3_BENCHMARK_DYNAMIC_CAPACITY") != "" {
+		mode = StreamSchedulerAggregation
+	}
+	elapsed, s, err := runStreamAggregationSampleWithMode(size, 2, 0, [2]int64{50_000_000, 200_000_000}, [2]time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, [2]benchmarkFault{}, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +206,11 @@ func promotionMonitor(left, right *StreamEngine, size int) func() {
 		for {
 			select {
 			case <-stop:
+				runtime.GC()
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				b, _ := left.assignedSnapshot()
+				fmt.Printf("PROMOTION_MEMORY pct=100 heap_alloc=%d heap_inuse=%d heap_sys=%d goroutines=%d ledger=%d pending=[%d,%d] assigned=%v\n", m.HeapAlloc, m.HeapInuse, m.HeapSys, runtime.NumGoroutine(), left.Snapshot().OutstandingFrames, len(left.pending[0]), len(left.pending[1]), b)
 				p95 := func(h []int64) int {
 					var n, sum int64
 					for _, v := range h {
@@ -231,6 +245,7 @@ func promotionMonitor(left, right *StreamEngine, size int) func() {
 					}
 				}
 				if size > 0 && right.rxDeliveredBytes.Load() >= uint64(size)*uint64(quarter)/4 && quarter <= 4 {
+					runtime.GC()
 					var m runtime.MemStats
 					runtime.ReadMemStats(&m)
 					b, _ := left.assignedSnapshot()

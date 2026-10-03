@@ -243,3 +243,21 @@ Raw SMP3 HELLO authentication is not a public encrypted proxy protocol. Keep
 the aggregation listener private when possible and use encrypted child carriers.
 Never publish passwords, PSKs, TLS private keys, provider credentials, or
 credential-bearing deployment configs.
+# SMP3 2.6.0
+
+v2.6.0 promotes dynamic aggregation capacity estimation to the native and
+Android standalone product lines. The existing fixed aggregation mode remains
+available for compatibility; Android standalone now emits the aggregation,
+dynamic-capacity, preferred-leg startup, and configurable activation settings
+in its generated client configuration.
+
+## Included assets
+
+- Standalone client/server for Linux/amd64 and Windows/amd64.
+- Native Mihomo SMP3 builds for Linux/amd64 and Windows/amd64.
+- Android standalone debug APK for `arm64-v8a`, embedding the v2.6.0 client
+  runtime and the new aggregation configuration.
+- `SHA256SUMS` covering every release asset.
+
+The Android APK is debug-signed because no release signing credential is kept
+in the repository.

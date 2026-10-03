@@ -70,6 +70,8 @@ type benchmarkFault struct {
 	degradeAfterBytes  int64
 	logicalBytes       *atomic.Int64
 	degradedBPS        int64
+	recoverAfter       time.Duration
+	recoveredBPS       int64
 	stallAfterBytes    int64
 	stallDuration      time.Duration
 	extraEvery         int64
@@ -163,6 +165,9 @@ func newBenchmarkLink(conn net.Conn, latency time.Duration, bps int64, fault ben
 				if degraded && fault.degradedBPS > 0 {
 					rate = fault.degradedBPS
 				}
+				if fault.recoverAfter > 0 && degradeSince >= fault.recoverAfter && fault.recoveredBPS > 0 {
+					rate = fault.recoveredBPS
+				}
 				if rate > 0 && len(p) > 1024 {
 					duration := time.Duration(float64(len(p)*8) / float64(rate) * float64(time.Second))
 					if nextSend.IsZero() {
@@ -250,7 +255,18 @@ func startSerializerBenchmarkLink(l *benchmarkLink) {
 					} else if !nextAvailable.IsZero() {
 						l.serializerIdleNs.Add(arrival.Sub(nextAvailable).Nanoseconds())
 					}
-					finish := start.Add(time.Duration(float64(n*8) / float64(l.bps) * float64(time.Second)))
+					rate := l.bps
+					elapsed := time.Since(l.started)
+					if l.fault.degradeEpoch != nil {
+						elapsed = time.Since(*l.fault.degradeEpoch)
+					}
+					if l.fault.degradeAfter > 0 && elapsed >= l.fault.degradeAfter && l.fault.degradedBPS > 0 {
+						rate = l.fault.degradedBPS
+					}
+					if l.fault.recoverAfter > 0 && elapsed >= l.fault.recoverAfter && l.fault.recoveredBPS > 0 {
+						rate = l.fault.recoveredBPS
+					}
+					finish := start.Add(time.Duration(float64(n*8) / float64(rate) * float64(time.Second)))
 					nextAvailable = finish
 					l.serializerBusyNs.Add(finish.Sub(start).Nanoseconds())
 					l.serviceMu.Lock()
@@ -577,11 +593,19 @@ type benchmarkFeedingSamples struct {
 	atInflightCeiling int64
 }
 
-type benchmarkPayloadReader struct{}
+type benchmarkPayloadReader struct {
+	rateBPS int64
+}
 
-func (benchmarkPayloadReader) Read(p []byte) (int, error) {
+func (r benchmarkPayloadReader) Read(p []byte) (int, error) {
 	for i := range p {
 		p[i] = 'x'
+	}
+	if r.rateBPS > 0 {
+		delay := time.Duration(float64(len(p)*8) / float64(r.rateBPS) * float64(time.Second))
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 	}
 	return len(p), nil
 }
@@ -631,12 +655,26 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 	if os.Getenv("SMP3_LOAD_ACCOUNTING_TELEMETRY") != "" || os.Getenv("SMP3_BENCHMARK_INSERVICE_SCORE") != "" {
 		loadProbe = &streamLoadProbe{inServiceScore: os.Getenv("SMP3_BENCHMARK_INSERVICE_SCORE") != ""}
 	}
+	bandwidth := []uint32{uint32(rates[0] / 1_000_000), uint32(rates[1] / 1_000_000)}
+	if raw := os.Getenv("SMP3_BENCHMARK_BASELINE_RATES"); raw != "" {
+		parts := strings.Split(raw, ",")
+		if len(parts) == 2 {
+			if a, errA := strconv.Atoi(strings.TrimSpace(parts[0])); errA == nil {
+				if b, errB := strconv.Atoi(strings.TrimSpace(parts[1])); errB == nil && a > 0 && b > 0 {
+					bandwidth = []uint32{uint32(a), uint32(b)}
+				}
+			}
+		}
+	}
 	cfg := StreamConfig{
 		frontierProbe: frontier,
 		ChunkSize:     benchmarkIntEnv("SMP3_BENCHMARK_CHUNK", 64*1024), QueueFrames: benchmarkIntEnv("SMP3_BENCHMARK_QUEUE", 256), MaxReorderFrames: 4096,
 		MaxInflightFrames: benchmarkIntEnv("SMP3_BENCHMARK_INFLIGHT", 2048), AckInterval: 5 * time.Millisecond,
-		RetransmitTimeout: 1 * time.Second, RecoveryTimeout: 5 * time.Second,
-		BandwidthMbps: []uint32{uint32(rates[0] / 1_000_000), uint32(rates[1] / 1_000_000)}, SchedulerMode: mode,
+		// Match the v2.5 client/server production default. A one-second
+		// benchmark-only timeout overstates frontier loss on the 250 Mbps,
+		// 10 ms virtual path and creates artificial rescue traffic.
+		RetransmitTimeout: 1500 * time.Millisecond, RecoveryTimeout: 5 * time.Second,
+		BandwidthMbps: bandwidth, SchedulerMode: mode,
 		BenchmarkFixedRatio:        os.Getenv("SMP3_BENCHMARK_FIXED_RATIO") != "",
 		BenchmarkReadyFallback:     os.Getenv("SMP3_BENCHMARK_READY_FALLBACK") != "",
 		BenchmarkWeightedDeficit:   os.Getenv("SMP3_BENCHMARK_WEIGHTED_DEFICIT") != "",
@@ -649,6 +687,9 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 		HandoffTelemetry:           handoff,
 		wakeTelemetry:              wakeTelemetry,
 		loadProbe:                  loadProbe,
+	}
+	if mode == StreamSchedulerAggregation && os.Getenv("SMP3_BENCHMARK_DYNAMIC_CAPACITY") != "" {
+		cfg.CapacityMode = StreamCapacityDynamic
 	}
 	if os.Getenv("SMP3_BENCHMARK_DISABLE_RESCUE") != "" {
 		cfg.RetransmitTimeout = time.Hour
@@ -670,7 +711,7 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 	var logicalBytes atomic.Int64
 	var telemetryLinks [2]*benchmarkLink
 	for i := range faults {
-		if faults[i].degradeAfter > 0 {
+		if faults[i].degradeAfter > 0 || faults[i].recoverAfter > 0 {
 			faults[i].degradeEpoch = &benchmarkEpoch
 		}
 		if faults[i].degradeAfterBytes > 0 {
@@ -692,6 +733,10 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 	}
 	benchmarkEpoch = time.Now()
 	left.SetActiveForTest(true)
+	if os.Getenv("SMP3_PROMOTION_MEMORY_MONITOR") != "" {
+		stopMonitor := promotionMonitor(left, right, size)
+		defer stopMonitor()
+	}
 	readErr := make(chan error, 1)
 	go func() { _, err := io.CopyN(benchmarkPayloadChecker{}, rightApp, int64(size)); readErr <- err }()
 	started := time.Now()
@@ -739,7 +784,11 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 	if faults[0].logicalBytes != nil || faults[1].logicalBytes != nil {
 		appWriter = benchmarkCountingWriter{Writer: leftApp, bytes: &logicalBytes}
 	}
-	go func() { _, err := io.CopyN(appWriter, benchmarkPayloadReader{}, int64(size)); writeErr <- err }()
+	payloadRate := int64(benchmarkIntEnv("SMP3_BENCHMARK_APP_RATE_BPS", 0))
+	go func() {
+		_, err := io.CopyN(appWriter, benchmarkPayloadReader{rateBPS: payloadRate}, int64(size))
+		writeErr <- err
+	}()
 	if os.Getenv("SMP3_BACKPRESSURE_EVIDENCE") != "" {
 		deadline := time.NewTimer(benchmarkDurationEnv("SMP3_EVIDENCE_TIMEOUT", 180*time.Second))
 		defer deadline.Stop()
@@ -816,6 +865,10 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 	if os.Getenv("SMP3_PRINT_WEIGHTS") != "" {
 		s := left.BackpressureSnapshot()
 		fmt.Fprintf(os.Stderr, "FINAL PATH TELEMETRY leg0=%+v leg1=%+v\n", s.Legs[0], s.Legs[1])
+	}
+	if os.Getenv("SMP3_DYNAMIC_CAPACITY_TELEMETRY") != "" {
+		ss := left.Snapshot()
+		fmt.Fprintf(os.Stderr, "DYNAMIC_CAPACITY raw_bps=%v smoothed_bps=%v confidence=%v valid=%v demand=%v sample_time=%v weight=%v assignment_share=%v pending=%v acked=%v retry=%v rescue=%d\n", ss.CapacityRawBPS, ss.CapacitySmoothedBPS, ss.CapacityConfidence, ss.CapacityValid, ss.CapacityDemand, ss.CapacityLastSample, ss.CapacityWeight, ss.CapacityAssignmentShare, ss.CapacityPending, ss.TxAckedUsefulByLeg, ss.TxRetransmitBytesByLeg, ss.FrontierRescueAttempts)
 	}
 	if os.Getenv("SMP3_S1_SERIALIZER_PILOT") != "" && os.Getenv("SMP3_BENCHMARK_PACER") == "serializer" {
 		for id, link := range telemetryLinks {

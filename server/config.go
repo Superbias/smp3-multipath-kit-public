@@ -52,6 +52,7 @@ type Config struct {
 
 type StreamOptions struct {
 	SchedulerMode           string   `json:"scheduler_mode"`
+	CapacityMode            string   `json:"capacity_mode,omitempty"`
 	ActivationThresholdMbps uint32   `json:"activation_threshold_mbps"`
 	ActivationWindow        Duration `json:"activation_window"`
 	ChunkSize               int      `json:"chunk_size"`
@@ -81,6 +82,7 @@ func DefaultConfig() Config {
 		RecoveryTimeout:  Duration(15 * time.Second),
 		Stream: StreamOptions{
 			SchedulerMode:           "adaptive",
+			CapacityMode:            "fixed",
 			ActivationThresholdMbps: 80,
 			ActivationWindow:        Duration(time.Second),
 			ChunkSize:               64 * 1024,
@@ -211,6 +213,15 @@ func validateStream(c *StreamOptions) error {
 	}
 	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" && c.SchedulerMode != "aggregation" {
 		return fmt.Errorf("invalid scheduler_mode %q", c.SchedulerMode)
+	}
+	if c.CapacityMode == "" {
+		c.CapacityMode = "fixed"
+	}
+	if c.CapacityMode != "fixed" && c.CapacityMode != "dynamic" {
+		return fmt.Errorf("invalid stream.capacity_mode %q", c.CapacityMode)
+	}
+	if c.CapacityMode == "dynamic" && c.SchedulerMode != "aggregation" {
+		return errors.New("stream.capacity_mode dynamic requires scheduler_mode aggregation")
 	}
 	if c.ActivationWindow.Time() <= 0 {
 		c.ActivationWindow = Duration(time.Second)

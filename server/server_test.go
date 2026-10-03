@@ -224,6 +224,22 @@ func TestStreamSchedulerModes(t *testing.T) {
 			t.Fatalf("scheduler mode %q rejected: %v", mode, err)
 		}
 	}
+	dynamic := testConfig()
+	dynamic.Stream.SchedulerMode = "aggregation"
+	dynamic.Stream.CapacityMode = "dynamic"
+	if err := dynamic.NormalizeAndValidate(); err != nil {
+		t.Fatalf("dynamic aggregation rejected: %v", err)
+	}
+	invalidCapacity := testConfig()
+	invalidCapacity.Stream.CapacityMode = "dynamic"
+	if err := invalidCapacity.NormalizeAndValidate(); err == nil {
+		t.Fatal("dynamic capacity without aggregation was accepted")
+	}
+	badCapacity := testConfig()
+	badCapacity.Stream.CapacityMode = "unknown"
+	if err := badCapacity.NormalizeAndValidate(); err == nil {
+		t.Fatal("invalid capacity mode accepted")
+	}
 	cfg := testConfig()
 	cfg.Stream.SchedulerMode = "invalid"
 	if err := cfg.NormalizeAndValidate(); err == nil {

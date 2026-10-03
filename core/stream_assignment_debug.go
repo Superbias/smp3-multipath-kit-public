@@ -69,6 +69,10 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 	var best *streamLeg
 	score := math.MaxFloat64
 	legs := c.availableLegs()
+	var weights [2]float64
+	for _, leg := range legs {
+		weights[leg.id] = c.effectiveSchedulerWeight(leg)
+	}
 	if c.cfg.benchmarkEpochRebase {
 		var mask uint8
 		for _, leg := range legs {
@@ -78,18 +82,33 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 		}
 		if mask != c.assignedEpochMask {
 			for _, leg := range legs {
-				if weight := c.effectiveSchedulerWeight(leg); weight > 0 {
+				if weight := weights[leg.id]; weight > 0 {
 					c.assignedEpochOrigin[leg.id] = float64(c.assignedService[leg.id]) / weight
+					c.assignedEpochWeight[leg.id] = weight
 				}
 			}
 			c.assignedEpochMask = mask
+		}
+	}
+	if c.capacity != nil {
+		// Changing capacity changes future entitlement, not historical service.
+		// Preserve each leg's normalized finish across a weight update so a
+		// long-lived stream does not acquire a catch-up burst or stall.
+		for _, leg := range legs {
+			id := leg.id
+			old, next := c.assignedEpochWeight[id], weights[id]
+			if old > 0 && next > 0 && old != next {
+				finish := float64(c.assignedService[id])/old - c.assignedEpochOrigin[id]
+				c.assignedEpochOrigin[id] = float64(c.assignedService[id])/next - finish
+			}
+			c.assignedEpochWeight[id] = next
 		}
 	}
 	for _, leg := range legs {
 		if leg.closed.Load() {
 			continue
 		}
-		weight := c.effectiveSchedulerWeight(leg)
+		weight := weights[leg.id]
 		if weight <= 0 {
 			continue
 		}

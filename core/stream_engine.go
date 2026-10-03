@@ -98,6 +98,7 @@ func (p *streamLegPerf) snapshot() (writeBPS, ackedBPS float64, latency time.Dur
 type StreamConfig struct {
 	frontierProbe *benchmarkFrontierProbe
 	SchedulerMode StreamSchedulerMode
+	CapacityMode  StreamCapacityMode
 	// BenchmarkFixedRatio enables a benchmark-only deterministic 1:4 ordinary
 	// dispatch pattern. It is intentionally false by default and is not used by
 	// production constructors.
@@ -232,8 +233,17 @@ type StreamStats struct {
 	RxMaxPendingFrames int
 	RxMaxGapAge        time.Duration
 
-	LegUp     [2]bool
-	Telemetry StreamTelemetryStats
+	LegUp                   [2]bool
+	Telemetry               StreamTelemetryStats
+	CapacityRawBPS          [2]float64
+	CapacitySmoothedBPS     [2]float64
+	CapacityConfidence      [2]float64
+	CapacityValid           [2]bool
+	CapacityDemand          [2]bool
+	CapacityLastSample      [2]time.Time
+	CapacityWeight          [2]float64
+	CapacityPending         [2]int64
+	CapacityAssignmentShare [2]float64
 }
 
 type dataFrame struct {
@@ -385,11 +395,13 @@ type StreamEngine struct {
 	debugSpaceWakeEntries  atomic.Uint64
 	debugSpaceWakeWaitNs   atomic.Uint64
 	weightedMu             sync.Mutex
+	capacity               *streamCapacityEstimator
 	weightedFinish         [2]float64
 	assignedService        [2]uint64
 	assignedRecords        [2]uint64
 	assignedEpochMask      uint8
 	assignedEpochOrigin    [2]float64
+	assignedEpochWeight    [2]float64
 	pending                [2]chan *StreamTXRecord
 	pendingDepth           [2]atomic.Int64
 	pendingMax             [2]atomic.Int64
@@ -467,6 +479,9 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		spaceWake:        make(chan streamSpaceNotification, 1),
 		frontierRescueCh: make(chan struct{}, 1),
 		ackWakeCh:        make(chan struct{}, 1),
+	}
+	if cfg.SchedulerMode == StreamSchedulerAggregation && cfg.CapacityMode == StreamCapacityDynamic {
+		c.capacity = newStreamCapacityEstimator(cfg.BandwidthMbps, cfg.ChunkSize)
 	}
 	if cfg.BenchmarkAssignedDecoupled || cfg.SchedulerMode == StreamSchedulerAggregation {
 		depth := cfg.BenchmarkPendingFrames
@@ -549,6 +564,9 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 		}
 		leg.workers.Add(2)
 		c.legs[id8] = leg
+		if c.capacity != nil {
+			c.capacity.reset(id8, time.Now())
+		}
 		if c.cfg.wakeTelemetry != nil && id8 < 2 {
 			c.cfg.wakeTelemetry.legs[id8] = leg
 		}
@@ -607,6 +625,7 @@ func (c *StreamEngine) Snapshot() StreamStats {
 		RxMaxGapAge:            time.Duration(c.rxMaxGapAgeNs.Load()),
 	}
 	stats.Telemetry = c.telemetry.snapshot()
+	c.capacityStats(&stats)
 	if timestamp := c.lastAckProgressNs.Load(); timestamp != 0 {
 		stats.LastAckProgress = time.Unix(0, timestamp)
 	}
@@ -649,10 +668,31 @@ func (c *StreamEngine) TelemetrySnapshot() StreamStats {
 		RxDeliveredBytes:       c.rxDeliveredBytes.Load(),
 		Telemetry:              c.telemetry.snapshot(),
 	}
+	c.capacityStats(&stats)
 	for id := range stats.LegUp {
 		stats.LegUp[id] = c.hasLeg(uint8(id))
 	}
 	return stats
+}
+
+// capacityStats leaves legacy snapshots free of capacity accounting locks.
+func (c *StreamEngine) capacityStats(stats *StreamStats) {
+	if c.capacity != nil {
+		stats.CapacityRawBPS, stats.CapacitySmoothedBPS, stats.CapacityConfidence,
+			stats.CapacityValid, stats.CapacityDemand, stats.CapacityLastSample = c.capacity.telemetry()
+	}
+	for id := range stats.CapacityWeight {
+		if leg := c.getLeg(uint8(id)); leg != nil && !leg.closed.Load() {
+			stats.CapacityWeight[id] = c.effectiveSchedulerWeight(leg)
+		}
+		stats.CapacityPending[id] = c.pendingDepth[id].Load()
+	}
+	assigned, _ := c.assignedSnapshot()
+	if total := assigned[0] + assigned[1]; total > 0 {
+		for id := range assigned {
+			stats.CapacityAssignmentShare[id] = float64(assigned[id]) / float64(total)
+		}
+	}
 }
 
 func (c *StreamEngine) Close() error {
@@ -1027,6 +1067,9 @@ func (c *StreamEngine) weightFor(id uint8) uint32 {
 
 func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 	base := float64(c.weightFor(leg.id))
+	if c.cfg.SchedulerMode == StreamSchedulerAggregation && c.cfg.CapacityMode == StreamCapacityDynamic {
+		return c.capacity.weight(leg.id, base)
+	}
 	if c.cfg.SchedulerMode != StreamSchedulerAdaptive && c.cfg.SchedulerMode != StreamSchedulerCapacityFirst {
 		return base
 	}
@@ -1293,11 +1336,15 @@ func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bo
 		return !c.isOutstanding(record)
 	}
 	attempt := txSendAttempt{record: record, queuedNs: time.Now().UnixNano(), ordinary: !retry}
+	saturated := len(leg.send) >= cap(leg.send)-1 || (leg.id < 2 && c.pendingDepth[leg.id].Load() > 0)
 	select {
 	case <-leg.done:
 		c.clearAttempt(record, leg.id, false)
 		return false
 	case leg.send <- attempt:
+		if !retry && c.capacity != nil {
+			c.capacity.admit(leg.id, uint64(len(record.Payload())), saturated, time.Now())
+		}
 		if retry && c.cfg.frontierProbe != nil {
 			c.cfg.frontierProbe.retry(record, time.Now())
 		}
@@ -2178,6 +2225,9 @@ func (c *StreamEngine) handleAck(next uint64) error {
 				continue
 			}
 			c.txAckedUseful[legID].Add(bytes)
+			if c.capacity != nil {
+				c.capacity.ack(uint8(legID), bytes, now)
+			}
 			if leg := c.getLeg(uint8(legID)); leg != nil {
 				leg.perf.observeAck(int(bytes), now)
 			}

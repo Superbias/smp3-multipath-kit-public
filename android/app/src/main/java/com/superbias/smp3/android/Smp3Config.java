@@ -105,6 +105,15 @@ public final class Smp3Config {
         JSONObject smp3 = new JSONObject();
         smp3.put("password", smp3Password);
         smp3.put("routes", routes);
+        JSONObject stream = new JSONObject();
+        stream.put("scheduler_mode", "aggregation");
+        stream.put("capacity_mode", "dynamic");
+        stream.put("startup_policy", "preferred");
+        stream.put("startup_preferred_leg", 0);
+        stream.put("startup_grace", "500ms");
+        stream.put("activation_threshold_mbps", 80);
+        stream.put("activation_window", "1s");
+        smp3.put("stream", stream);
         root.put("smp3", smp3);
         return root;
     }

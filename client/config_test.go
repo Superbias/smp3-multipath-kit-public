@@ -206,6 +206,22 @@ func TestStreamSchedulerModes(t *testing.T) {
 			t.Fatalf("scheduler mode %q rejected: %v", mode, err)
 		}
 	}
+	dynamic := validTestConfig()
+	dynamic.SMP3.Stream.SchedulerMode = "aggregation"
+	dynamic.SMP3.Stream.CapacityMode = "dynamic"
+	if err := dynamic.NormalizeAndValidate(); err != nil {
+		t.Fatalf("dynamic aggregation rejected: %v", err)
+	}
+	invalidCapacity := validTestConfig()
+	invalidCapacity.SMP3.Stream.CapacityMode = "dynamic"
+	if err := invalidCapacity.NormalizeAndValidate(); err == nil {
+		t.Fatal("dynamic capacity without aggregation was accepted")
+	}
+	badCapacity := validTestConfig()
+	badCapacity.SMP3.Stream.CapacityMode = "unknown"
+	if err := badCapacity.NormalizeAndValidate(); err == nil {
+		t.Fatal("invalid capacity mode accepted")
+	}
 	cfg := validTestConfig()
 	cfg.SMP3.Stream.SchedulerMode = "invalid"
 	if err := cfg.NormalizeAndValidate(); err == nil {
