@@ -59,6 +59,7 @@ func newStreamSession(client *Client, destination string) (*streamSession, error
 		}
 	}
 	config := client.cfg.SMP3.streamConfig(onActivate, onLegDown)
+	config.CapacityProvider = client.streamCapacityProvider()
 	engine, app := smp3core.NewStreamEngine(config)
 	session = &streamSession{client: client, id: id, engine: engine, app: app, destination: destination, ctx: ctx, cancel: cancel}
 	session.watchEngine()

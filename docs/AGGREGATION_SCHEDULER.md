@@ -44,3 +44,9 @@ Startup activation thresholds remain independent of capacity estimation.
 
 Runtime capacity, confidence, sample validity, and assignment weights are
 available in Core `StreamStats`; ordinary Mihomo logs do not expose them.
+
+## Global physical-carrier capacity (v2.6 development)
+
+When `scheduler_mode: aggregation` and `capacity_mode: dynamic` are enabled, standalone and native Mihomo clients create one bounded carrier-capacity registry per process. Concurrent logical streams sharing the same configured leg route/upstream identity contribute logical ACK-retired useful bytes and queue demand to the same estimator. A key includes the client owner domain, outbound direction, and carrier identity; different owners, directions, or leg carriers cannot share state. Registry entries retain warm estimates after stream close and are pruned after 10 minutes idle (with a 1024-entry bound). If no provider is supplied by an embedding application, the original per-stream estimator remains active.
+
+The server intentionally does not merge sessions: each incoming session has independent physical carrier sockets, so cross-client aggregation would misattribute capacity. Core telemetry exposes the shared estimate through the existing `StreamStats.Capacity*` fields; ordinary Mihomo logs still do not print these fields unless a host exports `StreamStats`.

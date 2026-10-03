@@ -71,6 +71,7 @@ type SMP3 struct {
 	lookup         func(string) (C.Proxy, bool)
 	sessions       sync.Map
 	udpSessions    sync.Map
+	capacity       *smp3core.CarrierCapacityRegistry
 }
 
 type smp3Session struct {
@@ -141,7 +142,19 @@ func NewSMP3(option SMP3Option) (*SMP3, error) {
 		option:         option,
 		streamConfig:   streamConfig,
 		redialInterval: redialInterval,
+		capacity:       smp3core.NewCarrierCapacityRegistry(),
 	}, nil
+}
+
+func (s *SMP3) capacityProvider() smp3core.StreamCapacityProvider {
+	if s.capacity == nil || s.streamConfig.CapacityMode != smp3core.StreamCapacityDynamic || s.streamConfig.SchedulerMode != smp3core.StreamSchedulerAggregation {
+		return nil
+	}
+	keys := [2]string{
+		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[0].Proxy,
+		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[1].Proxy,
+	}
+	return s.capacity.Provider(keys, s.streamConfig.BandwidthMbps, s.streamConfig.ChunkSize)
 }
 
 func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
@@ -179,6 +192,7 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 	}
 
 	config := s.streamConfig
+	config.CapacityProvider = s.capacityProvider()
 	config.OnActivate = func() { session.ensureLeg(1) }
 	config.OnLegDown = func(id uint8, legErr error) { session.scheduleLeg(id, legErr) }
 	engine, appConn := smp3core.NewStreamEngine(config)
@@ -209,6 +223,7 @@ type smp3BootstrapResult struct {
 
 func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
 	config := ss.owner.streamConfig
+	config.CapacityProvider = ss.owner.capacityProvider()
 	config.OnActivate = func() { ss.ensureLeg(1) }
 	config.OnLegDown = func(id uint8, legErr error) { ss.scheduleLeg(id, legErr) }
 	engine, appConn := smp3core.NewStreamEngine(config)

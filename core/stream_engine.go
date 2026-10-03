@@ -99,6 +99,8 @@ type StreamConfig struct {
 	frontierProbe *benchmarkFrontierProbe
 	SchedulerMode StreamSchedulerMode
 	CapacityMode  StreamCapacityMode
+	// CapacityProvider optionally shares dynamic capacity observations across logical streams.
+	CapacityProvider StreamCapacityProvider
 	// BenchmarkFixedRatio enables a benchmark-only deterministic 1:4 ordinary
 	// dispatch pattern. It is intentionally false by default and is not used by
 	// production constructors.
@@ -396,6 +398,7 @@ type StreamEngine struct {
 	debugSpaceWakeWaitNs   atomic.Uint64
 	weightedMu             sync.Mutex
 	capacity               *streamCapacityEstimator
+	capacityProvider       StreamCapacityProvider
 	weightedFinish         [2]float64
 	assignedService        [2]uint64
 	assignedRecords        [2]uint64
@@ -481,7 +484,12 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		ackWakeCh:        make(chan struct{}, 1),
 	}
 	if cfg.SchedulerMode == StreamSchedulerAggregation && cfg.CapacityMode == StreamCapacityDynamic {
-		c.capacity = newStreamCapacityEstimator(cfg.BandwidthMbps, cfg.ChunkSize)
+		if cfg.CapacityProvider != nil {
+			c.capacityProvider = cfg.CapacityProvider
+		} else {
+			c.capacity = newStreamCapacityEstimator(cfg.BandwidthMbps, cfg.ChunkSize)
+			c.capacityProvider = c.capacity
+		}
 	}
 	if cfg.BenchmarkAssignedDecoupled || cfg.SchedulerMode == StreamSchedulerAggregation {
 		depth := cfg.BenchmarkPendingFrames
@@ -564,8 +572,8 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 		}
 		leg.workers.Add(2)
 		c.legs[id8] = leg
-		if c.capacity != nil {
-			c.capacity.reset(id8, time.Now())
+		if c.capacityProvider != nil {
+			c.capacityProvider.Reset(id8, time.Now())
 		}
 		if c.cfg.wakeTelemetry != nil && id8 < 2 {
 			c.cfg.wakeTelemetry.legs[id8] = leg
@@ -677,9 +685,9 @@ func (c *StreamEngine) TelemetrySnapshot() StreamStats {
 
 // capacityStats leaves legacy snapshots free of capacity accounting locks.
 func (c *StreamEngine) capacityStats(stats *StreamStats) {
-	if c.capacity != nil {
+	if c.capacityProvider != nil {
 		stats.CapacityRawBPS, stats.CapacitySmoothedBPS, stats.CapacityConfidence,
-			stats.CapacityValid, stats.CapacityDemand, stats.CapacityLastSample = c.capacity.telemetry()
+			stats.CapacityValid, stats.CapacityDemand, stats.CapacityLastSample = c.capacityProvider.Telemetry()
 	}
 	for id := range stats.CapacityWeight {
 		if leg := c.getLeg(uint8(id)); leg != nil && !leg.closed.Load() {
@@ -700,6 +708,7 @@ func (c *StreamEngine) Close() error {
 	// closing the done channel so host-side carrier health cannot turn normal
 	// teardown into a global cooldown.
 	c.closing.Store(true)
+	if releaser, ok := c.capacityProvider.(interface{ Close() }); ok { releaser.Close() }
 	c.fail(io.EOF)
 	return nil
 }
@@ -1068,7 +1077,9 @@ func (c *StreamEngine) weightFor(id uint8) uint32 {
 func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 	base := float64(c.weightFor(leg.id))
 	if c.cfg.SchedulerMode == StreamSchedulerAggregation && c.cfg.CapacityMode == StreamCapacityDynamic {
-		return c.capacity.weight(leg.id, base)
+		if c.capacityProvider != nil { return c.capacityProvider.Weight(leg.id, base) }
+		if c.capacity != nil { return c.capacity.weight(leg.id, base) }
+		return base
 	}
 	if c.cfg.SchedulerMode != StreamSchedulerAdaptive && c.cfg.SchedulerMode != StreamSchedulerCapacityFirst {
 		return base
@@ -1342,8 +1353,8 @@ func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bo
 		c.clearAttempt(record, leg.id, false)
 		return false
 	case leg.send <- attempt:
-		if !retry && c.capacity != nil {
-			c.capacity.admit(leg.id, uint64(len(record.Payload())), saturated, time.Now())
+		if !retry && c.capacityProvider != nil {
+			c.capacityProvider.Admit(leg.id, uint64(len(record.Payload())), saturated, time.Now())
 		}
 		if retry && c.cfg.frontierProbe != nil {
 			c.cfg.frontierProbe.retry(record, time.Now())
@@ -2225,8 +2236,8 @@ func (c *StreamEngine) handleAck(next uint64) error {
 				continue
 			}
 			c.txAckedUseful[legID].Add(bytes)
-			if c.capacity != nil {
-				c.capacity.ack(uint8(legID), bytes, now)
+			if c.capacityProvider != nil {
+				c.capacityProvider.Ack(uint8(legID), bytes, now)
 			}
 			if leg := c.getLeg(uint8(legID)); leg != nil {
 				leg.perf.observeAck(int(bytes), now)
