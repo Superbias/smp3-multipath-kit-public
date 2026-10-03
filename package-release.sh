@@ -17,9 +17,8 @@ mkdir -p "$STAGE" "$STAGE/config" "$STAGE/patches" "$STAGE/scripts" \
 for file in \
   README.md README-zh_CN.md README.zh-CN.md RELEASE_NOTES.md CHANGELOG.md \
   DEPLOYMENT.md DEPLOYMENT.zh-CN.md \
-  BUILD_STATUS.md TEST_RESULTS.txt SECURITY.md NOTICE.md VERSION build.sh \
+  SECURITY.md NOTICE.md VERSION build.sh \
   validate-kit.sh install-server.sh install-client.ps1 package-release.sh \
-  UPGRADE-alpha2-to-alpha2.1.md UPGRADE-alpha2.1-to-alpha2.2.md \
   go.work \
   CORE_SOURCE_MANIFEST_BEFORE CORE_SOURCE_MANIFEST_AFTER CORE_CANONICAL_SHA256SUMS \
   MIHOMO_ADAPTER_MAP.md; do

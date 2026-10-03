@@ -158,8 +158,8 @@ There is **no Wire, HELLO, Datagram, retry, frontier, rescue, ACK, reorder,
 retransmit, carrier-policy, or recovery semantic change**. Existing 2.1.0
 carrier-agnostic configurations remain compatible.
 
-See `SMP3_2.1.1_BIDIRECTIONAL_ACTIVATION_RELEASE_REPORT.md` for the closure
-matrix.
+The current validation and release evidence is summarized in this document and
+the focused scheduler notes under `docs/`.
 
 ## 2.1.0 — carrier-agnostic sing adapter baseline
 
@@ -214,10 +214,8 @@ The optional sing-box compatibility client was validated with the pinned
 `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`, pinned Mihomo `v1.19.28` at
 commit `cbd11db1e13a75d8e680e0fe7742c95be4cba2be`, and Go `1.25.5`.
 
-The final matrix is in `TEST_RESULTS.txt` and covers TCP 500 MiB exact
-transfer, same-ID leg repair, MP-UDP adaptive/stripe/duplicate operation,
-16384-byte boundary isolation, idle cleanup, 2000-association churn,
-standalone server interop, and production cutover/rollback evidence.
+The release assets are accompanied by `SHA256SUMS`; focused protocol and
+standalone validation remains covered by the tracked Go test suites.
 
 ## Known limitations
 
