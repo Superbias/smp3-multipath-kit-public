@@ -36,3 +36,19 @@
 - [x] Clean tracked-source archive tests and Windows/Linux amd64 builds passed
 - [x] Working tree clean; no push, tag, release, or deployment performed
 - [x] Final classification: `A. DYNAMIC_LEG_ACTIVATION_PRODUCTION_CANDIDATE_VALIDATED`
+
+## Memory Attribution and Stability Closure (2026-10-04)
+- [ ] Instrument and reproduce baseline; run 5 same-process 1GiB rounds with GC snapshots and heap profiles
+- [ ] Attribute payload harness, queues, pools, registry, goroutines and FDs; compare 1/4/8 stream GC pressure
+- [ ] Validate actual standalone client/server >=5GiB and churn; native smoke where practical
+- [ ] Fix causal lifecycle defects if found and rerun required gates
+- [ ] Report, local commit, final worktree checks; no push/merge/tag/release/deploy
+
+## Phase 6 — Memory attribution and stability closure
+- [x] Reproduce five same-process 1GiB rounds with before/after/idle GC memory samples
+- [x] Capture heap profiles and attribute live allocations to bounded RX pool / harness objects
+- [x] Validate standalone 5GiB+, extended repeated traffic, 1000-stream churn, registry, goroutine and FD stability
+- [x] Validate GC pressure, throughput and native evidence; no production fix justified
+- [x] Write `SMP3_MEMORY_STABILITY_REPORT.md`
+- [ ] Run final tracked-only archive/race gates and commit locally
+- [ ] Final classification after clean worktree

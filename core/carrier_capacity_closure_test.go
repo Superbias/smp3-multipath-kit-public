@@ -124,7 +124,9 @@ func closureRun(t *testing.T, n int, total int64, shared bool) {
 			peers[i].Close()
 		}
 	}()
-	runtime.GC()
+	if os.Getenv("SMP3_MEMORY_CLOSURE") == "" {
+		runtime.GC()
+	}
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	rssStart := closureRSS()
@@ -204,7 +206,9 @@ func closureRun(t *testing.T, n int, total int64, shared bool) {
 	for _, e := range peers {
 		e.Close()
 	}
-	runtime.GC()
+	if os.Getenv("SMP3_MEMORY_CLOSURE") == "" {
+		runtime.GC()
+	}
 	rssEnd := closureRSS()
 	r.mu.Lock()
 	entries := len(r.entries)

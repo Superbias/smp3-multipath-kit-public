@@ -22,3 +22,15 @@
 ## Dynamic leg activation final closure
 - Dynamic activation implementation and evidence are complete; report and race status are tracked.
 - Final gate is local commit plus clean tracked-source archive verification. Push, tag, release, and deployment are explicitly out of scope.
+
+## Memory closure initial audit
+- Base HEAD 7f57ebe9fb5d50efb6b3d0fbda2f5cd578c97e7e, initial worktree clean.
+- closureRun uses io.CopyN with generated payload and streaming checker; no whole-payload storage.
+- Core RX has a per-engine sync.Pool; pending channels and inflight bound require quantitative attribution.
+
+## Memory Attribution and Stability Closure (2026-10-04)
+- Five same-process 1GiB rounds passed with payload PASS, retry/rescue/ledger 0, goroutines 2, FDs 6, registry entries 2 and refs 0; HeapAlloc after GC remained 55–64MB and HeapObjects 3.7–4.6k.
+- Heap profiles attribute retained bytes to bounded RX `sync.Pool` buffers and diagnostic net.Pipe objects; no registry, ACK, pending-record, or demand-accounting owner dominated live heap.
+- Real standalone 5GiB and 20GiB repeated traffic completed without restart; 1000 real SOCKS stream churn cycles returned stable FDs and bounded RSS.
+- A 30GiB gctrace run kept live heap 2–4MB and RSS about 9–14MB client / 12–20MB server, explaining high-RSS runs as allocator/GC retention.
+- Classification is `A. MEMORY_BEHAVIOR_BOUNDED_AND_EXPLAINED`; no production runtime fix justified.

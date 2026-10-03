@@ -33,3 +33,9 @@
 - Completed dynamic global 1GiB closure: 212.903 Mbps useful throughput, amplification 1.000000, retry/rescue/ledger 0, payload PASS.
 - Added final report: `SMP3_DYNAMIC_LEG_ACTIVATION_REPORT.md`.
 - Remaining gate: commit locally and run tracked-source archive validation; no remote or release action.
+
+## Memory Attribution and Stability Closure
+- Added opt-in diagnostic `core/memory_stability_test.go`; production code is unchanged.
+- Completed five same-process 1GiB rounds, forced-GC snapshots, heap profiles, standalone 5GiB/20GiB/30GiB traffic, 1000-stream churn, registry lifecycle, goroutine/FD, GC and throughput attribution.
+- Created `SMP3_MEMORY_STABILITY_REPORT.md`.
+- Remaining gates: run final source/race/archive verification, commit documentation and diagnostic test locally only.
