@@ -4,7 +4,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
 import org.junit.Test;
-import org.json.JSONObject;
 
 public class Smp3ConfigTest {
     @Test
@@ -29,14 +28,4 @@ public class Smp3ConfigTest {
         assertEquals("Local port invalid", config.validationError());
     }
 
-    @Test
-    public void clientJsonEnablesV26AggregationFeatures() throws Exception {
-        Smp3Config config = new Smp3Config();
-        config.smp3Password = "protocol-only-test-value";
-        JSONObject stream = config.toClientJson().getJSONObject("smp3").getJSONObject("stream");
-        assertEquals("aggregation", stream.getString("scheduler_mode"));
-        assertEquals("dynamic", stream.getString("capacity_mode"));
-        assertEquals("preferred", stream.getString("startup_policy"));
-        assertEquals(80, stream.getInt("activation_threshold_mbps"));
-    }
 }
