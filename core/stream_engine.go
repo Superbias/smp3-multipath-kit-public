@@ -331,11 +331,12 @@ type StreamEngine struct {
 	legs        map[uint8]*streamLeg
 	retiring    map[uint8]*streamLeg
 
-	incoming  chan dataFrame
-	done      chan struct{}
-	txStopped chan struct{}
-	closeErr  atomic.Value
-	closeOne  sync.Once
+	incoming          chan dataFrame
+	done              chan struct{}
+	txStopped         chan struct{}
+	closeErr          atomic.Value
+	closeOne          sync.Once
+	capacityCloseOnce sync.Once
 
 	closing      atomic.Bool
 	finalizing   atomic.Bool
@@ -708,9 +709,17 @@ func (c *StreamEngine) Close() error {
 	// closing the done channel so host-side carrier health cannot turn normal
 	// teardown into a global cooldown.
 	c.closing.Store(true)
-	if releaser, ok := c.capacityProvider.(interface{ Close() }); ok { releaser.Close() }
+	c.releaseCapacityProvider()
 	c.fail(io.EOF)
 	return nil
+}
+
+func (c *StreamEngine) releaseCapacityProvider() {
+	c.capacityCloseOnce.Do(func() {
+		if releaser, ok := c.capacityProvider.(interface{ Close() }); ok {
+			releaser.Close()
+		}
+	})
 }
 
 // StartGracefulClose terminates a logical stream without discarding payload that
@@ -773,6 +782,7 @@ func (c *StreamEngine) fail(err error) {
 	if err == nil {
 		err = ErrStreamClosed
 	}
+	c.releaseCapacityProvider()
 	c.closeOne.Do(func() {
 		if c.startup != nil {
 			c.startup.markSessionClosed()
@@ -1077,8 +1087,12 @@ func (c *StreamEngine) weightFor(id uint8) uint32 {
 func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 	base := float64(c.weightFor(leg.id))
 	if c.cfg.SchedulerMode == StreamSchedulerAggregation && c.cfg.CapacityMode == StreamCapacityDynamic {
-		if c.capacityProvider != nil { return c.capacityProvider.Weight(leg.id, base) }
-		if c.capacity != nil { return c.capacity.weight(leg.id, base) }
+		if c.capacityProvider != nil {
+			return c.capacityProvider.Weight(leg.id, base)
+		}
+		if c.capacity != nil {
+			return c.capacity.weight(leg.id, base)
+		}
 		return base
 	}
 	if c.cfg.SchedulerMode != StreamSchedulerAdaptive && c.cfg.SchedulerMode != StreamSchedulerCapacityFirst {

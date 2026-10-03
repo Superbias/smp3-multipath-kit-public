@@ -1,9 +1,43 @@
 package smp3core
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type closeProbeCapacityProvider struct{ closes atomic.Int32 }
+
+func (p *closeProbeCapacityProvider) Reset(uint8, time.Time)               {}
+func (p *closeProbeCapacityProvider) Admit(uint8, uint64, bool, time.Time) {}
+func (p *closeProbeCapacityProvider) Ack(uint8, uint64, time.Time)         {}
+func (p *closeProbeCapacityProvider) Weight(_ uint8, base float64) float64 { return base }
+func (p *closeProbeCapacityProvider) Telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time) {
+	return
+}
+func (p *closeProbeCapacityProvider) Close() { p.closes.Add(1) }
+
+func TestStreamEngineFailureReleasesCapacityProvider(t *testing.T) {
+	probe := &closeProbeCapacityProvider{}
+	cfg := testStreamConfig()
+	cfg.SchedulerMode = StreamSchedulerAggregation
+	cfg.CapacityMode = StreamCapacityDynamic
+	cfg.CapacityProvider = probe
+	engine, _ := NewStreamEngine(cfg)
+	engine.fail(ErrStreamClosed)
+	select {
+	case <-engine.Done():
+	case <-time.After(time.Second):
+		t.Fatal("stream engine did not terminate after failure")
+	}
+	if got := probe.closes.Load(); got != 1 {
+		t.Fatalf("capacity provider Close calls=%d, want 1", got)
+	}
+	_ = engine.Close()
+	if got := probe.closes.Load(); got != 1 {
+		t.Fatalf("capacity provider Close calls after repeated close=%d, want 1", got)
+	}
+}
 
 func TestCarrierCapacityRegistrySharesCarrierAndIsolatesKeys(t *testing.T) {
 	r := NewCarrierCapacityRegistry()

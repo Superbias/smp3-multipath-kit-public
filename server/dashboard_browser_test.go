@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,11 +15,15 @@ import (
 
 func TestDashboardBrowserSmoke(t *testing.T) {
 	chrome := ""
-	for _, candidate := range []string{
-		"chrome.exe",
-		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-	} {
+	candidates := []string{"chromium", "chromium-browser", "google-chrome"}
+	if runtime.GOOS == "windows" {
+		candidates = []string{
+			"chrome.exe",
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		}
+	}
+	for _, candidate := range candidates {
 		if path, err := exec.LookPath(candidate); err == nil {
 			chrome = path
 			break
