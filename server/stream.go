@@ -34,6 +34,13 @@ func streamActivationMode(value string) smp3core.StreamActivationMode {
 	return smp3core.StreamActivationLegacy
 }
 
+func streamHOLMode(value string) smp3core.StreamHOLMode {
+	if value == "completion" {
+		return smp3core.StreamHOLCompletion
+	}
+	return smp3core.StreamHOLLegacy
+}
+
 func (s *Server) startStreamHost(session *serverSession) error {
 	dialer := net.Dialer{}
 	target, err := dialer.DialContext(s.ctx, "tcp", session.destination)

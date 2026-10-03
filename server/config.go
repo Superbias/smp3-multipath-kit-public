@@ -54,6 +54,7 @@ type StreamOptions struct {
 	SchedulerMode           string   `json:"scheduler_mode"`
 	CapacityMode            string   `json:"capacity_mode,omitempty"`
 	ActivationMode          string   `json:"activation_mode,omitempty"`
+	HOLMode                 string   `json:"hol_mode,omitempty"`
 	ActivationThresholdMbps uint32   `json:"activation_threshold_mbps"`
 	ActivationWindow        Duration `json:"activation_window"`
 	ChunkSize               int      `json:"chunk_size"`
@@ -232,6 +233,15 @@ func validateStream(c *StreamOptions) error {
 	}
 	if c.ActivationMode == "dynamic" && c.SchedulerMode != "aggregation" {
 		return errors.New("stream.activation_mode dynamic requires scheduler_mode aggregation")
+	}
+	if c.HOLMode == "" {
+		c.HOLMode = "legacy"
+	}
+	if c.HOLMode != "legacy" && c.HOLMode != "disabled" && c.HOLMode != "completion" {
+		return fmt.Errorf("invalid stream.hol_mode %q", c.HOLMode)
+	}
+	if c.HOLMode == "completion" && c.SchedulerMode != "aggregation" {
+		return errors.New("stream.hol_mode completion requires scheduler_mode aggregation")
 	}
 	if c.ActivationWindow.Time() <= 0 {
 		c.ActivationWindow = Duration(time.Second)

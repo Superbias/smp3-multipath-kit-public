@@ -45,6 +45,15 @@ const (
 	StreamActivationDynamic
 )
 
+// StreamHOLMode controls the optional short-timescale assignment correction.
+// Legacy is the compatibility default; Completion is explicit opt-in.
+type StreamHOLMode uint8
+
+const (
+	StreamHOLLegacy StreamHOLMode = iota
+	StreamHOLCompletion
+)
+
 const (
 	schedulerStatic   = StreamSchedulerStatic
 	schedulerAdaptive = StreamSchedulerAdaptive
@@ -109,6 +118,7 @@ type StreamConfig struct {
 	SchedulerMode  StreamSchedulerMode
 	CapacityMode   StreamCapacityMode
 	ActivationMode StreamActivationMode
+	HOLMode        StreamHOLMode
 	// CapacityProvider optionally shares dynamic capacity observations across logical streams.
 	CapacityProvider StreamCapacityProvider
 	// BenchmarkFixedRatio enables a benchmark-only deterministic 1:4 ordinary
@@ -262,6 +272,10 @@ type StreamStats struct {
 	ActivationOverloadRatio float64
 	ActivationOverloadAge   time.Duration
 	ActivationReason        string
+	HOLCorrections          uint64
+	HOLFrontierCandidates   uint64
+	HOLPredictedEarlier     uint64
+	HOLMaxCorrectionStreak  uint64
 }
 
 type dataFrame struct {
@@ -379,6 +393,11 @@ type StreamEngine struct {
 	activationConfidence    atomic.Uint32
 	activationRatio         atomic.Uint64
 	activationReason        atomic.Value
+	holCorrections          atomic.Uint64
+	holFrontierCandidates   atomic.Uint64
+	holPredictedEarlier     atomic.Uint64
+	holCorrectionStreak     atomic.Uint64
+	holMaxCorrectionStreak  atomic.Uint64
 	startup                 *streamStartupGate
 
 	ackNext   atomic.Uint64
@@ -387,6 +406,7 @@ type StreamEngine struct {
 
 	txSentBytes            [2]atomic.Uint64
 	txAckedUseful          [2]atomic.Uint64
+	txAckedNext            atomic.Uint64
 	txRetransmitBytes      [2]atomic.Uint64
 	frontierRescueAttempts atomic.Uint64
 	debugRescueChecks      atomic.Uint64
@@ -738,6 +758,10 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 	if reason := c.activationReason.Load(); reason != nil {
 		stats.ActivationReason, _ = reason.(string)
 	}
+	stats.HOLCorrections = c.holCorrections.Load()
+	stats.HOLFrontierCandidates = c.holFrontierCandidates.Load()
+	stats.HOLPredictedEarlier = c.holPredictedEarlier.Load()
+	stats.HOLMaxCorrectionStreak = c.holMaxCorrectionStreak.Load()
 }
 
 func (c *StreamEngine) Close() error {
@@ -2347,6 +2371,11 @@ func (c *StreamEngine) scheduleFrontierRescue() {
 
 func (c *StreamEngine) handleAck(next uint64) error {
 	result := c.txLedger.ApplyACK(next, time.Now())
+	// Keep the sender-side cumulative frontier available to the bounded HOL
+	// correction without taking the ledger mutex on every new assignment.
+	if result.AckedNext > c.txAckedNext.Load() {
+		c.txAckedNext.Store(result.AckedNext)
+	}
 	if result.Disposition == StreamTXACKFuture {
 		// This ACK cannot safely prove delivery of any local payload. A live
 		// alpha2 test observed such an anomaly around transport rejoin; treating

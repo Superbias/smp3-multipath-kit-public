@@ -34,3 +34,10 @@
 - Real standalone 5GiB and 20GiB repeated traffic completed without restart; 1000 real SOCKS stream churn cycles returned stable FDs and bounded RSS.
 - A 30GiB gctrace run kept live heap 2–4MB and RSS about 9–14MB client / 12–20MB server, explaining high-RSS runs as allocator/GC retention.
 - Classification is `A. MEMORY_BEHAVIOR_BOUNDED_AND_EXPLAINED`; no production runtime fix justified.
+
+## HOL-aware assignment findings
+- Production aggregation planning is `assignBenchmark`; normalized `assignedService` remains the entitlement authority.
+- Existing wire state has no trustworthy RTT sample. Smoothed per-leg write latency is the smallest available proxy and is explicitly documented.
+- Pending depth and sent-minus-useful-ACK bytes are already bounded, event-driven scheduler state; retry/rescue paths never enter normal HOL correction.
+- An atomic sender ACK frontier avoids taking the TX ledger mutex on each assignment. Sequence-stride sampling keeps correction work out of most bulk records.
+- Shared-carrier and 1GiB evidence show no amplification or rescue cascade; dynamic activation and reconnect preserve their existing ownership/epoch rules.

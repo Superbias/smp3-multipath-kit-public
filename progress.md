@@ -44,3 +44,12 @@
 - Final commit `db13e7b45d9be84f54c646983414e159af4d6449` contains the diagnostic test and stability report.
 - Race and tracked-only archive test/build gates passed from final source state.
 - Classification: `A. MEMORY_BEHAVIOR_BOUNDED_AND_EXPLAINED`.
+
+## Completion-time / HOL-aware Assignment
+- Added Core `StreamHOLMode` and bounded completion estimator using existing pending depth, sent-minus-useful-ACK bytes, fixed/dynamic service weight, and smoothed write latency.
+- Added atomic sender ACK-frontier sequence and sequence-stride sampling to avoid a ledger lock and keep the opt-in correction cheap.
+- Added client/server JSON `hol_mode` and Native Mihomo `hol-mode` mapping; completion requires aggregation, while omitted/legacy/disabled preserve behavior.
+- Virtual A/B/C matrix passed: 100/100 remained 50/50, 50/200 remained 19.9/80.1, 300ms stall produced no rescue; all amplification was 1.000.
+- Completion mode passed dynamic activation, reconnect, shared-carrier 1/4/8-stream and 1GiB gates, plus full Core/client/server/cmd tests and race.
+- Native Mihomo targeted tests, adapter race, and `go build ./...` passed.
+- Local commit `51a0541bcf4860cd08f60200c9c0397729303ec4` and tracked-only archive tests/four amd64 builds passed; final tree is clean.

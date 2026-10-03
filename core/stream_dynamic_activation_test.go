@@ -2,6 +2,7 @@ package smp3core
 
 import (
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func (p *activationTestProvider) Close() {}
 
 func newActivationTestEngine(t *testing.T, provider StreamCapacityProvider, onActivate func()) (*StreamEngine, net.Conn) {
 	t.Helper()
-	engine, app := NewStreamEngine(StreamConfig{
+	cfg := StreamConfig{
 		SchedulerMode:    StreamSchedulerAggregation,
 		CapacityMode:     StreamCapacityFixed,
 		ActivationMode:   StreamActivationDynamic,
@@ -60,7 +61,11 @@ func newActivationTestEngine(t *testing.T, provider StreamCapacityProvider, onAc
 		QueueFrames:      32,
 		ChunkSize:        1024,
 		OnActivate:       onActivate,
-	})
+	}
+	if os.Getenv("SMP3_HOL_COMPLETION") != "" {
+		cfg.HOLMode = StreamHOLCompletion
+	}
+	engine, app := NewStreamEngine(cfg)
 	left, right := net.Pipe()
 	if err := engine.AttachLeg(0, left, nil); err != nil {
 		_ = left.Close()

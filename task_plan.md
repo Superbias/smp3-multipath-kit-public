@@ -59,3 +59,12 @@
 - [x] Windows amd64 and Linux amd64 client/server archive builds passed
 - [x] Final classification: `A. MEMORY_BEHAVIOR_BOUNDED_AND_EXPLAINED`
 - [x] Final worktree clean; push/merge/tag/release/deployment all NO
+
+## Completion-time / HOL-aware Assignment (2026-10-04)
+- [x] Audit assigned-service, pending depth, in-flight bytes, capacity weights, latency proxy, ACK frontier, activation, and repair ownership.
+- [x] Implement opt-in `hol_mode` / `hol-mode` completion correction with bounded frontier sampling and four-record streak cap.
+- [x] Add client/server/Mihomo config validation and Core assignment telemetry.
+- [x] Validate symmetric control, RTT asymmetry, capacity+RTT asymmetry, backlog/stall, dynamic activation, reconnect, shared carrier, 1/4/8 streams, and 1GiB.
+- [x] Run Core/client/server/cmd tests and race, Native adapter tests/race/build, and write `SMP3_HOL_AWARE_ASSIGNMENT_REPORT.md`.
+- [x] Commit local candidate and run the tracked-only archive gate.
+- [x] Final clean-tree classification; push/merge/tag/release/deployment remain NO.

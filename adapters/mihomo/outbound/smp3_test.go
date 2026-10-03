@@ -106,6 +106,25 @@ func TestSMP3DynamicActivationMapsToCore(t *testing.T) {
 	}
 }
 
+func TestSMP3HOLCompletionMapsToCore(t *testing.T) {
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, SchedulerMode: "aggregation", HOLMode: "completion",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.streamConfig.HOLMode != smp3core.StreamHOLCompletion {
+		t.Fatalf("HOL mode=%v, want completion", adapter.streamConfig.HOLMode)
+	}
+	if _, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, HOLMode: "completion",
+	}); err == nil {
+		t.Fatal("HOL completion without aggregation was accepted")
+	}
+}
+
 func TestSMP3PreferredTerminalLegFailureReleasesThroughCore(t *testing.T) {
 	const password = "test-password"
 	backend := newSMP3TestBackend(password)

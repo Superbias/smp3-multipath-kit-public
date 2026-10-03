@@ -116,6 +116,7 @@ type StreamOptions struct {
 	SchedulerMode           string              `json:"scheduler_mode"`
 	CapacityMode            string              `json:"capacity_mode,omitempty"`
 	ActivationMode          string              `json:"activation_mode,omitempty"`
+	HOLMode                 string              `json:"hol_mode,omitempty"`
 	StartupPolicy           string              `json:"startup_policy,omitempty"`
 	StartupPreferredLeg     uint8               `json:"startup_preferred_leg,omitempty"`
 	StartupGrace            NonNegativeDuration `json:"startup_grace,omitempty"`
@@ -386,6 +387,15 @@ func validateStream(c *StreamOptions) error {
 	if c.ActivationMode == "dynamic" && c.SchedulerMode != "aggregation" {
 		return errors.New("smp3.stream.activation_mode dynamic requires scheduler_mode aggregation")
 	}
+	if c.HOLMode == "" {
+		c.HOLMode = "legacy"
+	}
+	if c.HOLMode != "legacy" && c.HOLMode != "disabled" && c.HOLMode != "completion" {
+		return fmt.Errorf("invalid smp3.stream.hol_mode %q", c.HOLMode)
+	}
+	if c.HOLMode == "completion" && c.SchedulerMode != "aggregation" {
+		return errors.New("smp3.stream.hol_mode completion requires scheduler_mode aggregation")
+	}
 	if c.StartupPolicy == "" {
 		c.StartupPolicy = "first-ready"
 	}
@@ -497,6 +507,7 @@ func (c SMP3Options) streamConfig(onActivate func(), onLegDown func(uint8, error
 		SchedulerMode:       streamSchedulerMode(c.Stream.SchedulerMode),
 		CapacityMode:        streamCapacityMode(c.Stream.CapacityMode),
 		ActivationMode:      streamActivationMode(c.Stream.ActivationMode),
+		HOLMode:             streamHOLMode(c.Stream.HOLMode),
 		ChunkSize:           c.Stream.ChunkSize,
 		QueueFrames:         c.Stream.QueueFrames,
 		ThresholdBytesPS:    uint64(c.Stream.ActivationThresholdMbps) * 1000 * 1000 / 8,
@@ -520,6 +531,13 @@ func streamActivationMode(value string) smp3core.StreamActivationMode {
 		return smp3core.StreamActivationDynamic
 	}
 	return smp3core.StreamActivationLegacy
+}
+
+func streamHOLMode(value string) smp3core.StreamHOLMode {
+	if value == "completion" {
+		return smp3core.StreamHOLCompletion
+	}
+	return smp3core.StreamHOLLegacy
 }
 
 func streamCapacityMode(value string) smp3core.StreamCapacityMode {

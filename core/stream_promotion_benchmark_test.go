@@ -21,6 +21,10 @@ func promotionConfig() StreamConfig {
 		cfg.SchedulerMode = StreamSchedulerAggregation
 		cfg.CapacityMode = StreamCapacityDynamic
 	}
+	if os.Getenv("SMP3_HOL_COMPLETION") != "" {
+		cfg.SchedulerMode = StreamSchedulerAggregation
+		cfg.HOLMode = StreamHOLCompletion
+	}
 	return cfg
 }
 

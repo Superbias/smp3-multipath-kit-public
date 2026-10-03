@@ -688,6 +688,14 @@ func runStreamAggregationSampleWithMode(size int, legCount int, firstLeg int, ra
 		wakeTelemetry:              wakeTelemetry,
 		loadProbe:                  loadProbe,
 	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SMP3_BENCHMARK_HOL_MODE"))) {
+	case "completion":
+		cfg.HOLMode = StreamHOLCompletion
+	case "", "legacy", "disabled":
+		cfg.HOLMode = StreamHOLLegacy
+	default:
+		return 0, StreamStats{}, fmt.Errorf("invalid SMP3_BENCHMARK_HOL_MODE=%q", os.Getenv("SMP3_BENCHMARK_HOL_MODE"))
+	}
 	if mode == StreamSchedulerAggregation && os.Getenv("SMP3_BENCHMARK_DYNAMIC_CAPACITY") != "" {
 		cfg.CapacityMode = StreamCapacityDynamic
 	}

@@ -43,6 +43,7 @@ type SMP3Option struct {
 	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
 	CapacityMode        string          `proxy:"capacity-mode,omitempty"`
 	ActivationMode      string          `proxy:"activation-mode,omitempty"`
+	HOLMode             string          `proxy:"hol-mode,omitempty"`
 	StartupPolicy       string          `proxy:"startup-policy,omitempty"`
 	StartupPreferredLeg uint8           `proxy:"startup-preferred-leg,omitempty"`
 	StartupGrace        string          `proxy:"startup-grace,omitempty"`
@@ -543,6 +544,17 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: activation-mode must be legacy or dynamic")
 	}
+	holMode := smp3core.StreamHOLLegacy
+	switch strings.ToLower(strings.TrimSpace(option.HOLMode)) {
+	case "", "legacy", "disabled":
+	case "completion":
+		if mode != smp3core.StreamSchedulerAggregation {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: hol-mode completion requires scheduler-mode aggregation")
+		}
+		holMode = smp3core.StreamHOLCompletion
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: hol-mode must be legacy, disabled, or completion")
+	}
 	threshold := option.ActivationThresholdMbps
 	if threshold == 0 {
 		threshold = 80
@@ -551,6 +563,7 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 		SchedulerMode:       mode,
 		CapacityMode:        capacityMode,
 		ActivationMode:      activationMode,
+		HOLMode:             holMode,
 		ChunkSize:           option.ChunkSize,
 		QueueFrames:         option.QueueFrames,
 		ThresholdBytesPS:    threshold * 1000 * 1000 / 8,

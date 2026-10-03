@@ -95,6 +95,9 @@ func closureRun(t *testing.T, n int, total int64, shared bool) {
 	apps := make([]net.Conn, n)
 	dest := make([]net.Conn, n)
 	cfg := StreamConfig{SchedulerMode: StreamSchedulerAggregation, CapacityMode: StreamCapacityDynamic, BandwidthMbps: []uint32{50, 200}, ChunkSize: 64 << 10, QueueFrames: 32, MaxInflightFrames: 512, MaxReorderFrames: 4096, AckInterval: 5 * time.Millisecond, RetransmitTimeout: 1500 * time.Millisecond}
+	if os.Getenv("SMP3_HOL_COMPLETION") != "" {
+		cfg.HOLMode = StreamHOLCompletion
+	}
 	if os.Getenv("SMP3_DYNAMIC_CLOSURE") != "" {
 		cfg.ActivationMode = StreamActivationDynamic
 		cfg.ActivationWindow = time.Second
