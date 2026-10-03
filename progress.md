@@ -53,3 +53,14 @@
 - Completion mode passed dynamic activation, reconnect, shared-carrier 1/4/8-stream and 1GiB gates, plus full Core/client/server/cmd tests and race.
 - Native Mihomo targeted tests, adapter race, and `go build ./...` passed.
 - Local commit `51a0541bcf4860cd08f60200c9c0397729303ec4` and tracked-only archive tests/four amd64 builds passed; final tree is clean.
+
+## Global Carrier Capacity final promotion re-audit
+- Started from validated descendant `3f0c52b`; no architecture redesign.
+- Added `core/carrier_capacity_promotion_test.go` covering mixed demand, join/leave, warm reuse, demand freeze, step-down/up, owner/direction/group isolation, retry accounting, prune, and 1200 concurrent lifecycles.
+- Race results: provider promotion tests and existing 1/2/4/8 registry tests PASS.
+- Current Windows process smoke passed with two simultaneous 2,000,205-byte SOCKS downloads.
+- Native pinned checkout dependency recovery succeeded; relevant full packages and adapter race passed; broad `go test ./...` had a prolonged no-output hang and was stopped after relevant gates passed.
+- Final commit `90a678024c88f4a537fe50743242d954e8fbbe25` has clean tracked-only test/build evidence.
+- Added physical 2-stream CPU/RSS closure: global 249.701 Mbps, 50.000/199.983 estimates, share 19.97/80.03%, CPU 0.74s, retry/rescue/ledger 0.
+- Strengthened real process smoke to concurrent requests with exact HTTP-body comparison.
+- Final archive telemetry flaky passed isolated five-run check and full rerun.

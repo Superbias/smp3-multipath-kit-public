@@ -41,3 +41,14 @@
 - Pending depth and sent-minus-useful-ACK bytes are already bounded, event-driven scheduler state; retry/rescue paths never enter normal HOL correction.
 - An atomic sender ACK frontier avoids taking the TX ledger mutex on each assignment. Sequence-stride sampling keeps correction work out of most bulk records.
 - Shared-carrier and 1GiB evidence show no amplification or rescue cascade; dynamic activation and reconnect preserve their existing ownership/epoch rules.
+
+## Global carrier promotion re-audit
+- Current baseline is 3f0c52b, descendant of the original deca4b2 implementation and df900ab closure.
+- Report already contains real process smoke, 1/4/8 stream CPU/RSS and 1GiB evidence. Provider event tests lack explicit mixed demand, trained warm reuse and shared step-down/up assertions; these will be added without changing production semantics.
+
+## Global carrier final re-audit findings
+- Capacity invariance is proven at the provider layer: global estimate remains 91 Mbps while per-stream useful service scales from 100 to 12.5 Mbps across 1 to 8 streams.
+- Mixed demand does not reduce a trained carrier estimate when demand is below physical service; valid capacity knowledge is frozen under underload.
+- Shared step transitions are observed by all providers because the estimator is shared by CarrierKey; 80 Mbps and 200 Mbps settling values match across providers.
+- The process smoke confirmed exact real SOCKS payloads and process liveness, while quantitative carrier telemetry remains an in-process API rather than a CLI log.
+- Native broad test hang is a test-runner/package lifecycle issue after dependencies were available; build, adapter/config/constant tests, and adapter race are clean.

@@ -44,7 +44,7 @@ Actual Windows `smp3-client-windows.exe` and `smp3-server-windows.exe` were run 
 
 - Tracked SMP3 packages: `go test ./core ./client ./server ./cmd/smp3-client ./cmd/smp3-server` PASS.
 - WSL Debian race: `go test -race ./core ./client ./server ./cmd/smp3-client ./cmd/smp3-server` PASS after the telemetry initialization race fix.
-- Native Mihomo pinned checkout: `go build ./...` PASS; `go test ./... -count=1` PASS; `go test -race ./adapter/outbound` under WSL PASS.
+- Native Mihomo pinned checkout: `go build ./...` PASS; relevant full packages (`adapter`, `adapter/outbound`, `config`, `constant`) PASS; `go test -race ./adapter/outbound` under WSL PASS. A current broad `go test ./...` attempt was stopped after prolonged no-output package execution and is recorded as a runner limitation.
 - Native Mihomo adapter uses the pinned revision and unchanged SMP3 semantics. Dependency retrieval succeeded with `GOPROXY=https://goproxy.cn,direct`.
 - `git diff --check` PASS with CRLF-aware whitespace checking.
 
@@ -61,3 +61,29 @@ tag: NO
 release: NO
 deployment: NO
 ```
+
+## Final promotion re-audit (current descendant)
+
+The original closure evidence is retained and the following executable gates were rerun on the current descendant:
+
+| gate | evidence | result |
+|---|---|---|
+| 1/2/4/8 shared carrier | `TestCarrierCapacityRegistryConcurrentStreamCounts` | PASS; global estimate 91.0 Mbps at every stream count, per-stream useful rate changes only with stream count |
+| Mixed demand and join/leave | `TestGlobalCarrierPromotionMixedJoinLeaveWarmSteps` | PASS; 4 streams with bulk/medium/low/bursty shares retained 200.0 Mbps knowledge; leaving streams did not collapse the estimate |
+| Warm reuse | same promotion test after provider close/reopen | PASS; new provider reused the trained 200 Mbps estimate |
+| Demand-limited | 10 logical providers at 5 Mbps each on a trained 200 Mbps carrier | PASS; estimate remained 200.0 Mbps |
+| Step-down/up | shared 200→80 and 80→200 virtual service windows | PASS; first window responded after 1s, settled at 80.20 and 199.80 Mbps after 7 windows |
+| Isolation and repair accounting | owner A/B, in/out direction, separate carrier groups, duplicate admission with one useful ACK | PASS; no cross-group estimate and no duplicate inflation |
+| Churn/concurrency | 8 workers × 150 create/close cycles | PASS; 1200 lifecycles, 9 entries, zero references, cap preserved |
+| Production traffic smoke | current Windows client/server, two concurrent SOCKS downloads | PASS; 2 × 2,000,205-byte payloads, both processes stayed alive |
+
+The new provider tests pass under `go test -race ./core`. Existing global closure evidence continues to cover 1/4/8 shared streams, CPU/RSS, contention, and 1 GiB sustained traffic. Fixed, adaptive/static compatibility and single-stream dynamic regression remain covered by the full Core/client/server test matrix.
+
+Native dependency recovery succeeded with the pinned Mihomo checkout and `GOPROXY=https://goproxy.cn,direct`: `go build ./...`, adapter/config/constant full relevant tests, and `CGO_ENABLED=1 go test -race ./adapter/outbound` all pass. A broad `go test ./...` was attempted after dependency recovery and was stopped after a prolonged no-output package hang; it is not used as evidence of a source failure. All SMP3-relevant Native packages passed.
+
+
+### Two-stream physical-transfer evidence
+
+The added 2-stream row uses 128 MiB aggregate payload on shared 50+200 Mbps physical serializers. Per-stream estimator: 201.081 Mbps aggregate, estimate 24.992/77.308 Mbps, 0.89 CPU seconds, 5.340 wall seconds, RSS 8.04/128.41/128.52 MB. Shared estimator: 249.701 Mbps aggregate, estimate 50.000/199.983 Mbps, 19.97/80.03% assignment, 0.74 CPU seconds, 4.300 wall seconds, RSS 125.56/125.56/31.70 MB. Both runs had exact payload/ACK retirement, amplification 1.000000, retry/rescue/ledger zero. Shared registry ended with 2 entries and zero references.
+
+The final process smoke uses truly simultaneous worker threads and compares each HTTP body byte-for-byte against the generated fixture. Both bodies passed. The latest clean archive suite encountered the existing one-second telemetry timing flaky once; the isolated test passed five consecutive runs and the subsequent full archive suite and all four builds passed.

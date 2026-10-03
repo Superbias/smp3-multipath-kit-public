@@ -68,3 +68,20 @@
 - [x] Run Core/client/server/cmd tests and race, Native adapter tests/race/build, and write `SMP3_HOL_AWARE_ASSIGNMENT_REPORT.md`.
 - [x] Commit local candidate and run the tracked-only archive gate.
 - [x] Final clean-tree classification; push/merge/tag/release/deployment remain NO.
+
+## Global carrier final promotion re-audit (2026-10-04)
+- [x] Audit existing descendant evidence and retain validated runtime architecture.
+- [x] Add executable shared mixed-demand, join/leave, warm/stale, isolation, step and concurrency evidence missing from the report.
+- [x] Complete 2-stream physical CPU/RSS matrix and rerun Native dependency tests.
+- [x] Update gate ledger, commit locally and validate tracked-only builds/tests/race.
+
+## Global Carrier Capacity Final Promotion Re-audit
+- [x] Preserve existing registry/provider architecture and audit current descendant.
+- [x] Add executable mixed-demand, join/leave, warm reuse, demand-limited, step, isolation, repair-accounting, and concurrent lifecycle tests.
+- [x] Run 1/2/4/8 quantitative provider matrix under race; retain existing 1/4/8 and 1GiB CPU/RSS closure.
+- [x] Recover Native Mihomo dependencies; build, relevant full tests, and adapter race pass.
+- [x] Run current Windows process-level two-stream SOCKS smoke with exact payload verification.
+- [x] Commit local re-audit changes and validate tracked-only source tests/builds.
+- [x] Final tracked-only archive tests and four amd64 builds pass from commit 90a6780.
+- [x] Final worktree clean and `git diff --check` pass; classification remains `A. GLOBAL_CARRIER_CAPACITY_PRODUCTION_CANDIDATE_VALIDATED`.
+

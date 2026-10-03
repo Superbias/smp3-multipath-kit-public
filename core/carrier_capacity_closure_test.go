@@ -229,7 +229,7 @@ func TestGlobalCapacityTransferClosure(t *testing.T) {
 	if os.Getenv("SMP3_GLOBAL_CLOSURE") == "" {
 		t.Skip("set SMP3_GLOBAL_CLOSURE=1")
 	}
-	for _, n := range []int{1, 4, 8} {
+	for _, n := range []int{1, 2, 4, 8} {
 		for _, shared := range []bool{false, true} {
 			t.Run(fmt.Sprintf("streams%d/shared%t", n, shared), func(t *testing.T) { closureRun(t, n, 128<<20, shared) })
 		}
