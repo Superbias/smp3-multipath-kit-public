@@ -52,3 +52,10 @@
 - [x] Write `SMP3_MEMORY_STABILITY_REPORT.md`
 - [ ] Run final tracked-only archive/race gates and commit locally
 - [ ] Final classification after clean worktree
+
+## Final closure gate
+- [x] Core/client/server/cmd race passed after diagnostic test addition
+- [x] Final `git archive HEAD` tests passed
+- [x] Windows amd64 and Linux amd64 client/server archive builds passed
+- [x] Final classification: `A. MEMORY_BEHAVIOR_BOUNDED_AND_EXPLAINED`
+- [x] Final worktree clean; push/merge/tag/release/deployment all NO

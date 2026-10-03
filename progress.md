@@ -39,3 +39,8 @@
 - Completed five same-process 1GiB rounds, forced-GC snapshots, heap profiles, standalone 5GiB/20GiB/30GiB traffic, 1000-stream churn, registry lifecycle, goroutine/FD, GC and throughput attribution.
 - Created `SMP3_MEMORY_STABILITY_REPORT.md`.
 - Remaining gates: run final source/race/archive verification, commit documentation and diagnostic test locally only.
+
+## Final memory closure gate
+- Final commit `db13e7b45d9be84f54c646983414e159af4d6449` contains the diagnostic test and stability report.
+- Race and tracked-only archive test/build gates passed from final source state.
+- Classification: `A. MEMORY_BEHAVIOR_BOUNDED_AND_EXPLAINED`.
