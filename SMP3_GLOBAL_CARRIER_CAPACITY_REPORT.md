@@ -17,6 +17,8 @@ GLOBAL_CARRIER_CAPACITY_PROMOTION_IN_PROGRESS
 | Gate | Result |
 |---|---|
 | Existing single-stream dynamic tests | PASS (`go test ./core`) |
+| Tracked-only standalone builds | PASS: clean `git archive HEAD` built Windows/Linux amd64 client and server binaries |
+| Tracked-only module tests | PASS: clean archive core/client/server/cmd tests; one server telemetry timing test passed on isolated rerun after a single suite timeout |
 | Client integration tests | PASS (`go test ./client`) |
 | Server integration tests | PASS (`go test ./server`) |
 | Registry sharing and identity isolation | PASS (`TestCarrierCapacityRegistrySharesCarrierAndIsolatesKeys`) |
@@ -28,7 +30,7 @@ GLOBAL_CARRIER_CAPACITY_PROMOTION_IN_PROGRESS
 | Core/client/server race under WSL Debian Go 1.24.4 + gcc | PASS (`go test -race ./core ./client ./server ./cmd/smp3-client ./cmd/smp3-server`) |
 | Windows race | unavailable: local toolchain has no gcc; WSL race passed |
 | Native Mihomo adapter application | PASS (adapter patch applied to pinned checkout) |
-| Native Mihomo full dependency test | INCOMPLETE: upstream dependency download/test exceeded the bounded run window; no source failure was observed |
+| Native Mihomo full dependency test | EXTERNAL BLOCKER: two bounded retries (including `GOPROXY=https://proxy.golang.org,direct`) remained in upstream module download until timeout; adapter patch application succeeded and no source compile error was observed |
 | 1 GiB long-run, CPU/RSS, production traffic | INCOMPLETE: requires a longer controlled runtime/traffic harness |
 | `git diff --check` | PASS |
 
