@@ -15,3 +15,10 @@
 - WSL Debian race passed for core/client/server/cmd modules.
 - Native adapter patch application succeeded; full Mihomo dependency test was bounded and timed out while downloading upstream modules.
 - Added `SMP3_GLOBAL_CARRIER_CAPACITY_REPORT.md` and updated aggregation scheduler documentation.
+
+## Final promotion closure audit
+- Clean `git archive HEAD` source built all four standalone binaries from tracked files.
+- Clean source core/client/server/cmd tests passed; one server telemetry test was flaky once and passed on isolated rerun.
+- Added quantitative shared-carrier logs: 1/2/4/8 streams each converged at 91.0 Mbps versus 100 Mbps configured (same estimate across stream counts); 50/200 converged at 48.1/192.3 Mbps with 20/80 share.
+- Added 1200 lifecycle churn gate; registry held at 1024 entries.
+- Promotion remains in progress pending native Mihomo dependency completion, sustained 1+ GiB, CPU/RSS/contention, and process-level traffic smoke.

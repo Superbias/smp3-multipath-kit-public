@@ -1,7 +1,7 @@
 # SMP3 Global Carrier Capacity Report
 
 ## Classification
-A. GLOBAL_CARRIER_CAPACITY_PRODUCTION_CANDIDATE_VALIDATED
+GLOBAL_CARRIER_CAPACITY_PROMOTION_IN_PROGRESS
 
 ## Scope and implementation
 
@@ -22,11 +22,14 @@ A. GLOBAL_CARRIER_CAPACITY_PRODUCTION_CANDIDATE_VALIDATED
 | Registry sharing and identity isolation | PASS (`TestCarrierCapacityRegistrySharesCarrierAndIsolatesKeys`) |
 | Warm reuse and idle pruning | PASS (`TestCarrierCapacityRegistryWarmReuseAndBoundedPrune`) |
 | 1/2/4/8 logical-stream matrix | PASS (`TestCarrierCapacityRegistryConcurrentStreamCounts`) |
+| 1/2/4/8 quantitative global estimate | PASS: 91.0 Mbps for all four stream counts against a 100 Mbps configured carrier (−9.0%, invariant across stream count) |
+| 50/200 asymmetric matrix | PASS: 48.1/192.3 Mbps estimates, 20/80 assignment share |
+| 1200 lifecycle churn | PASS: registry bounded at 1024 entries |
 | Core/client/server race under WSL Debian Go 1.24.4 + gcc | PASS (`go test -race ./core ./client ./server ./cmd/smp3-client ./cmd/smp3-server`) |
 | Windows race | unavailable: local toolchain has no gcc; WSL race passed |
 | Native Mihomo adapter application | PASS (adapter patch applied to pinned checkout) |
-| Native Mihomo full dependency test | NOT COMPLETED: upstream dependency download/test exceeded the bounded run window; no source failure was observed |
-| 1 GiB long-run, CPU/RSS, production traffic | NOT RUN in this local code-only gate |
+| Native Mihomo full dependency test | INCOMPLETE: upstream dependency download/test exceeded the bounded run window; no source failure was observed |
+| 1 GiB long-run, CPU/RSS, production traffic | INCOMPLETE: requires a longer controlled runtime/traffic harness |
 | `git diff --check` | PASS |
 
 ## Compatibility and safety
@@ -35,6 +38,10 @@ A. GLOBAL_CARRIER_CAPACITY_PRODUCTION_CANDIDATE_VALIDATED
 - `capacity_mode: dynamic` remains opt-in and still requires aggregation mode.
 - Empty or absent provider falls back to the established per-stream implementation.
 - No release artifact, VERSION, runtime, production server, or existing release was modified.
+
+## Promotion status
+
+The implementation gates and deterministic local matrix are complete, but the final production classification is intentionally not asserted yet. The remaining promotion evidence is the native Mihomo dependency build/race, sustained 1+ GiB traffic, process CPU/RSS/lock contention measurements, and a real standalone SOCKS smoke run.
 
 ## Required final state
 

@@ -10,7 +10,7 @@
 - [x] 4. 单流兼容与多流/生命周期/身份测试
 - [~] 5. 基准、压力、CPU/RSS 与 1GiB 长流验证 (local deterministic matrix complete; long-run/CPU/RSS deferred)
 - [~] 6. native Linux race 与 tracked-only 验证 (WSL race complete; remote native unavailable)
-- [x] 7. 报告、文档、版本状态与最终工作树
+- [~] 7. 报告、文档、版本状态与最终工作树 (interim promotion report; final gates remain)
 
 ## 约束
 - 不修改 release/tag/deployment；不自动 push/merge。

@@ -63,6 +63,7 @@ func (r *CarrierCapacityRegistry) Provider(keys [2]string, weights []uint32, chu
 		entry.lastUsed = time.Now()
 		states[id] = entry.estimator
 	}
+	r.pruneLocked(time.Now())
 	r.mu.Unlock()
 	return &carrierCapacityProvider{states: states, registry: r, keys: keys}
 }
