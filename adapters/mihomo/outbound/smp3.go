@@ -42,6 +42,8 @@ type SMP3Option struct {
 	Leg1Fallback        string          `proxy:"leg1-fallback,omitempty"`
 	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
 	CapacityMode        string          `proxy:"capacity-mode,omitempty"`
+	ActivationMode      string          `proxy:"activation-mode,omitempty"`
+	HOLMode             string          `proxy:"hol-mode,omitempty"`
 	StartupPolicy       string          `proxy:"startup-policy,omitempty"`
 	StartupPreferredLeg uint8           `proxy:"startup-preferred-leg,omitempty"`
 	StartupGrace        string          `proxy:"startup-grace,omitempty"`
@@ -71,6 +73,7 @@ type SMP3 struct {
 	lookup         func(string) (C.Proxy, bool)
 	sessions       sync.Map
 	udpSessions    sync.Map
+	capacity       *smp3core.CarrierCapacityRegistry
 }
 
 type smp3Session struct {
@@ -141,7 +144,19 @@ func NewSMP3(option SMP3Option) (*SMP3, error) {
 		option:         option,
 		streamConfig:   streamConfig,
 		redialInterval: redialInterval,
+		capacity:       smp3core.NewCarrierCapacityRegistry(),
 	}, nil
+}
+
+func (s *SMP3) capacityProvider() smp3core.StreamCapacityProvider {
+	if s.capacity == nil || s.streamConfig.CapacityMode != smp3core.StreamCapacityDynamic || s.streamConfig.SchedulerMode != smp3core.StreamSchedulerAggregation {
+		return nil
+	}
+	keys := [2]string{
+		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[0].Proxy,
+		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[1].Proxy,
+	}
+	return s.capacity.Provider(keys, s.streamConfig.BandwidthMbps, s.streamConfig.ChunkSize)
 }
 
 func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
@@ -179,6 +194,7 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 	}
 
 	config := s.streamConfig
+	config.CapacityProvider = s.capacityProvider()
 	config.OnActivate = func() { session.ensureLeg(1) }
 	config.OnLegDown = func(id uint8, legErr error) { session.scheduleLeg(id, legErr) }
 	engine, appConn := smp3core.NewStreamEngine(config)
@@ -209,6 +225,7 @@ type smp3BootstrapResult struct {
 
 func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
 	config := ss.owner.streamConfig
+	config.CapacityProvider = ss.owner.capacityProvider()
 	config.OnActivate = func() { ss.ensureLeg(1) }
 	config.OnLegDown = func(id uint8, legErr error) { ss.scheduleLeg(id, legErr) }
 	engine, appConn := smp3core.NewStreamEngine(config)
@@ -516,6 +533,28 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: capacity-mode must be fixed or dynamic")
 	}
+	activationMode := smp3core.StreamActivationLegacy
+	switch strings.ToLower(strings.TrimSpace(option.ActivationMode)) {
+	case "", "legacy":
+	case "dynamic":
+		if mode != smp3core.StreamSchedulerAggregation {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: activation-mode dynamic requires scheduler-mode aggregation")
+		}
+		activationMode = smp3core.StreamActivationDynamic
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: activation-mode must be legacy or dynamic")
+	}
+	holMode := smp3core.StreamHOLLegacy
+	switch strings.ToLower(strings.TrimSpace(option.HOLMode)) {
+	case "", "legacy", "disabled":
+	case "completion":
+		if mode != smp3core.StreamSchedulerAggregation {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: hol-mode completion requires scheduler-mode aggregation")
+		}
+		holMode = smp3core.StreamHOLCompletion
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: hol-mode must be legacy, disabled, or completion")
+	}
 	threshold := option.ActivationThresholdMbps
 	if threshold == 0 {
 		threshold = 80
@@ -523,6 +562,8 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	return smp3core.StreamConfig{
 		SchedulerMode:       mode,
 		CapacityMode:        capacityMode,
+		ActivationMode:      activationMode,
+		HOLMode:             holMode,
 		ChunkSize:           option.ChunkSize,
 		QueueFrames:         option.QueueFrames,
 		ThresholdBytesPS:    threshold * 1000 * 1000 / 8,

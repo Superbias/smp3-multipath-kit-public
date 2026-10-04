@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"sync"
+
+	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
 
 var ErrClientClosed = errors.New("smp3 sidecar client closed")
@@ -15,6 +17,7 @@ var ErrClientClosed = errors.New("smp3 sidecar client closed")
 type Client struct {
 	cfg         Config
 	hostCarrier hostCarrierOpener
+	capacity    *smp3core.CarrierCapacityRegistry
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -34,7 +37,19 @@ func New(cfg Config) (*Client, error) {
 	if cfg.SMP3.CarrierMode == "host_bridge" {
 		hostCarrier = newHostCarrierOpener(cfg.SMP3.HostCarrier)
 	}
-	return &Client{cfg: cfg, hostCarrier: hostCarrier, ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{})}, nil
+	return &Client{cfg: cfg, hostCarrier: hostCarrier, capacity: smp3core.NewCarrierCapacityRegistry(), ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{})}, nil
+}
+
+func (c *Client) streamCapacityProvider() smp3core.StreamCapacityProvider {
+	if c.capacity == nil || c.cfg.SMP3.Stream.CapacityMode != "dynamic" || c.cfg.SMP3.Stream.SchedulerMode != "aggregation" {
+		return nil
+	}
+	up0, up1 := c.cfg.effectiveUpstream(0).Address, c.cfg.effectiveUpstream(1).Address
+	keys := [2]string{
+		"client|outbound|" + c.cfg.SMP3.Routes.Leg0 + "|" + up0,
+		"client|outbound|" + c.cfg.SMP3.Routes.Leg1 + "|" + up1,
+	}
+	return c.capacity.Provider(keys, c.cfg.SMP3.Stream.BandwidthMbps, c.cfg.SMP3.Stream.ChunkSize)
 }
 
 func (c *Client) Start() error {

@@ -1,6 +1,6 @@
-# SMP3 Standalone Android APK v2.4.0
+# SMP3 Standalone Android APK v2.6.1
 
-The v2.4.0 Android artifact is a launcher, configuration shell,
+The v2.6.1 Android artifact is a launcher, configuration shell,
 foreground-service supervisor, and log viewer for the existing standalone SMP3
 runtime. It is not a proxy core.
 
@@ -62,7 +62,7 @@ redaction, and provides clear/copy actions. It does not expose the generated
 password-bearing config in the UI log.
 
 This release provides an `arm64-v8a` debug-signed APK named
-`smp3-android-standalone-2.4.0-debug.apk`; the debug signing is intentional
+`smp3-android-standalone-2.6.1-debug.apk`; the debug signing is intentional
 because no release signing credential is stored in the repository. The native
 payload is the existing
 `smp3-client-android-arm64` executable packaged under the APK native library

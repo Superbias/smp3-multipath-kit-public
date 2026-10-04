@@ -56,7 +56,7 @@ func (p *smp3TestProxy) DialContext(_ context.Context, metadata *C.Metadata) (C.
 func TestSMP3StartupConfigMapsPreferredCorePolicy(t *testing.T) {
 	adapter, err := NewSMP3(SMP3Option{
 		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
-		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}},
+		Legs:          []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}},
 		StartupPolicy: "preferred", StartupPreferredLeg: 1, StartupGrace: "40ms",
 	})
 	if err != nil {
@@ -86,6 +86,45 @@ func TestSMP3AggregationSchedulerMapsToCore(t *testing.T) {
 	}
 }
 
+func TestSMP3DynamicActivationMapsToCore(t *testing.T) {
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, SchedulerMode: "aggregation",
+		ActivationMode: "dynamic", CapacityMode: "dynamic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.streamConfig.ActivationMode != smp3core.StreamActivationDynamic {
+		t.Fatalf("activation mode=%v, want dynamic", adapter.streamConfig.ActivationMode)
+	}
+	if _, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, ActivationMode: "dynamic",
+	}); err == nil {
+		t.Fatal("dynamic activation without aggregation was accepted")
+	}
+}
+
+func TestSMP3HOLCompletionMapsToCore(t *testing.T) {
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, SchedulerMode: "aggregation", HOLMode: "completion",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.streamConfig.HOLMode != smp3core.StreamHOLCompletion {
+		t.Fatalf("HOL mode=%v, want completion", adapter.streamConfig.HOLMode)
+	}
+	if _, err := NewSMP3(SMP3Option{
+		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, HOLMode: "completion",
+	}); err == nil {
+		t.Fatal("HOL completion without aggregation was accepted")
+	}
+}
+
 func TestSMP3PreferredTerminalLegFailureReleasesThroughCore(t *testing.T) {
 	const password = "test-password"
 	backend := newSMP3TestBackend(password)
@@ -93,7 +132,7 @@ func TestSMP3PreferredTerminalLegFailureReleasesThroughCore(t *testing.T) {
 	failedPreferred := &smp3TestProxy{name: "public-hy2", backend: backend, dialErr: errors.New("preferred unavailable"), failed: make(chan struct{})}
 	adapter, err := NewSMP3(SMP3Option{
 		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
-		Legs: []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
+		Legs:          []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
 		StartupPolicy: "preferred", StartupPreferredLeg: 1, StartupGrace: "1s", RedialInterval: "100ms",
 	})
 	if err != nil {

@@ -311,7 +311,7 @@ func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bo
 	if s.telemetry.Enabled() {
 		now := time.Now()
 		ingressRole := ingressRoleForListener(sidecar)
-		if created {
+		session.telemetryOnce.Do(func() {
 			_ = s.telemetry.RegisterSessionWithRole(hello.SessionID, modeName(hello.Mode), ingressRole, now)
 			if hello.Mode == smp3core.ModeDatagram {
 				s.telemetry.BindDatagram(hello.SessionID, session.dgram)
@@ -319,7 +319,7 @@ func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bo
 				s.telemetry.BindStream(hello.SessionID, session.stream)
 			}
 			session.telemetry = s.telemetry.record(hello.SessionID)
-		}
+		})
 		s.telemetry.AttachLegWithRole(hello.SessionID, uint8(hello.LegID), 0, wireCounters, ingressRole, now)
 	}
 	if !created {
@@ -445,6 +445,8 @@ func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSes
 	cfg := smp3core.StreamConfig{
 		SchedulerMode:        streamSchedulerMode(s.cfg.Stream.SchedulerMode),
 		CapacityMode:         streamCapacityMode(s.cfg.Stream.CapacityMode),
+		ActivationMode:       streamActivationMode(s.cfg.Stream.ActivationMode),
+		HOLMode:              streamHOLMode(s.cfg.Stream.HOLMode),
 		ChunkSize:            s.cfg.Stream.ChunkSize,
 		QueueFrames:          s.cfg.Stream.QueueFrames,
 		ThresholdBytesPS:     uint64(s.cfg.Stream.ActivationThresholdMbps) * 125000,

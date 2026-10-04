@@ -24,11 +24,12 @@ type serverSession struct {
 	hostReleased bool
 	hostRelease  sync.Once
 
-	workerWG  sync.WaitGroup
-	closeOne  sync.Once
-	legMu     sync.Mutex
-	reserved  map[uint8]struct{}
-	telemetry *telemetrySessionRecord
+	workerWG      sync.WaitGroup
+	closeOne      sync.Once
+	legMu         sync.Mutex
+	reserved      map[uint8]struct{}
+	telemetryOnce sync.Once
+	telemetry     *telemetrySessionRecord
 }
 
 func (s *serverSession) addTargetBytes(tx bool, n int) {

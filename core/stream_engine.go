@@ -36,6 +36,24 @@ const (
 	StreamSchedulerAggregation
 )
 
+// StreamActivationMode controls when the secondary carrier is requested.
+// Legacy is the compatibility default; Dynamic is explicit opt-in.
+type StreamActivationMode uint8
+
+const (
+	StreamActivationLegacy StreamActivationMode = iota
+	StreamActivationDynamic
+)
+
+// StreamHOLMode controls the optional short-timescale assignment correction.
+// Legacy is the compatibility default; Completion is explicit opt-in.
+type StreamHOLMode uint8
+
+const (
+	StreamHOLLegacy StreamHOLMode = iota
+	StreamHOLCompletion
+)
+
 const (
 	schedulerStatic   = StreamSchedulerStatic
 	schedulerAdaptive = StreamSchedulerAdaptive
@@ -96,9 +114,13 @@ func (p *streamLegPerf) snapshot() (writeBPS, ackedBPS float64, latency time.Dur
 }
 
 type StreamConfig struct {
-	frontierProbe *benchmarkFrontierProbe
-	SchedulerMode StreamSchedulerMode
-	CapacityMode  StreamCapacityMode
+	frontierProbe  *benchmarkFrontierProbe
+	SchedulerMode  StreamSchedulerMode
+	CapacityMode   StreamCapacityMode
+	ActivationMode StreamActivationMode
+	HOLMode        StreamHOLMode
+	// CapacityProvider optionally shares dynamic capacity observations across logical streams.
+	CapacityProvider StreamCapacityProvider
 	// BenchmarkFixedRatio enables a benchmark-only deterministic 1:4 ordinary
 	// dispatch pattern. It is intentionally false by default and is not used by
 	// production constructors.
@@ -244,6 +266,16 @@ type StreamStats struct {
 	CapacityWeight          [2]float64
 	CapacityPending         [2]int64
 	CapacityAssignmentShare [2]float64
+	ActivationDemandBPS     float64
+	ActivationCapacityBPS   float64
+	ActivationConfidence    float64
+	ActivationOverloadRatio float64
+	ActivationOverloadAge   time.Duration
+	ActivationReason        string
+	HOLCorrections          uint64
+	HOLFrontierCandidates   uint64
+	HOLPredictedEarlier     uint64
+	HOLMaxCorrectionStreak  uint64
 }
 
 type dataFrame struct {
@@ -329,11 +361,12 @@ type StreamEngine struct {
 	legs        map[uint8]*streamLeg
 	retiring    map[uint8]*streamLeg
 
-	incoming  chan dataFrame
-	done      chan struct{}
-	txStopped chan struct{}
-	closeErr  atomic.Value
-	closeOne  sync.Once
+	incoming          chan dataFrame
+	done              chan struct{}
+	txStopped         chan struct{}
+	closeErr          atomic.Value
+	closeOne          sync.Once
+	capacityCloseOnce sync.Once
 
 	closing      atomic.Bool
 	finalizing   atomic.Bool
@@ -349,11 +382,23 @@ type StreamEngine struct {
 	// next repair does not have to wait for the periodic retransmit ticker.
 	frontierRescueCh chan struct{}
 
-	ingressBytes atomic.Uint64
-	active       atomic.Bool
-	activeCh     chan struct{}
-	activateOnce sync.Once
-	startup      *streamStartupGate
+	ingressBytes            atomic.Uint64
+	activationBacklog       atomic.Uint64
+	active                  atomic.Bool
+	activeCh                chan struct{}
+	activateOnce            sync.Once
+	activationOverloadSince atomic.Int64
+	activationDemandBPS     atomic.Uint64
+	activationCapacityBPS   atomic.Uint64
+	activationConfidence    atomic.Uint32
+	activationRatio         atomic.Uint64
+	activationReason        atomic.Value
+	holCorrections          atomic.Uint64
+	holFrontierCandidates   atomic.Uint64
+	holPredictedEarlier     atomic.Uint64
+	holCorrectionStreak     atomic.Uint64
+	holMaxCorrectionStreak  atomic.Uint64
+	startup                 *streamStartupGate
 
 	ackNext   atomic.Uint64
 	ackForce  atomic.Bool
@@ -361,6 +406,7 @@ type StreamEngine struct {
 
 	txSentBytes            [2]atomic.Uint64
 	txAckedUseful          [2]atomic.Uint64
+	txAckedNext            atomic.Uint64
 	txRetransmitBytes      [2]atomic.Uint64
 	frontierRescueAttempts atomic.Uint64
 	debugRescueChecks      atomic.Uint64
@@ -396,6 +442,7 @@ type StreamEngine struct {
 	debugSpaceWakeWaitNs   atomic.Uint64
 	weightedMu             sync.Mutex
 	capacity               *streamCapacityEstimator
+	capacityProvider       StreamCapacityProvider
 	weightedFinish         [2]float64
 	assignedService        [2]uint64
 	assignedRecords        [2]uint64
@@ -480,8 +527,13 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		frontierRescueCh: make(chan struct{}, 1),
 		ackWakeCh:        make(chan struct{}, 1),
 	}
-	if cfg.SchedulerMode == StreamSchedulerAggregation && cfg.CapacityMode == StreamCapacityDynamic {
-		c.capacity = newStreamCapacityEstimator(cfg.BandwidthMbps, cfg.ChunkSize)
+	if cfg.SchedulerMode == StreamSchedulerAggregation && (cfg.CapacityMode == StreamCapacityDynamic || cfg.CapacityProvider != nil) {
+		if cfg.CapacityProvider != nil {
+			c.capacityProvider = cfg.CapacityProvider
+		} else {
+			c.capacity = newStreamCapacityEstimator(cfg.BandwidthMbps, cfg.ChunkSize)
+			c.capacityProvider = c.capacity
+		}
 	}
 	if cfg.BenchmarkAssignedDecoupled || cfg.SchedulerMode == StreamSchedulerAggregation {
 		depth := cfg.BenchmarkPendingFrames
@@ -504,7 +556,7 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 	c.bufferPool.New = func() any {
 		return make([]byte, cfg.ChunkSize)
 	}
-	if cfg.ThresholdBytesPS == 0 {
+	if cfg.ThresholdBytesPS == 0 && cfg.ActivationMode != StreamActivationDynamic {
 		c.activate()
 	}
 	go c.txLoop()
@@ -564,8 +616,8 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 		}
 		leg.workers.Add(2)
 		c.legs[id8] = leg
-		if c.capacity != nil {
-			c.capacity.reset(id8, time.Now())
+		if c.capacityProvider != nil {
+			c.capacityProvider.Reset(id8, time.Now())
 		}
 		if c.cfg.wakeTelemetry != nil && id8 < 2 {
 			c.cfg.wakeTelemetry.legs[id8] = leg
@@ -677,9 +729,9 @@ func (c *StreamEngine) TelemetrySnapshot() StreamStats {
 
 // capacityStats leaves legacy snapshots free of capacity accounting locks.
 func (c *StreamEngine) capacityStats(stats *StreamStats) {
-	if c.capacity != nil {
+	if c.capacityProvider != nil {
 		stats.CapacityRawBPS, stats.CapacitySmoothedBPS, stats.CapacityConfidence,
-			stats.CapacityValid, stats.CapacityDemand, stats.CapacityLastSample = c.capacity.telemetry()
+			stats.CapacityValid, stats.CapacityDemand, stats.CapacityLastSample = c.capacityProvider.Telemetry()
 	}
 	for id := range stats.CapacityWeight {
 		if leg := c.getLeg(uint8(id)); leg != nil && !leg.closed.Load() {
@@ -693,6 +745,23 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 			stats.CapacityAssignmentShare[id] = float64(assigned[id]) / float64(total)
 		}
 	}
+	stats.ActivationDemandBPS = math.Float64frombits(c.activationDemandBPS.Load())
+	stats.ActivationCapacityBPS = math.Float64frombits(c.activationCapacityBPS.Load())
+	stats.ActivationConfidence = float64(math.Float32frombits(c.activationConfidence.Load()))
+	stats.ActivationOverloadRatio = math.Float64frombits(c.activationRatio.Load())
+	if since := c.activationOverloadSince.Load(); since != 0 {
+		stats.ActivationOverloadAge = time.Since(time.Unix(0, since))
+		if stats.ActivationOverloadAge < 0 {
+			stats.ActivationOverloadAge = 0
+		}
+	}
+	if reason := c.activationReason.Load(); reason != nil {
+		stats.ActivationReason, _ = reason.(string)
+	}
+	stats.HOLCorrections = c.holCorrections.Load()
+	stats.HOLFrontierCandidates = c.holFrontierCandidates.Load()
+	stats.HOLPredictedEarlier = c.holPredictedEarlier.Load()
+	stats.HOLMaxCorrectionStreak = c.holMaxCorrectionStreak.Load()
 }
 
 func (c *StreamEngine) Close() error {
@@ -700,8 +769,17 @@ func (c *StreamEngine) Close() error {
 	// closing the done channel so host-side carrier health cannot turn normal
 	// teardown into a global cooldown.
 	c.closing.Store(true)
+	c.releaseCapacityProvider()
 	c.fail(io.EOF)
 	return nil
+}
+
+func (c *StreamEngine) releaseCapacityProvider() {
+	c.capacityCloseOnce.Do(func() {
+		if releaser, ok := c.capacityProvider.(interface{ Close() }); ok {
+			releaser.Close()
+		}
+	})
 }
 
 // StartGracefulClose terminates a logical stream without discarding payload that
@@ -764,6 +842,7 @@ func (c *StreamEngine) fail(err error) {
 	if err == nil {
 		err = ErrStreamClosed
 	}
+	c.releaseCapacityProvider()
 	c.closeOne.Do(func() {
 		if c.startup != nil {
 			c.startup.markSessionClosed()
@@ -829,6 +908,10 @@ func (c *StreamEngine) txLoop() {
 		n, err := c.pipeConn.Read(buffer)
 		if n > 0 {
 			c.ingressBytes.Add(uint64(n))
+			c.activationBacklog.Add(uint64(n))
+			if provider, ok := c.capacityProvider.(StreamActivationProvider); ok {
+				provider.ObserveActivationDemand(uint64(n), 0, time.Now())
+			}
 			if c.startup != nil && c.telemetry != nil {
 				c.telemetry.markStartupFirstDataWaiting(time.Now())
 			}
@@ -983,11 +1066,17 @@ func (c *StreamEngine) activationLoop() {
 			if c.closing.Load() && !c.hasOutstanding() {
 				return
 			}
-			if now.Sub(windowStart) >= c.cfg.ActivationWindow {
+			if c.cfg.ActivationMode == StreamActivationDynamic {
+				if c.dynamicActivationReady(now, &windowStart, txWindowBase, rxWindowBase) {
+					c.activate()
+					return
+				}
+			} else if now.Sub(windowStart) >= c.cfg.ActivationWindow {
 				txBytesNow := c.ingressBytes.Load()
 				rxBytesNow := c.rxDeliveredBytes.Load()
 				elapsed := now.Sub(windowStart)
 				if streamActivationEligible(txBytesNow-txWindowBase, rxBytesNow-rxWindowBase, elapsed, c.cfg.ThresholdBytesPS) {
+					c.activationReason.Store("legacy_threshold")
 					c.activate()
 					return
 				}
@@ -1003,6 +1092,7 @@ func (c *StreamEngine) activationLoop() {
 				if queueHighSince.IsZero() {
 					queueHighSince = now
 				} else if now.Sub(queueHighSince) >= c.cfg.ActivationWindow {
+					c.activationReason.Store("queue_congestion")
 					c.activate()
 					return
 				}
@@ -1011,6 +1101,88 @@ func (c *StreamEngine) activationLoop() {
 			}
 		}
 	}
+}
+
+const (
+	activationSafetyMargin    = 1.10
+	activationStrongOverload  = 1.50
+	activationStrongEvidence  = 200 * time.Millisecond
+	activationBacklogFraction = 0.25
+)
+
+func (c *StreamEngine) dynamicActivationReady(now time.Time, windowStart *time.Time, txBase, rxBase uint64) bool {
+	demandRate := 0.0
+	backlog := c.activationBacklog.Load()
+	providerDemand := false
+	if provider, ok := c.capacityProvider.(StreamActivationProvider); ok {
+		demandRate, backlog = provider.ActivationDemand(now)
+		providerDemand = true
+	}
+	if !providerDemand && demandRate <= 0 {
+		elapsed := now.Sub(*windowStart)
+		if elapsed > 0 {
+			tx := c.ingressBytes.Load() - txBase
+			rx := c.rxDeliveredBytes.Load() - rxBase
+			if rx > tx {
+				tx = rx
+			}
+			demandRate = float64(tx) / elapsed.Seconds()
+		}
+	}
+	if backlog > 0 {
+		window := c.cfg.ActivationWindow
+		if window <= 0 {
+			window = time.Second
+		}
+		backlogRate := float64(backlog) / window.Seconds()
+		if backlogRate > demandRate {
+			demandRate = backlogRate
+		}
+	}
+	capacity := 0.0
+	confidence := 0.0
+	valid := false
+	if provider, ok := c.capacityProvider.(StreamActivationProvider); ok {
+		capacity, confidence, valid = provider.ActivationCapacity()
+	}
+	if capacity <= 0 && len(c.cfg.BandwidthMbps) > 0 && c.cfg.BandwidthMbps[0] > 0 {
+		capacity = float64(c.cfg.BandwidthMbps[0]) * 1e6 / 8
+	}
+	if capacity <= 0 {
+		return false
+	}
+	if !valid {
+		confidence = 0
+	}
+	ratio := demandRate / capacity
+	c.activationDemandBPS.Store(math.Float64bits(demandRate))
+	c.activationCapacityBPS.Store(math.Float64bits(capacity))
+	c.activationConfidence.Store(math.Float32bits(float32(confidence)))
+	c.activationRatio.Store(math.Float64bits(ratio))
+	if ratio <= activationSafetyMargin {
+		c.activationOverloadSince.Store(0)
+		c.activationReason.Store("")
+		return false
+	}
+	since := c.activationOverloadSince.Load()
+	if since == 0 {
+		c.activationOverloadSince.Store(now.UnixNano())
+		return false
+	}
+	required := c.cfg.ActivationWindow
+	if required <= 0 {
+		required = time.Second
+	}
+	// Strong, high-confidence overload is allowed to activate promptly. Low
+	// confidence estimates still require the complete configured window.
+	if valid && confidence >= 0.25 && ratio >= activationStrongOverload && required > activationStrongEvidence {
+		required = activationStrongEvidence
+	}
+	if backlog >= uint64(capacity*required.Seconds()*activationBacklogFraction) && ratio > 1 {
+		required = activationStrongEvidence
+	}
+	c.activationReason.Store("dynamic_capacity_overload")
+	return now.Sub(time.Unix(0, since)) >= required
 }
 
 func (c *StreamEngine) activate() {
@@ -1068,7 +1240,13 @@ func (c *StreamEngine) weightFor(id uint8) uint32 {
 func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 	base := float64(c.weightFor(leg.id))
 	if c.cfg.SchedulerMode == StreamSchedulerAggregation && c.cfg.CapacityMode == StreamCapacityDynamic {
-		return c.capacity.weight(leg.id, base)
+		if c.capacityProvider != nil {
+			return c.capacityProvider.Weight(leg.id, base)
+		}
+		if c.capacity != nil {
+			return c.capacity.weight(leg.id, base)
+		}
+		return base
 	}
 	if c.cfg.SchedulerMode != StreamSchedulerAdaptive && c.cfg.SchedulerMode != StreamSchedulerCapacityFirst {
 		return base
@@ -1342,8 +1520,8 @@ func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bo
 		c.clearAttempt(record, leg.id, false)
 		return false
 	case leg.send <- attempt:
-		if !retry && c.capacity != nil {
-			c.capacity.admit(leg.id, uint64(len(record.Payload())), saturated, time.Now())
+		if !retry && c.capacityProvider != nil {
+			c.capacityProvider.Admit(leg.id, uint64(len(record.Payload())), saturated, time.Now())
 		}
 		if retry && c.cfg.frontierProbe != nil {
 			c.cfg.frontierProbe.retry(record, time.Now())
@@ -2193,6 +2371,11 @@ func (c *StreamEngine) scheduleFrontierRescue() {
 
 func (c *StreamEngine) handleAck(next uint64) error {
 	result := c.txLedger.ApplyACK(next, time.Now())
+	// Keep the sender-side cumulative frontier available to the bounded HOL
+	// correction without taking the ledger mutex on every new assignment.
+	if result.AckedNext > c.txAckedNext.Load() {
+		c.txAckedNext.Store(result.AckedNext)
+	}
 	if result.Disposition == StreamTXACKFuture {
 		// This ACK cannot safely prove delivery of any local payload. A live
 		// alpha2 test observed such an anomaly around transport rejoin; treating
@@ -2225,8 +2408,21 @@ func (c *StreamEngine) handleAck(next uint64) error {
 				continue
 			}
 			c.txAckedUseful[legID].Add(bytes)
-			if c.capacity != nil {
-				c.capacity.ack(uint8(legID), bytes, now)
+			for {
+				old := c.activationBacklog.Load()
+				next := uint64(0)
+				if old > bytes {
+					next = old - bytes
+				}
+				if c.activationBacklog.CompareAndSwap(old, next) {
+					break
+				}
+			}
+			if c.capacityProvider != nil {
+				c.capacityProvider.Ack(uint8(legID), bytes, now)
+			}
+			if provider, ok := c.capacityProvider.(StreamActivationProvider); ok {
+				provider.ObserveActivationDemand(0, bytes, now)
 			}
 			if leg := c.getLeg(uint8(legID)); leg != nil {
 				leg.perf.observeAck(int(bytes), now)

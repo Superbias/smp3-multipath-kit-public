@@ -37,6 +37,102 @@ type benchmarkAssignmentStats struct {
 	feedersDone   [2]chan struct{}
 }
 
+const (
+	holFrontierDistance    = 8
+	holCandidateStride     = 8
+	holMaxCorrectionStreak = 4
+	holMinimumLead         = 2 * time.Millisecond
+	holRelativeLead        = 0.10
+)
+
+// completionEstimate is deliberately a bounded, event-driven estimate. It
+// uses only bytes already visible to this stream (pending queue plus sent but
+// not cumulatively ACKed bytes), the current normalized service weight, and
+// the existing smoothed write latency as a transport-latency proxy.
+func (c *StreamEngine) completionEstimate(leg *streamLeg, payload int) float64 {
+	if leg == nil {
+		return math.MaxFloat64
+	}
+	weight := c.effectiveSchedulerWeight(leg)
+	if weight <= 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+		return math.MaxFloat64
+	}
+	bps := weight * 1e6 / 8
+	if bps <= 0 {
+		return math.MaxFloat64
+	}
+	pending := c.pendingDepth[leg.id].Load()
+	if pending < 0 {
+		pending = 0
+	}
+	queued := uint64(pending) * uint64(c.cfg.ChunkSize)
+	sent := c.txSentBytes[leg.id].Load()
+	acked := c.txAckedUseful[leg.id].Load()
+	inflight := uint64(0)
+	if sent > acked {
+		inflight = sent - acked
+	}
+	writeBPS, ackedBPS, latency := leg.perf.snapshot()
+	if latency <= 0 {
+		// A short-lived leg may not have a write sample yet. The configured
+		// retransmit budget is a conservative bounded proxy, never a timer.
+		if writeBPS <= 0 && ackedBPS <= 0 {
+			latency = 0
+		}
+	}
+	if payload < 0 {
+		payload = 0
+	}
+	return float64(queued+inflight+uint64(payload))/bps + latency.Seconds()
+}
+
+func (c *StreamEngine) holCorrection(r *StreamTXRecord, baseline *streamLeg, legs []*streamLeg) *streamLeg {
+	if c.cfg.HOLMode != StreamHOLCompletion || r == nil || baseline == nil || len(legs) < 2 {
+		return baseline
+	}
+	frontierSequence := c.txAckedNext.Load()
+	if r.Sequence() < frontierSequence {
+		return baseline
+	}
+	if r.Sequence()-frontierSequence > holFrontierDistance {
+		return baseline
+	}
+	c.holFrontierCandidates.Add(1)
+	baseEstimate := c.completionEstimate(baseline, len(r.Payload()))
+	best := baseline
+	bestEstimate := baseEstimate
+	for _, leg := range legs {
+		if leg == nil || leg.closed.Load() || leg == baseline {
+			continue
+		}
+		estimate := c.completionEstimate(leg, len(r.Payload()))
+		if estimate < bestEstimate {
+			best, bestEstimate = leg, estimate
+		}
+	}
+	if best == baseline || baseEstimate-bestEstimate < holMinimumLead.Seconds() || bestEstimate >= baseEstimate*(1-holRelativeLead) {
+		if c.holCorrectionStreak.Load() != 0 {
+			c.holCorrectionStreak.Store(0)
+		}
+		return baseline
+	}
+	c.holPredictedEarlier.Add(1)
+	streak := c.holCorrectionStreak.Load()
+	if streak >= holMaxCorrectionStreak {
+		return baseline
+	}
+	streak++
+	c.holCorrectionStreak.Store(streak)
+	for {
+		old := c.holMaxCorrectionStreak.Load()
+		if streak <= old || c.holMaxCorrectionStreak.CompareAndSwap(old, streak) {
+			break
+		}
+	}
+	c.holCorrections.Add(1)
+	return best
+}
+
 func (c *StreamEngine) benchmarkPendingOnly(r *StreamTXRecord) bool {
 	if !c.assignedDecoupledEnabled() || r == nil {
 		return false
@@ -119,6 +215,12 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 	}
 	if best == nil {
 		return nil // retain ownership until a path recovers, or normal recovery expires
+	}
+	// Sampling the frontier at a bounded sequence stride keeps the opt-in
+	// correction out of the hot path for the bulk of records while still
+	// giving each advancing frontier a nearby candidate.
+	if c.cfg.HOLMode == StreamHOLCompletion && r.Sequence()%holCandidateStride == 0 {
+		best = c.holCorrection(r, best, legs)
 	}
 	n := uint64(len(r.Payload()))
 	if a.admitted.Load() {

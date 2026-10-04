@@ -44,3 +44,30 @@ Startup activation thresholds remain independent of capacity estimation.
 
 Runtime capacity, confidence, sample validity, and assignment weights are
 available in Core `StreamStats`; ordinary Mihomo logs do not expose them.
+
+## Global physical-carrier capacity (v2.6 development)
+
+When `scheduler_mode: aggregation` and `capacity_mode: dynamic` are enabled, standalone and native Mihomo clients create one bounded carrier-capacity registry per process. Concurrent logical streams sharing the same configured leg route/upstream identity contribute logical ACK-retired useful bytes and queue demand to the same estimator. A key includes the client owner domain, outbound direction, and carrier identity; different owners, directions, or leg carriers cannot share state. Registry entries retain warm estimates after stream close and are pruned after 10 minutes idle (with a 1024-entry bound). If no provider is supplied by an embedding application, the original per-stream estimator remains active.
+
+The server intentionally does not merge sessions: each incoming session has independent physical carrier sockets, so cross-client aggregation would misattribute capacity. Core telemetry exposes the shared estimate through the existing `StreamStats.Capacity*` fields; ordinary Mihomo logs still do not print these fields unless a host exports `StreamStats`.
+
+## Capacity-relative leg activation
+
+Leg activation is opt-in through `stream.activation_mode`:
+
+```json
+{
+  "scheduler_mode": "aggregation",
+  "capacity_mode": "dynamic",
+  "activation_mode": "dynamic",
+  "activation_window": "1s"
+}
+```
+
+Omitting `activation_mode` or setting it to `legacy` preserves the historical leg0-first trigger (`activation_threshold_mbps` plus the queue/congestion fallback). `dynamic` keeps leg0 as the startup carrier, then compares logical application demand against the active primary's global carrier estimate. It uses a 10% safety margin, sustained evidence, and a 200ms decision for high-confidence overload. A short burst decays without opening the secondary. Queue congestion and transport failure remain emergency fallbacks. Once opened, the existing dynamic capacity and assigned-service planner controls the traffic ratio; activation does not force a split.
+
+Demand is counted when logical application DATA enters the stream and is retired on cumulative useful ACK. Retransmit, rescue, and duplicate physical sends do not increase demand. The registry aggregates demand across streams sharing the same CarrierKey, so individually small streams can activate the secondary when aggregate demand exceeds shared primary capacity. Standalone and native Mihomo use the same core semantics.
+
+## Completion-time / HOL-aware assignment (opt-in)
+
+Aggregation can enable a bounded short-timescale correction with `hol_mode: completion` (JSON) or `hol-mode: completion` (Native Mihomo). The correction compares pending bytes, sent-but-not-ACKed bytes, existing fixed/dynamic service weight, payload size, and smoothed write latency. It samples records near the cumulative-ACK frontier, requires a 2 ms and 10% predicted lead, and caps the correction streak at four records. Assigned-service remains the long-term authority, so capacity entitlement is recovered naturally. Omitted, `legacy`, and `disabled` preserve the prior scheduler.
