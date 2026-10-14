@@ -2,7 +2,7 @@
 
 v2.6.2 packages the shared Core recovery correction. Native Mihomo and Standalone client/server use the same canonical Core. The recovery probe residence clock starts when the candidate record becomes the cumulative-ACK frontier. Wire/HELLO versions and configuration schema remain unchanged.
 
-The release build includes Native Mihomo, Standalone client and server, and the pinned sing-box compatibility client for Linux/amd64 and Windows/amd64, plus the Android ARM64 Standalone APK and SHA256 manifest.
+The release artifacts include Native Mihomo and Standalone client/server for Linux/amd64 and Windows/amd64, plus the Android ARM64 Standalone APK and SHA256 manifest. The pinned sing-box compatibility client is omitted because the build environment could not fetch its source commit; older binaries were excluded.
 
 Release-gate status remains overall FAIL: migration parity still requires maintainer policy approval, Windows raw Carrier calibration remains below its frozen floor, and production validation was not run. See `RELEASE_NOTES_2.6.2.md` and `docs/SMP3_SHARED_CORE_RECOVERY_FIX.md`.
 

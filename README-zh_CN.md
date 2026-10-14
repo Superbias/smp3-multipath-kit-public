@@ -37,7 +37,7 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 - Native：Mihomo `v2.6.2`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
 - Standalone：`smp3-client`、`smp3-server`
 - Android Standalone：`smp3-android-standalone-2.6.2-debug.apk`（`arm64-v8a`）
-- 兼容：`smp3-proxy`（固定 sing-box 运行时，版本后缀包含 SMP3 版本）
+- 兼容产物：v2.6.2 未包含。构建环境无法获取固定版本的 sing-box 源码，因此没有复用旧二进制
 - 监控：集成在 `smp3-server` 中，独立 `smp3-panel` 已退役
 - 官方下载：[GitHub Releases v2.6.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.6.2)
 - 下载后先用 `SHA256SUMS` 校验文件，不要直接使用示例配置中的占位密码。

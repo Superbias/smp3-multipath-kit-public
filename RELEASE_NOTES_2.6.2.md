@@ -7,7 +7,7 @@ This release packages the shared Core recovery correction from the C1 candidate.
 - Native Mihomo SMP3 core: Linux/amd64 and Windows/amd64.
 - Standalone SMP3 client: Linux/amd64 and Windows/amd64.
 - Standalone SMP3 server: Linux/amd64 and Windows/amd64.
-- Pinned sing-box compatibility client: Linux/amd64 and Windows/amd64.
+- Compatibility client: not included. The build environment could not fetch the pinned sing-box source commit `4902660f8424fef3c2a60dfcdce7aeadfe3f3b88`; older binaries were excluded.
 - Android Standalone APK: arm64-v8a, debug-signed; its Go client PIE was rebuilt from this release source.
 - `SHA256SUMS` covering the released artifacts.
 
