@@ -119,6 +119,7 @@ type TelemetryStartupSnapshot struct {
 }
 
 type TelemetrySessionSnapshot struct {
+	Transport         *TelemetryStreamTransport
 	DisplaySessionID  string
 	IngressRole       string
 	Mode              string
@@ -132,6 +133,47 @@ type TelemetrySessionSnapshot struct {
 	TargetTxBytes     uint64
 	TargetRxBytes     uint64
 	Legs              [2]TelemetryLegSnapshot
+}
+
+// Local TX means server-to-client for downloads. Byte counters are monotonic;
+// weights and queue depths are point-in-time values, never lifetime shares.
+type TelemetryStreamTransport struct {
+	ProbeLimit          [2]int       `json:"probe_limit"`
+	ProbeByteLimit      [2]uint64    `json:"probe_byte_limit"`
+	ProbeConfirmedBytes [2]uint64    `json:"probe_confirmed_bytes"`
+	ProbeServiceBPS     [2]float64   `json:"probe_service_bps"`
+	SessionServiceBPS   [2]float64   `json:"session_service_bps"`
+	FeedbackEnvelopeNS  [2]int64     `json:"feedback_envelope_ns"`
+	UsefulACKTotal      uint64       `json:"useful_ack_total"`
+	EffectiveWeightMbps [2]float64   `json:"effective_weight_mbps"`
+	SampleReason        [2]string    `json:"sample_reason"`
+	SampleAgeNS         [2]int64     `json:"sample_age_ns"`
+	PendingBytes        [2]uint64    `json:"pending_bytes"`
+	OutstandingBytes    [2]uint64    `json:"ordinary_outstanding_bytes"`
+	Direction           string       `json:"direction"`
+	EstimateBPS         [2]float64   `json:"estimate_bps"`
+	WeightMbps          [2]float64   `json:"weight_mbps"`
+	Confidence          [2]float64   `json:"confidence"`
+	SampleValid         [2]bool      `json:"sample_valid"`
+	SampleAt            [2]time.Time `json:"sample_at"`
+	AdmissionState      [2]string    `json:"admission_state"`
+	AdmissionReason     [2]string    `json:"admission_reason"`
+	AdmissionSince      [2]time.Time `json:"admission_since"`
+	ProbeAfter          [2]time.Time `json:"probe_after"`
+	PendingFrames       [2]int64     `json:"pending_frames"`
+	OutstandingFrames   [2]int       `json:"ordinary_outstanding_frames"`
+	OrdinaryBytes       [2]uint64    `json:"ordinary_bytes"`
+	WrittenBytes        [2]uint64    `json:"written_bytes"`
+	UsefulACKBytes      [2]uint64    `json:"useful_ack_bytes"`
+	RetryBytes          [2]uint64    `json:"retry_bytes"`
+	RescueAttempts      uint64       `json:"rescue_attempts"`
+	ACKNext             uint64       `json:"ack_next"`
+	ACKAt               time.Time    `json:"ack_at"`
+	FrontierAgeNS       int64        `json:"frontier_age_ns"`
+	FrontierLeg         int16        `json:"frontier_leg"`
+	Generation          [2]uint64    `json:"generation"`
+	RXDeliveredBytes    uint64       `json:"rx_delivered_bytes"`
+	RXPendingFrames     int          `json:"rx_pending_frames"`
 }
 
 type TelemetryLegAggregate struct {
@@ -292,6 +334,7 @@ type telemetryLegRecord struct {
 }
 
 type telemetrySessionRecord struct {
+	transport       *TelemetryStreamTransport
 	id              smp3core.SessionID
 	displayID       string
 	mode            string
@@ -674,6 +717,20 @@ func (r *TelemetryRegistry) buildSnapshot(now time.Time) TelemetrySnapshot {
 func (r *TelemetryRegistry) updateFromCoreLocked(session *telemetrySessionRecord) {
 	if session.stream != nil {
 		stats := session.stream.TelemetrySnapshot()
+		frontier := session.stream.TXLedger().ProgressSnapshot()
+		session.transport = &TelemetryStreamTransport{ProbeLimit: stats.OrdinaryProbeLimit, ProbeByteLimit: stats.OrdinaryProbeByteLimit, ProbeConfirmedBytes: stats.OrdinaryProofBytes, ProbeServiceBPS: stats.OrdinaryProbeServiceBPS, SessionServiceBPS: stats.OrdinarySessionServiceBPS, FeedbackEnvelopeNS: stats.OrdinaryFeedbackEnvelopeNS, Direction: "local_tx", EstimateBPS: stats.CapacitySmoothedBPS, WeightMbps: stats.CapacityWeight, Confidence: stats.CapacityConfidence, SampleValid: stats.CapacityValid, SampleAt: stats.CapacityLastSample, AdmissionState: stats.OrdinaryAdmissionState, AdmissionReason: stats.OrdinaryAdmissionReason, AdmissionSince: stats.OrdinaryAdmissionSince, ProbeAfter: stats.OrdinaryProbeAfter, PendingFrames: stats.CapacityPending, OutstandingFrames: stats.OrdinaryOutstandingFrames, OrdinaryBytes: stats.OrdinaryAssignedBytes, WrittenBytes: stats.TxSentBytesByLeg, UsefulACKBytes: stats.TxAckedUsefulByLeg, RetryBytes: stats.TxRetransmitBytesByLeg, RescueAttempts: stats.FrontierRescueAttempts, ACKNext: frontier.AckedNext, ACKAt: stats.LastAckProgress, Generation: stats.LegGeneration, RXDeliveredBytes: stats.RxDeliveredBytes, RXPendingFrames: stats.RxPendingFrames}
+		session.transport.FrontierAgeNS = int64(session.stream.TXLedger().FrontierAge(time.Now()))
+		session.transport.FrontierLeg = session.stream.TXLedger().FrontierSnapshot().Owner
+		session.transport.UsefulACKTotal = stats.TxAckedUsefulTotal
+		session.transport.WrittenBytes = stats.TxWrittenBytesByLeg
+		session.transport.RetryBytes = stats.TxRetryWrittenBytesByLeg
+		session.transport.EffectiveWeightMbps = stats.OrdinaryEffectiveWeight
+		session.transport.SampleReason = stats.CapacitySampleReason
+		for id, age := range stats.CapacitySampleAge {
+			session.transport.SampleAgeNS[id] = int64(age)
+		}
+		session.transport.PendingBytes = stats.OrdinaryPendingBytes
+		session.transport.OutstandingBytes = stats.OrdinaryOutstandingBytes
 		session.startup = copyStartupSnapshot(stats.Telemetry.Startup)
 		for leg := range session.legs {
 			session.legs[leg].dataSentBytes = stats.TxSentBytesByLeg[leg]
@@ -734,6 +791,7 @@ func earlierTime(a, b time.Time) time.Time {
 
 func (r *TelemetryRegistry) sessionSnapshot(session *telemetrySessionRecord) TelemetrySessionSnapshot {
 	row := TelemetrySessionSnapshot{
+		Transport:        session.transport,
 		DisplaySessionID: session.displayID,
 		IngressRole:      sessionIngressRole(session),
 		Mode:             session.mode,
@@ -870,6 +928,10 @@ func (r *TelemetryRegistry) drainEvents() {
 func cloneTelemetrySnapshot(snapshot TelemetrySnapshot) TelemetrySnapshot {
 	snapshot.Sessions = append([]TelemetrySessionSnapshot(nil), snapshot.Sessions...)
 	for i := range snapshot.Sessions {
+		if snapshot.Sessions[i].Transport != nil {
+			transport := *snapshot.Sessions[i].Transport
+			snapshot.Sessions[i].Transport = &transport
+		}
 		if snapshot.Sessions[i].Startup != nil {
 			startup := *snapshot.Sessions[i].Startup
 			snapshot.Sessions[i].Startup = &startup

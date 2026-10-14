@@ -315,6 +315,7 @@ func (r *txReference) ack(next uint64, now time.Time) StreamTXACKResult {
 			continue
 		}
 		leg := record.lastSentLeg
+		result.RetiredBytes += uint64(record.payloadLen)
 		if leg < 0 && record.inTransit {
 			leg = int16(record.transitLeg)
 		}

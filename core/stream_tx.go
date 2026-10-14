@@ -19,14 +19,26 @@ const (
 // StreamTXACKResult contains only state-transition data. Legacy owns callbacks,
 // adaptive counters, inflight tokens, and frontier wakeups.
 type StreamTXACKResult struct {
-	Disposition     StreamTXACKDisposition
-	Next            uint64
-	Max             uint64
-	FutureCount     uint64
-	Released        int
-	AckedBytesByLeg [2]uint64
-	AckedNext       uint64
-	LastACKProgress time.Time
+	Disposition            StreamTXACKDisposition
+	Next                   uint64
+	Max                    uint64
+	FutureCount            uint64
+	Released               int
+	RetiredBytes           uint64 // unique logical bytes, independent of uncertain leg attribution
+	AckedBytesByLeg        [2]uint64
+	AckedNext              uint64
+	LastACKProgress        time.Time
+	UniqueTimelyByLeg      [2]int // single-attempt records retired within the bounded proof budget
+	UniqueGeneration       [2]uint64
+	UniqueOrderedByLeg     [2]int
+	UniqueBytesByLeg       [2]uint64
+	FeedbackMinByLeg       [2]time.Duration
+	FeedbackMaxByLeg       [2]time.Duration
+	BeforeOrdinaryFrames   [2]int
+	BeforeOrdinaryBytes    [2]uint64
+	ProofRejected          [2][3]int    // duplicate/stale, never-written, late-frontier
+	SampleBytesByLeg       [2]uint64    // excludes ambiguous duplicate attempts
+	SampleAssignedMinByLeg [2]time.Time // oldest assignment in the clean normal sample cohort
 }
 
 // StreamTXAttemptResult reports the legacy side effects of a successful DATA
@@ -50,6 +62,7 @@ type StreamTXRetryState struct {
 	Record          *StreamTXRecord
 	InTransit       bool
 	RescueInTransit bool
+	LocalEnqueue    bool
 	LastSentLeg     int16
 }
 
@@ -103,17 +116,27 @@ type StreamTXRecord struct {
 	rescueSince     time.Time
 	lastRescueAt    time.Time
 
-	sendCount uint32
-	trace     *StreamHandoffTelemetry
-	traceLeg  uint8
-	traceT0Ns int64
-	traceT1Ns int64
-	traceT2Ns int64
-	traceT3Ns int64
-	traceT4Ns int64
-	traceT5Ns int64
-	traceT6Ns int64
-	traceT7Ns int64
+	sendCount        uint32
+	ordinaryOwner    int16
+	ordinaryAdmitted bool
+	assignedAt       time.Time
+	firstWriteAt     time.Time
+	frontierAt       time.Time
+	originGeneration uint64
+	originEpoch      int64
+	invalidated      bool
+	duplicated       bool
+	localEnqueue     bool
+	trace            *StreamHandoffTelemetry
+	traceLeg         uint8
+	traceT0Ns        int64
+	traceT1Ns        int64
+	traceT2Ns        int64
+	traceT3Ns        int64
+	traceT4Ns        int64
+	traceT5Ns        int64
+	traceT6Ns        int64
+	traceT7Ns        int64
 }
 
 // Sequence returns the immutable frame ordinal.
@@ -137,6 +160,11 @@ type StreamTXLedger struct {
 
 	futureACKCount  uint64
 	lastACKProgress time.Time
+	ordinaryFrames  [2]int
+	ordinaryBytes   [2]uint64
+	pendingBytes    [2]uint64
+	evidence        []StreamTXEvidence
+	evidenceNext    int
 }
 
 // NewStreamTXLedger creates an empty TX ledger. It is intentionally zero-policy:
@@ -154,17 +182,26 @@ func (l *StreamTXLedger) ensureLocked() {
 // Add assigns one frame-ordinal sequence and takes immutable ownership of the
 // supplied payload without copying it.
 func (l *StreamTXLedger) Add(payload []byte, now time.Time) *StreamTXRecord {
+	return l.add(payload, now, false)
+}
+func (l *StreamTXLedger) add(payload []byte, now time.Time, local bool) *StreamTXRecord {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.ensureLocked()
 	record := &StreamTXRecord{
-		sequence:    l.nextSequence,
-		payload:     payload,
-		createdAt:   now,
-		lastSentLeg: -1,
+		sequence:      l.nextSequence,
+		localEnqueue:  local,
+		payload:       payload,
+		createdAt:     now,
+		lastSentLeg:   -1,
+		ordinaryOwner: -1,
 	}
 	l.nextSequence++
+	if record.sequence == l.ackedNext {
+		record.frontierAt = now
+	}
 	l.outstanding[record.sequence] = record
+	l.evidenceLocked("created", record, now)
 	return record
 }
 
@@ -238,6 +275,9 @@ func (l *StreamTXLedger) MarkTransit(record *StreamTXRecord, leg LegID, now time
 		return false
 	}
 	record.inTransit = true
+	if record.sendCount > 0 {
+		record.duplicated = true
+	}
 	record.transitLeg = leg
 	record.transitSince = now
 	return true
@@ -248,6 +288,19 @@ func (l *StreamTXLedger) MarkTransit(record *StreamTXRecord, leg LegID, now time
 func (l *StreamTXLedger) MarkRescueTransit(record *StreamTXRecord, leg LegID, now time.Time) (time.Time, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.markRescueTransitLocked(record, leg, now)
+}
+
+func (l *StreamTXLedger) MarkRestrictedRescueTransit(record *StreamTXRecord, leg LegID, owner int16, now time.Time) (time.Time, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if record == nil || record.ordinaryOwner != owner {
+		return time.Time{}, false
+	}
+	return l.markRescueTransitLocked(record, leg, now)
+}
+
+func (l *StreamTXLedger) markRescueTransitLocked(record *StreamTXRecord, leg LegID, now time.Time) (time.Time, bool) {
 	if record == nil || l.outstanding[record.sequence] != record || record.rescueInTransit {
 		return time.Time{}, false
 	}
@@ -257,6 +310,9 @@ func (l *StreamTXLedger) MarkRescueTransit(record *StreamTXRecord, leg LegID, no
 	// A same-leg rescue is valid when this is the only live carrier. The
 	// scheduler excludes same-leg rescue whenever an alternate leg exists.
 	record.rescueInTransit = true
+	// Once an alternate copy may be sent, cumulative ACK cannot identify the
+	// winning copy. Conservatively exclude this record from recovery proofs.
+	record.duplicated = true
 	record.rescueLeg = leg
 	record.rescueSince = now
 	return now, true
@@ -282,13 +338,19 @@ func (l *StreamTXLedger) MarkRescueQueued(record *StreamTXRecord, leg LegID, sta
 // ClearAttempt abandons a normal or rescue attempt. An exactly committed rescue
 // cooldown is rolled back when the matching attempt fails before completion.
 func (l *StreamTXLedger) ClearAttempt(record *StreamTXRecord, leg LegID, rescue bool) {
+	l.clearAttemptAt(record, leg, rescue, time.Time{})
+}
+
+// Engine asynchronous cleanup carries its own attempt identity. A retired
+// producer must not clear a newer attempt using the same logical leg ID.
+func (l *StreamTXLedger) clearAttemptAt(record *StreamTXRecord, leg LegID, rescue bool, started time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if record == nil || l.outstanding[record.sequence] != record {
 		return
 	}
 	if rescue {
-		if record.rescueInTransit && record.rescueLeg == leg {
+		if record.rescueInTransit && record.rescueLeg == leg && (started.IsZero() || record.rescueSince.Equal(started)) {
 			if record.lastRescueAt.Equal(record.rescueSince) {
 				record.lastRescueAt = time.Time{}
 			}
@@ -297,7 +359,7 @@ func (l *StreamTXLedger) ClearAttempt(record *StreamTXRecord, leg LegID, rescue 
 		}
 		return
 	}
-	if record.inTransit && record.transitLeg == leg {
+	if record.inTransit && record.transitLeg == leg && (started.IsZero() || record.transitSince.Equal(started)) {
 		record.inTransit = false
 		record.transitSince = time.Time{}
 	}
@@ -350,7 +412,11 @@ func (l *StreamTXLedger) MarkAttemptSent(record *StreamTXRecord, leg LegID, resc
 		record.lastSentAt = now
 		record.lastSentLeg = int16(leg)
 	}
+	if record.firstWriteAt.IsZero() {
+		record.firstWriteAt = attemptStarted
+	}
 	record.sendCount++
+	l.evidenceLocked("write_complete", record, now)
 	return StreamTXAttemptResult{Applied: true, Bytes: len(record.payload), Retransmit: rescue || record.sendCount > 1}
 }
 
@@ -360,6 +426,11 @@ func (l *StreamTXLedger) InvalidateLeg(leg LegID) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, record := range l.outstanding {
+		// Catch-up ACKs after rejoin may describe the retired generation.
+		if record.ordinaryOwner == int16(leg) {
+			record.duplicated = true
+			record.invalidated = true
+		}
 		if record.inTransit && record.transitLeg == leg {
 			record.inTransit = false
 			record.transitSince = time.Time{}
@@ -375,6 +446,15 @@ func (l *StreamTXLedger) InvalidateLeg(leg LegID) {
 			record.lastSentLeg = -1
 		}
 	}
+}
+
+func (l *StreamTXLedger) OrdinaryOwner(record *StreamTXRecord) int16 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if record == nil || l.outstanding[record.sequence] != record {
+		return -1
+	}
+	return record.ordinaryOwner
 }
 
 // ApplyACK applies a peer cumulative ACK. next > NextSequence is future and
@@ -397,28 +477,145 @@ func (l *StreamTXLedger) ApplyACK(next uint64, now time.Time) StreamTXACKResult 
 		return result
 	}
 	result.Disposition = StreamTXACKAdvanced
+	result.BeforeOrdinaryFrames = l.ordinaryFrames
+	result.BeforeOrdinaryBytes = l.ordinaryBytes
+	head := l.outstanding[l.ackedNext]
 	for sequence := l.ackedNext; sequence < next; sequence++ {
 		record, exists := l.outstanding[sequence]
 		if !exists {
 			continue
 		}
 		leg := record.lastSentLeg
+		result.RetiredBytes += uint64(len(record.payload))
 		if leg < 0 && record.inTransit {
 			leg = int16(record.transitLeg)
 		}
+		// A pending-only record can retire through a rescue before the writer
+		// commits its attempt. Preserve exactly-once useful bytes, attributing
+		// them to the logical ordinary owner, never claiming the winning copy.
+		if leg < 0 && record.ordinaryOwner >= 0 {
+			leg = record.ordinaryOwner
+		}
 		if leg >= 0 && leg < 2 {
 			result.AckedBytesByLeg[leg] += uint64(len(record.payload))
+			if record.ordinaryOwner >= 0 && !record.duplicated && !record.firstWriteAt.IsZero() {
+				result.SampleBytesByLeg[leg] += uint64(len(record.payload))
+				if at := record.assignedAt; !at.IsZero() && (result.SampleAssignedMinByLeg[leg].IsZero() || at.Before(result.SampleAssignedMinByLeg[leg])) {
+					result.SampleAssignedMinByLeg[leg] = at
+				}
+			}
 		}
+		l.evidenceLocked("ACK_retire", record, now)
 		delete(l.outstanding, sequence)
+		if record.ordinaryOwner >= 0 && record.ordinaryOwner < 2 {
+			id := record.ordinaryOwner
+			l.ordinaryFrames[id]--
+			l.ordinaryBytes[id] -= uint64(len(record.payload))
+			if !record.ordinaryAdmitted {
+				l.pendingBytes[id] -= uint64(len(record.payload))
+			}
+			if record.duplicated || record.sendCount > 1 {
+				result.ProofRejected[id][0]++
+			} else if record.firstWriteAt.IsZero() {
+				result.ProofRejected[id][1]++
+			} else {
+				result.UniqueGeneration[id] = record.originGeneration
+				age := now.Sub(record.firstWriteAt)
+				if age > result.FeedbackMaxByLeg[id] {
+					result.FeedbackMaxByLeg[id] = age
+				}
+				if age > 0 && (result.FeedbackMinByLeg[id] == 0 || age < result.FeedbackMinByLeg[id]) {
+					result.FeedbackMinByLeg[id] = age
+				}
+				if !record.firstWriteAt.IsZero() && now.Sub(record.firstWriteAt) <= streamProofBudget {
+					result.UniqueTimelyByLeg[id]++
+				} else if (!record.frontierAt.IsZero() && now.Sub(record.frontierAt) <= streamProofBudget) || (head != nil && head != record && head.ordinaryOwner != id && !head.duplicated && !head.firstWriteAt.IsZero()) {
+					result.UniqueOrderedByLeg[id]++
+				} else {
+					result.ProofRejected[id][2]++
+				}
+				if !record.assignedAt.IsZero() && (now.Sub(record.firstWriteAt) <= streamProofBudget || (!record.frontierAt.IsZero() && now.Sub(record.frontierAt) <= streamProofBudget) || (head != nil && head != record && head.ordinaryOwner != id && !head.duplicated && !head.firstWriteAt.IsZero())) {
+					result.UniqueBytesByLeg[id] += uint64(len(record.payload))
+				}
+			}
+		}
 		result.Released++
 	}
 	l.ackedNext = next
+	if r := l.outstanding[next]; r != nil && r.frontierAt.IsZero() {
+		r.frontierAt = now
+		l.evidenceLocked("frontier_exposed", r, now)
+	}
 	if result.Released > 0 {
 		l.lastACKProgress = now
 		result.LastACKProgress = now
 	}
 	result.AckedNext = l.ackedNext
 	return result
+}
+
+// OrdinaryFrames counts unique logical records, including pending and a
+// blocked writer. It never counts rescue copies as additional business data.
+func (l *StreamTXLedger) OrdinaryFrames() [2]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ordinaryFrames
+}
+
+func (l *StreamTXLedger) OrdinaryAdmissionBytes() (outstanding, pending [2]uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ordinaryBytes, l.pendingBytes
+}
+
+func (l *StreamTXLedger) markOrdinaryAdmitted(record *StreamTXRecord, id uint8) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if record == nil || l.outstanding[record.sequence] != record || record.ordinaryOwner != int16(id) || record.ordinaryAdmitted {
+		return
+	}
+	record.ordinaryAdmitted = true
+	l.pendingBytes[id] -= uint64(len(record.payload))
+}
+
+// FrontierAge is an O(1) telemetry read, including a pending-only blocker.
+func (l *StreamTXLedger) FrontierAge(now time.Time) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.outstanding[l.ackedNext]
+	if r == nil || r.createdAt.IsZero() || now.Before(r.createdAt) {
+		return 0
+	}
+	return now.Sub(r.createdAt)
+}
+
+// FrontierSnapshot is an O(1) copy of the current blocker/attempt identity.
+func (l *StreamTXLedger) FrontierSnapshot() StreamTXFrontierSnapshot { return l.frontierSnapshot() }
+
+func (l *StreamTXLedger) assignOrdinary(record *StreamTXRecord, id uint8, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if record == nil || l.outstanding[record.sequence] != record {
+		return false
+	}
+	if record.ordinaryOwner == int16(id) {
+		return true
+	}
+	if record.ordinaryOwner >= 0 {
+		l.ordinaryFrames[record.ordinaryOwner]--
+		l.ordinaryBytes[record.ordinaryOwner] -= uint64(len(record.payload))
+		if !record.ordinaryAdmitted {
+			l.pendingBytes[record.ordinaryOwner] -= uint64(len(record.payload))
+		}
+	}
+	record.ordinaryOwner, record.assignedAt = int16(id), now
+	l.evidenceLocked("assigned", record, now)
+	l.ordinaryFrames[id]++
+	l.ordinaryBytes[id] += uint64(len(record.payload))
+	if !record.ordinaryAdmitted {
+		l.pendingBytes[id] += uint64(len(record.payload))
+	}
+	return true
 }
 
 // FutureACKCount returns the number of future ACKs observed by the ledger.
@@ -435,7 +632,7 @@ func (l *StreamTXLedger) retrySnapshot() []StreamTXRetryState {
 	l.mu.Lock()
 	states := make([]StreamTXRetryState, 0, len(l.outstanding))
 	for _, record := range l.outstanding {
-		states = append(states, StreamTXRetryState{Record: record, InTransit: record.inTransit, RescueInTransit: record.rescueInTransit, LastSentLeg: record.lastSentLeg})
+		states = append(states, StreamTXRetryState{Record: record, LocalEnqueue: record.localEnqueue, InTransit: record.inTransit, RescueInTransit: record.rescueInTransit, LastSentLeg: record.lastSentLeg})
 	}
 	l.mu.Unlock()
 	return states
@@ -451,6 +648,9 @@ func (l *StreamTXLedger) frontierSnapshot() StreamTXFrontierSnapshot {
 		return StreamTXFrontierSnapshot{Owner: -1}
 	}
 	owner := record.lastSentLeg
+	if owner < 0 {
+		owner = record.ordinaryOwner
+	}
 	if record.inTransit {
 		owner = int16(record.transitLeg)
 	}
@@ -479,6 +679,9 @@ func (l *StreamTXLedger) Snapshot(now time.Time) StreamTXSnapshot {
 			snapshot.OldestOutstandingAge = age
 		}
 		var owners [2]bool
+		if record.ordinaryOwner >= 0 && record.ordinaryOwner < 2 {
+			owners[record.ordinaryOwner] = true
+		}
 		if record.lastSentLeg >= 0 && record.lastSentLeg < 2 {
 			owners[record.lastSentLeg] = true
 		}
@@ -544,4 +747,120 @@ func (l *StreamTXLedger) Snapshot(now time.Time) StreamTXSnapshot {
 		}
 	}
 	return snapshot
+}
+
+// Local enqueue ownership prevents the maintenance retry planner from stealing
+// an unsent record between a failed queue attempt and the application's retry.
+func (l *StreamTXLedger) addLocal(payload []byte, now time.Time) *StreamTXRecord {
+	return l.add(payload, now, true)
+}
+func (l *StreamTXLedger) finishLocalEnqueue(r *StreamTXRecord) {
+	l.mu.Lock()
+	r.localEnqueue = false
+	l.mu.Unlock()
+}
+
+func (l *StreamTXLedger) markWriteStarted(r *StreamTXRecord, leg uint8, rescue bool, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.outstanding[r.sequence] != r {
+		return
+	}
+	if !rescue && r.inTransit && uint8(r.transitLeg) == leg && r.firstWriteAt.IsZero() {
+		r.firstWriteAt = now
+		l.evidenceLocked("first_write", r, now)
+	}
+}
+
+// Opt-in fixed ring, disabled during ordinary operation. No payloads are kept.
+type StreamTXEvidence struct {
+	Event                              string
+	Sequence                           uint64
+	Bytes                              int
+	Owner                              int16
+	At, Assigned, FirstWrite, Frontier time.Time
+	Attempts                           uint32
+	Duplicated, Invalidated            bool
+	Generation                         uint64
+	Epoch                              int64
+}
+
+func (l *StreamTXLedger) EnableEvidenceTraceForTest() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.evidence = make([]StreamTXEvidence, 128)
+	l.evidenceNext = 0
+}
+func (l *StreamTXLedger) evidenceLocked(event string, r *StreamTXRecord, now time.Time) {
+	if len(l.evidence) == 0 {
+		return
+	}
+	l.evidence[l.evidenceNext%len(l.evidence)] = StreamTXEvidence{event, r.sequence, len(r.payload), r.ordinaryOwner, now, r.assignedAt, r.firstWriteAt, r.frontierAt, r.sendCount, r.duplicated, r.invalidated, r.originGeneration, r.originEpoch}
+	l.evidenceNext++
+}
+func (l *StreamTXLedger) EvidenceTraceForTest() []StreamTXEvidence {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := l.evidenceNext
+	if n > len(l.evidence) {
+		n = len(l.evidence)
+	}
+	out := make([]StreamTXEvidence, 0, n)
+	start := l.evidenceNext - n
+	for i := 0; i < n; i++ {
+		out = append(out, l.evidence[(start+i)%len(l.evidence)])
+	}
+	return out
+}
+func (l *StreamTXLedger) setOrigin(r *StreamTXRecord, generation uint64, epoch time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.outstanding[r.sequence] != r {
+		return
+	}
+	r.originGeneration = generation
+	r.originEpoch = epoch.UnixNano()
+	l.evidenceLocked("admission_origin", r, epoch)
+}
+
+func (l *StreamTXLedger) probeReference(r *StreamTXRecord, recovering bool) time.Time {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if r == nil || l.outstanding[r.sequence] != r {
+		return time.Time{}
+	}
+	ref := r.frontierAt
+	if !recovering {
+		ref = r.createdAt
+	}
+	if ref.IsZero() {
+		ref = r.createdAt
+	}
+	if r.firstWriteAt.After(ref) {
+		ref = r.firstWriteAt
+	}
+	return ref
+}
+
+// A finite transmitted tail is unfinished demand too. Unsent idle records and
+// a small ordinary delay do not count as a no-delivery activation stall.
+func (l *StreamTXLedger) sentTailStalled(now time.Time, required time.Duration, minBytes uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var bytes uint64
+	repeated := false
+	old := time.Time{}
+	for _, r := range l.outstanding {
+		if r.firstWriteAt.IsZero() {
+			continue
+		}
+		bytes += uint64(len(r.payload))
+		if r.sendCount >= 2 {
+			repeated = true
+		}
+		if old.IsZero() || r.firstWriteAt.Before(old) {
+			old = r.firstWriteAt
+		}
+	}
+	return (bytes >= minBytes || repeated) && !old.IsZero() && now.Sub(old) >= required && (l.lastACKProgress.IsZero() || now.Sub(l.lastACKProgress) >= required)
 }

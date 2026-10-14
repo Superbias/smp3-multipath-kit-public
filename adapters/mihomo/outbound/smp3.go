@@ -156,6 +156,11 @@ func (s *SMP3) capacityProvider() smp3core.StreamCapacityProvider {
 		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[0].Proxy,
 		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[1].Proxy,
 	}
+	// This slot may dial a different physical child after fallback. Without a
+	// per-attempt identity remap, keep its estimate private to this session.
+	if s.option.Leg1Fallback != "" {
+		keys[1] = ""
+	}
 	return s.capacity.Provider(keys, s.streamConfig.BandwidthMbps, s.streamConfig.ChunkSize)
 }
 

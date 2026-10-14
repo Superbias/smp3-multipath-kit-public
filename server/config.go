@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var Version = "2.4.0"
+var Version = "2.6.2"
 
 type Duration time.Duration
 

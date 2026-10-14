@@ -86,6 +86,42 @@ func TestSMP3AggregationSchedulerMapsToCore(t *testing.T) {
 	}
 }
 
+func TestSMP3DynamicCapacityEnablesCoreAdmissionProtection(t *testing.T) {
+	for _, mode := range []string{"fixed", "dynamic"} {
+		cfg, err := makeStreamConfig(SMP3Option{SchedulerMode: "aggregation", CapacityMode: mode, BandwidthMbps: []uint32{100, 100}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, _ := smp3core.NewStreamEngine(cfg)
+		stats := engine.Snapshot()
+		engine.Close()
+		if mode == "dynamic" && stats.OrdinaryAdmissionState != [2]string{"normal", "normal"} {
+			t.Fatalf("Native dynamic did not enable canonical Core protection: %v", stats.OrdinaryAdmissionState)
+		}
+		if mode == "fixed" && stats.OrdinaryAdmissionState != [2]string{} {
+			t.Fatal("fixed mode changed admission semantics")
+		}
+	}
+}
+
+func TestSMP3FallbackCapacityRemainsSessionPrivate(t *testing.T) {
+	adapter, err := NewSMP3(SMP3Option{Name: "mp", Server: "127.0.0.1", Port: 24444, Password: "local", Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, Leg1Fallback: "fallback", SchedulerMode: "aggregation", CapacityMode: "dynamic", BandwidthMbps: []uint32{100, 200}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1, p2 := adapter.capacityProvider(), adapter.capacityProvider()
+	defer p1.(interface{ Close() }).Close()
+	defer p2.(interface{ Close() }).Close()
+	now := time.Unix(100, 0)
+	p1.Admit(1, 256<<10, true, now)
+	p1.Ack(1, 256<<10, now.Add(2*time.Second))
+	_, e1, _, v1, _, _ := p1.Telemetry()
+	_, e2, _, v2, _, _ := p2.Telemetry()
+	if !v1[1] || v2[1] || e1[1] == e2[1] {
+		t.Fatal("fallback-capable slot shared physical capacity across sessions")
+	}
+}
+
 func TestSMP3DynamicActivationMapsToCore(t *testing.T) {
 	adapter, err := NewSMP3(SMP3Option{
 		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",

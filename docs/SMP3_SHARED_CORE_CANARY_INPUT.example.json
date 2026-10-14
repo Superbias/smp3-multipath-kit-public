@@ -1,0 +1,44 @@
+{
+  "release_gate": "FAIL",
+  "client_active_config_verified": false,
+  "leg0_business_health_verified": false,
+  "independent_leg0_entry_verified": false,
+  "client_transport_observability_verified": false,
+  "production_goodput_floor_fraction": null,
+  "production_goodput_floor_source": null,
+  "measured_rtt_ms": [
+    null,
+    null
+  ],
+  "parameters": {
+    "source": "Sanitized client settings supplied by the user for planning; not a refreshed production snapshot",
+    "client_version_or_commit": null,
+    "server_version_or_commit": null,
+    "clash_party_node": "smp3-cogent",
+    "client_leg0": "公正法治JP-Cogent-Snell",
+    "client_leg1": "公正法治JP-Cogent-HY2",
+    "client_leg1_fallback": "公正法治JP-Cogent-reality",
+    "scheduler_mode": "aggregation",
+    "capacity_mode": "dynamic",
+    "activation_threshold_mbps": 80,
+    "activation_window_seconds": 10,
+    "chunk_size_bytes": 65536,
+    "queue_frames": 256,
+    "inflight_frames": 1024,
+    "reorder_frames": 4096,
+    "bandwidth_prior_mbps": [
+      128,
+      500
+    ],
+    "ack_interval_ms": 20,
+    "retransmit_timeout_ms": 1500,
+    "recovery_timeout_seconds": 15,
+    "startup_policy": "preferred",
+    "startup_preferred_leg": 0,
+    "startup_grace_ms": 500,
+    "leg0_single_goodput_baseline_mbps": null,
+    "preexisting_production_goodput_floor_source": null,
+    "server_effective_config_refreshed": false,
+    "secrets_included": false
+  }
+}

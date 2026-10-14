@@ -26,6 +26,7 @@ type streamCapacityLeg struct {
 	demand                  bool
 	valid                   bool
 	samples                 uint64
+	sampleReason            string
 }
 
 type streamCapacityEstimator struct {
@@ -58,10 +59,36 @@ func (e *streamCapacityEstimator) reset(id uint8, now time.Time) {
 	}
 	e.mu.Lock()
 	leg := &e.legs[id]
-	leg.raw, leg.estimate, leg.confidence = 0, leg.baseline, 0
-	leg.windowStart, leg.lastValid = now, time.Time{}
+	// A reconnect is not service evidence. Preserve learned low capacity.
+	if leg.samples == 0 {
+		leg.raw, leg.estimate, leg.confidence = 0, leg.baseline, 0
+	}
+	leg.windowStart = now
 	leg.windowBytes, leg.windowAdmittedBytes, leg.windowSaturatedBytes = 0, 0, 0
-	leg.demand, leg.valid, leg.samples = false, false, 0
+	leg.demand = false
+	leg.sampleReason = "reconnect_preserved"
+	e.mu.Unlock()
+}
+
+// Recover is optional provider functionality, called only after bounded,
+// unique-copy ACK probation; handshake/write success never invokes it.
+func (e *streamCapacityEstimator) Recover(id uint8, seedMbps float64, now time.Time) {
+	if e == nil || id >= 2 {
+		return
+	}
+	e.mu.Lock()
+	leg := &e.legs[id]
+	seed := seedMbps * 1e6 / 8
+	if seed < leg.baseline {
+		seed = leg.baseline
+	}
+	// This is an optimistic scheduling seed after unique-copy probation, not
+	// a measurement of physical capacity. Ordinary budgets remain authoritative.
+	leg.estimate, leg.confidence = seed, 1
+	leg.windowStart = now
+	leg.sampleReason = "unique_probe_seed"
+	leg.windowBytes, leg.windowAdmittedBytes, leg.windowSaturatedBytes = 0, 0, 0
+	leg.demand = false
 	e.mu.Unlock()
 }
 
@@ -71,7 +98,7 @@ func (e *streamCapacityEstimator) admit(id uint8, bytes uint64, saturated bool, 
 	}
 	e.mu.Lock()
 	leg := &e.legs[id]
-	if leg.windowStart.IsZero() {
+	if leg.windowStart.IsZero() || (!leg.demand && leg.windowBytes == 0 && leg.windowAdmittedBytes == 0 && now.Sub(leg.windowStart) > 4*e.window) {
 		leg.windowStart = now
 	}
 	leg.windowAdmittedBytes += bytes
@@ -100,9 +127,17 @@ func (e *streamCapacityEstimator) ack(id uint8, bytes uint64, now time.Time) {
 	// capacity-limited. Require meaningful saturated service opportunity in the
 	// same window; this prevents scheduler under-service from teaching the
 	// estimator an artificially low capacity.
-	saturatedEnough := leg.windowSaturatedBytes >= e.minBytes &&
+	// Keep sub-threshold windows instead of discarding every slow-path ACK.
+	// Four seconds bounds accumulation; at very low rates a single full frame
+	// is useful evidence once its serialization interval has elapsed.
+	bounded := now.Sub(leg.windowStart) >= 4*e.window
+	if !bounded && (leg.windowBytes < e.minBytes || leg.windowSaturatedBytes < e.minBytes) && leg.demand {
+		leg.sampleReason = "accumulating_low_rate"
+		return
+	}
+	saturatedEnough := (leg.windowSaturatedBytes >= e.minBytes || (bounded && leg.windowSaturatedBytes > 0)) &&
 		(leg.windowAdmittedBytes == 0 || leg.windowSaturatedBytes*5 >= leg.windowAdmittedBytes*4)
-	if leg.demand && saturatedEnough && leg.windowBytes >= e.minBytes {
+	if leg.demand && saturatedEnough && (leg.windowBytes >= e.minBytes || (bounded && leg.windowBytes > 0)) {
 		raw := float64(leg.windowBytes) / now.Sub(leg.windowStart).Seconds()
 		if raw > 0 && math.IsInf(raw, 0) == false && math.IsNaN(raw) == false {
 			leg.raw = raw
@@ -117,8 +152,14 @@ func (e *streamCapacityEstimator) ack(id uint8, bytes uint64, now time.Time) {
 			}
 			leg.lastValid, leg.valid = now, true
 			leg.samples++
+			leg.sampleReason = "saturated_service"
+			// Repeated measured low service must outrank a cold high prior.
+			if leg.samples >= 2 && raw < leg.baseline*0.25 {
+				leg.confidence = 1
+			}
 		}
-	} else if leg.valid && !leg.demand && leg.windowBytes >= e.minBytes {
+	} else if leg.valid && !saturatedEnough && leg.windowBytes >= e.minBytes {
+		leg.sampleReason = "under_demand_probe"
 		// Under-demand alone is not evidence for a higher capacity. Reopen a
 		// previously reduced estimate with a slow passive probe when the observed
 		// ACK rate is not materially below it. A recovered path can be scheduled
@@ -143,8 +184,23 @@ func (e *streamCapacityEstimator) ack(id uint8, bytes uint64, now time.Time) {
 			}
 		}
 	}
+	if !saturatedEnough && !leg.valid {
+		leg.sampleReason = "insufficient_saturation"
+	}
 	// Demand-limited and idle windows deliberately freeze the previous estimate.
 	leg.windowStart, leg.windowBytes, leg.windowAdmittedBytes, leg.windowSaturatedBytes, leg.demand = now, 0, 0, 0, false
+}
+
+func (e *streamCapacityEstimator) SampleReason() (reason [2]string) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for id, leg := range e.legs {
+		reason[id] = leg.sampleReason
+	}
+	return
 }
 
 func (e *streamCapacityEstimator) weight(id uint8, base float64) float64 {
@@ -158,13 +214,8 @@ func (e *streamCapacityEstimator) weight(id uint8, base float64) float64 {
 	if w <= 0 || math.IsNaN(w) || math.IsInf(w, 0) {
 		return base
 	}
-	// Keep the estimator from making an abrupt scheduler jump on one sample.
-	baseBPS := base * 1e6 / 8
-	if baseBPS > 0 {
-		if w > baseBPS*4 {
-			w = baseBPS * 4
-		}
-	}
+	// A configured low prior must not cap a proved recovery forever. Abrupt
+	// optimistic estimates are contained by independent ordinary admission.
 	if w < 0.1*1e6/8 {
 		w = 0.1 * 1e6 / 8
 	}

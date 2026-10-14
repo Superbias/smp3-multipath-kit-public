@@ -108,10 +108,13 @@ func weightsForLeg(weights []uint32, id int) []uint32 {
 }
 
 type carrierCapacityProvider struct {
-	states   [2]*streamCapacityEstimator
-	registry *CarrierCapacityRegistry
-	keys     [2]string
-	once     sync.Once
+	mu         sync.Mutex // lifecycle and this provider's unfinished logical demand
+	closed     bool
+	unfinished uint64
+	states     [2]*streamCapacityEstimator
+	registry   *CarrierCapacityRegistry
+	keys       [2]string
+	once       sync.Once
 }
 
 func (p *carrierCapacityProvider) demandEntry() *carrierCapacityEntry {
@@ -133,6 +136,11 @@ func (p *carrierCapacityProvider) ActivationCapacity() (bytesPerSecond, confiden
 }
 
 func (p *carrierCapacityProvider) ObserveActivationDemand(produced, retired uint64, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
 	entry := p.demandEntry()
 	if entry == nil || (produced == 0 && retired == 0) {
 		return
@@ -153,6 +161,10 @@ func (p *carrierCapacityProvider) ObserveActivationDemand(produced, retired uint
 	}
 	entry.demandAt = now
 	entry.demandBytes += produced
+	if retired > p.unfinished {
+		retired = p.unfinished
+	}
+	p.unfinished = p.unfinished - retired + produced
 	if retired >= entry.backlog {
 		entry.backlog = 0
 	} else {
@@ -190,18 +202,39 @@ func (p *carrierCapacityProvider) ActivationDemand(now time.Time) (bytesPerSecon
 }
 
 func (p *carrierCapacityProvider) Reset(id uint8, now time.Time) {
-	if id < 2 && p.states[id] != nil && p.states[id].windowStartEmpty() {
-		p.states[id].reset(0, now)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	if id < 2 && p.states[id] != nil {
+		state := p.states[id]
+		state.mu.Lock()
+		if state.legs[0].windowStart.IsZero() {
+			state.legs[0].windowStart = now
+			state.legs[0].sampleReason = "cold_start"
+		}
+		state.mu.Unlock()
 	}
 }
 
 func (p *carrierCapacityProvider) Admit(id uint8, bytes uint64, saturated bool, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
 	if id < 2 && p.states[id] != nil {
 		p.states[id].admit(0, bytes, saturated, now)
 	}
 }
 
 func (p *carrierCapacityProvider) Ack(id uint8, bytes uint64, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
 	if id < 2 && p.states[id] != nil {
 		p.states[id].ack(0, bytes, now)
 	}
@@ -212,6 +245,26 @@ func (p *carrierCapacityProvider) Weight(id uint8, base float64) float64 {
 		return base
 	}
 	return p.states[id].weight(0, base)
+}
+
+func (p *carrierCapacityProvider) Recover(id uint8, seedMbps float64, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	if id < 2 && p.states[id] != nil {
+		p.states[id].Recover(0, seedMbps, now)
+	}
+}
+
+func (p *carrierCapacityProvider) SampleReason() (reason [2]string) {
+	for id, state := range p.states {
+		if state != nil {
+			reason[id] = state.SampleReason()[0]
+		}
+	}
+	return
 }
 
 func (p *carrierCapacityProvider) Telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time) {
@@ -230,11 +283,22 @@ func (p *carrierCapacityProvider) Telemetry() (raw, estimate, confidence [2]floa
 // a registry to discard all learned state.
 func (p *carrierCapacityProvider) Close() {
 	p.once.Do(func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.closed = true
 		if p.registry == nil {
 			return
 		}
 		p.registry.mu.Lock()
 		defer p.registry.mu.Unlock()
+		if entry := p.registry.entries[p.keys[0]]; entry != nil {
+			if p.unfinished >= entry.backlog {
+				entry.backlog = 0
+			} else {
+				entry.backlog -= p.unfinished
+			}
+		}
+		p.unfinished = 0
 		for _, key := range p.keys {
 			if key == "" {
 				continue

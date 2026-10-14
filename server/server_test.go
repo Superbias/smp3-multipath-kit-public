@@ -719,7 +719,17 @@ func TestDatagramBoundaryAndBothLegRejoin(t *testing.T) {
 			datagramRoundTrip(t, client, target, []byte("valid-after-oversize"))
 		}
 		_ = legs[failedLeg].Close()
-		waitFor(t, 2*time.Second, func() bool { return !client.Snapshot().LegUp[failedLeg] && instance.SessionCount() == 1 })
+		waitFor(t, 2*time.Second, func() bool {
+			if client.Snapshot().LegUp[failedLeg] {
+				return false
+			}
+			instance.access.Lock()
+			session := instance.sessions[id]
+			instance.access.Unlock()
+			// A closed local socket does not prove the peer has retired its
+			// old generation. Rejoin begins after both actual Core legs retire.
+			return session != nil && session.dgram != nil && !session.dgram.Snapshot().LegUp[failedLeg]
+		})
 		replacement := connectLeg(t, instance, password, id, failedLeg, smp3core.ModeDatagram, target, byte(70+failedLeg))
 		if err := client.AttachLeg(smp3core.LegID(failedLeg), replacement, nil); err != nil {
 			t.Fatal(err)

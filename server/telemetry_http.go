@@ -509,6 +509,7 @@ func sessionCompactJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[
 func sessionDetailJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[string]any {
 	result := sessionCompactJSON(row, snapshotAt)
 	result["startup"] = startupJSON(row.Startup)
+	result["stream_transport"] = row.Transport
 	return result
 }
 
