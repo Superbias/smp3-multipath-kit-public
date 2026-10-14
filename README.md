@@ -37,7 +37,7 @@ legs through the Carrier SOCKS5 endpoints.
 - Native artifact: Mihomo `v2.6.2` built from pinned upstream `v1.19.28` with the SMP3 adapter
 - Standalone artifacts: `smp3-client` and `smp3-server`
 - Android Standalone: `smp3-android-standalone-2.6.2-debug.apk` for `arm64-v8a`
-- Compatibility artifact: not included in v2.6.2 because the pinned sing-box source could not be fetched; older binaries are not reused
+- Compatibility artifact: pinned `smp3-proxy` for Linux/amd64 and Windows/amd64
 - Observability: integrated into `smp3-server`; standalone `smp3-panel` is retired
 - [Download v2.6.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.6.2)
 - Verify every download with `SHA256SUMS` before running it.
