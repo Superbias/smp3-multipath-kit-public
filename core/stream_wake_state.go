@@ -17,6 +17,15 @@ type streamWakeState struct {
 	Depth, Capacity [2]int
 	Eligible        [2]bool
 	Writer          [2]int32
+	Legs            []streamWakeLegState
+}
+
+type streamWakeLegState struct {
+	LegID    uint8
+	Depth    int
+	Capacity int
+	Eligible bool
+	Writer   int32
 }
 
 type streamWakeWait struct {
@@ -28,15 +37,26 @@ type streamWakeWait struct {
 
 type streamWakeTelemetry struct {
 	mu               sync.Mutex
-	legs             [2]*streamLeg
+	legs             []*streamLeg
 	waits            []*streamWakeWait
 	active           *streamWakeWait
 	pending          []*streamWakeWait
 	signals          map[string][2]int
 	dispatchTimes    []time.Time
-	counts, bytes    [2]uint64
+	counts, bytes    []uint64
 	minSize, maxSize int
 	dropped          int
+}
+
+func (t *streamWakeTelemetry) setLeg(id uint8, leg *streamLeg) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if int(id) >= len(t.legs) {
+		legs := make([]*streamLeg, int(id)+1)
+		copy(legs, t.legs)
+		t.legs = legs
+	}
+	t.legs[id] = leg
 }
 
 func (t *streamWakeTelemetry) snapshot() (waits []*streamWakeWait, signals map[string][2]int, dropped int) {
@@ -51,13 +71,19 @@ func (t *streamWakeTelemetry) snapshot() (waits []*streamWakeWait, signals map[s
 }
 
 func (t *streamWakeTelemetry) state() (s streamWakeState) {
+	s.Legs = make([]streamWakeLegState, len(t.legs))
 	for id, leg := range t.legs {
+		s.Legs[id].LegID = uint8(id)
 		if leg == nil {
 			continue
 		}
-		s.Depth[id], s.Capacity[id] = len(leg.send), cap(leg.send)
-		s.Eligible[id] = !leg.closed.Load()
-		s.Writer[id] = leg.debugWriterState.Load()
+		depth, capacity, eligible, writer := len(leg.send), cap(leg.send), !leg.closed.Load(), leg.debugWriterState.Load()
+		s.Legs[id].Depth, s.Legs[id].Capacity = depth, capacity
+		s.Legs[id].Eligible, s.Legs[id].Writer = eligible, writer
+		if id < len(s.Depth) {
+			s.Depth[id], s.Capacity[id] = depth, capacity
+			s.Eligible[id], s.Writer[id] = eligible, writer
+		}
 	}
 	return
 }
@@ -71,8 +97,8 @@ func (t *streamWakeTelemetry) begin(c *StreamEngine, selected *streamLeg) {
 	}
 	w := &streamWakeWait{W0: time.Now(), FirstLeg: -1, SelectedLeg: int(selected.id)}
 	w.State[0] = t.state()
-	for id := range t.legs {
-		if w.State[0].Eligible[id] && w.State[0].Depth[id] < w.State[0].Capacity[id] {
+	for id, leg := range w.State[0].Legs {
+		if leg.Eligible && leg.Depth < leg.Capacity {
 			if w.FirstLeg == -1 {
 				w.FirstLeg = id
 			} else {
@@ -137,6 +163,12 @@ func (t *streamWakeTelemetry) dispatched(r *StreamTXRecord, leg *streamLeg) {
 	if len(t.pending) > 0 {
 		t.pending[0].W4 = now
 		t.pending = t.pending[1:]
+	}
+	if int(leg.id) >= len(t.counts) {
+		counts, bytes := make([]uint64, int(leg.id)+1), make([]uint64, int(leg.id)+1)
+		copy(counts, t.counts)
+		copy(bytes, t.bytes)
+		t.counts, t.bytes = counts, bytes
 	}
 	t.counts[leg.id]++
 	t.bytes[leg.id] += uint64(len(r.Payload()))

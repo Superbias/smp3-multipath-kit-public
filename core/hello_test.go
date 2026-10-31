@@ -58,7 +58,6 @@ func TestHelloRejectsInvalidInputs(t *testing.T) {
 	}{
 		{name: "version", value: Hello{Version: 6, Mode: ModeStream, Destination: "x"}},
 		{name: "mode", value: Hello{Version: Version4, Mode: ModeDatagram, Destination: "x"}},
-		{name: "leg", value: Hello{Version: Version4, Mode: ModeStream, LegID: 2, Destination: "x"}},
 		{name: "destination", value: Hello{Version: Version4, Mode: ModeStream}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -69,6 +68,23 @@ func TestHelloRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, _, _, err := EncodeHelloParts(valid, nil); err == nil {
 		t.Fatal("empty password was accepted")
+	}
+}
+
+func TestHelloRoundTripMaximumLegID(t *testing.T) {
+	hello := testHello(Version4, ModeStream)
+	hello.LegID = LegID(MaxStreamLegIDCount - 1)
+	header, destination, mac, err := EncodeHelloParts(hello, []byte("password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := append(append(append([]byte(nil), header...), destination...), mac...)
+	decoded, err := ReadHelloAt(bytes.NewReader(wire), []byte("password"), time.Unix(hello.Timestamp, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.LegID != hello.LegID {
+		t.Fatalf("decoded leg ID=%d, want %d", decoded.LegID, hello.LegID)
 	}
 }
 

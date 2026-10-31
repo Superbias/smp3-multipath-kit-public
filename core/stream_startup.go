@@ -40,8 +40,8 @@ type streamStartupGate struct {
 	preferred                   uint8
 	grace                       time.Duration
 	state                       streamStartupState
-	terminal                    [2]bool
-	attached                    [2]bool
+	terminal                    []bool
+	attached                    []bool
 	preferredBeforeNonPreferred bool
 	released                    atomic.Bool
 	wake                        chan struct{}
@@ -56,7 +56,7 @@ func newStreamStartupGate(cfg StreamConfig) *streamStartupGate {
 		return nil
 	}
 	preferred := uint8(cfg.StartupPreferredLeg)
-	if preferred > 1 {
+	if int(preferred) >= cfg.MaxActiveLegs {
 		preferred = 0
 	}
 	grace := cfg.StartupGrace
@@ -75,6 +75,8 @@ func newStreamStartupGate(cfg StreamConfig) *streamStartupGate {
 	return &streamStartupGate{
 		preferred:    preferred,
 		grace:        grace,
+		terminal:     make([]bool, cfg.MaxActiveLegs),
+		attached:     make([]bool, cfg.MaxActiveLegs),
 		state:        streamStartupNoData,
 		wake:         make(chan struct{}, 1),
 		timerFactory: factory,
@@ -87,8 +89,8 @@ func (s *streamStartupGate) notify(ids ...uint8) {
 		return
 	}
 	s.mu.Lock()
-	if len(ids) > 0 && ids[0] < 2 && !s.attached[ids[0]] {
-		if ids[0] == s.preferred && !s.attached[s.preferred^1] {
+	if len(ids) > 0 && int(ids[0]) < len(s.attached) && !s.attached[ids[0]] {
+		if ids[0] == s.preferred && !s.hasOtherAttachedLocked() {
 			s.preferredBeforeNonPreferred = true
 		}
 		s.attached[ids[0]] = true
@@ -101,7 +103,7 @@ func (s *streamStartupGate) notify(ids ...uint8) {
 }
 
 func (s *streamStartupGate) markTerminalUnavailable(id LegID) bool {
-	if s == nil || uint8(id) > 1 || s.released.Load() {
+	if s == nil || int(id) >= len(s.terminal) || s.released.Load() {
 		return false
 	}
 	s.mu.Lock()
@@ -158,6 +160,24 @@ func (s *streamStartupGate) terminalPreferred() bool {
 	return terminal
 }
 
+func (s *streamStartupGate) hasOtherAttachedLocked() bool {
+	for id, attached := range s.attached {
+		if uint8(id) != s.preferred && attached {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *streamStartupGate) hasOtherReady(engine *StreamEngine) bool {
+	for id := range s.attached {
+		if uint8(id) != s.preferred && engine.hasLeg(uint8(id)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *streamStartupGate) setWaitingState(state streamStartupState) {
 	graceStarted := false
 	s.mu.Lock()
@@ -179,7 +199,6 @@ func (s *streamStartupGate) await(engine *StreamEngine) (int16, bool) {
 		return -1, true
 	}
 	preferred := s.preferred
-	nonPreferred := preferred ^ 1
 	var timer streamStartupTimer
 	var timerC <-chan time.Time
 	graceExpired := false
@@ -194,7 +213,7 @@ func (s *streamStartupGate) await(engine *StreamEngine) (int16, bool) {
 			return -1, true
 		}
 		preferredReady := engine.hasLeg(preferred)
-		nonPreferredReady := engine.hasLeg(nonPreferred)
+		nonPreferredReady := s.hasOtherReady(engine)
 		if preferredReady {
 			s.release(s.preferredReleaseReason())
 			return int16(preferred), true

@@ -12,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
 
-var Version = "2.6.2"
+var Version = "2.7.0-selfuse.4"
 
 type Duration time.Duration
 
@@ -40,14 +42,29 @@ func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Durat
 func (d Duration) Time() time.Duration          { return time.Duration(d) }
 
 type Config struct {
-	Listen           string           `json:"listen"`
-	SidecarListeners []string         `json:"sidecar_listeners,omitempty"`
-	Password         string           `json:"password"`
-	HelloReadTimeout Duration         `json:"hello_read_timeout"`
-	RecoveryTimeout  Duration         `json:"recovery_timeout"`
-	Stream           StreamOptions    `json:"stream"`
-	UDP              UDPOptions       `json:"udp"`
-	Telemetry        TelemetryOptions `json:"telemetry"`
+	Listen                  string            `json:"listen"`
+	SidecarListeners        []string          `json:"sidecar_listeners,omitempty"`
+	CarrierTLS              CarrierTLSOptions `json:"carrier_tls,omitempty"`
+	Password                string            `json:"password"`
+	ApplicationTarget       string            `json:"application_target,omitempty"`
+	MaxSessions             int               `json:"max_sessions,omitempty"`
+	MaxConnections          int               `json:"max_connections,omitempty"`
+	IdleTimeout             Duration          `json:"idle_timeout,omitempty"`
+	GracefulShutdownTimeout Duration          `json:"graceful_shutdown_timeout,omitempty"`
+	LogLevel                string            `json:"log_level,omitempty"`
+	HelloReadTimeout        Duration          `json:"hello_read_timeout"`
+	RecoveryTimeout         Duration          `json:"recovery_timeout"`
+	Stream                  StreamOptions     `json:"stream"`
+	UDP                     UDPOptions        `json:"udp"`
+	Telemetry               TelemetryOptions  `json:"telemetry"`
+	drainEventObserver      func(smp3core.StreamDrainEvent)
+}
+
+// CarrierTLSOptions enables an end-to-end TLS listener for SMP3 TCP carriers.
+// Both paths must be configured; leaving both empty preserves legacy TCP.
+type CarrierTLSOptions struct {
+	CertFile string `json:"cert_file,omitempty"`
+	KeyFile  string `json:"key_file,omitempty"`
 }
 
 type StreamOptions struct {
@@ -55,11 +72,13 @@ type StreamOptions struct {
 	CapacityMode            string   `json:"capacity_mode,omitempty"`
 	ActivationMode          string   `json:"activation_mode,omitempty"`
 	HOLMode                 string   `json:"hol_mode,omitempty"`
+	ExperimentalPathAware   bool     `json:"experimental_path_aware,omitempty"`
 	ActivationThresholdMbps uint32   `json:"activation_threshold_mbps"`
 	ActivationWindow        Duration `json:"activation_window"`
 	ChunkSize               int      `json:"chunk_size"`
 	QueueFrames             int      `json:"queue_frames"`
 	BandwidthMbps           []uint32 `json:"bandwidth_mbps"`
+	MaxActiveLegs           int      `json:"max_active_legs,omitempty"`
 	MaxReorderFrames        int      `json:"max_reorder_frames"`
 	MaxInflightFrames       int      `json:"max_inflight_frames"`
 	AckInterval             Duration `json:"ack_interval"`
@@ -79,9 +98,13 @@ type UDPOptions struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Listen:           "0.0.0.0:24444",
-		HelloReadTimeout: Duration(10 * time.Second),
-		RecoveryTimeout:  Duration(15 * time.Second),
+		Listen:                  "127.0.0.1:24444",
+		MaxSessions:             256,
+		MaxConnections:          1024,
+		GracefulShutdownTimeout: Duration(30 * time.Second),
+		LogLevel:                "info",
+		HelloReadTimeout:        Duration(10 * time.Second),
+		RecoveryTimeout:         Duration(15 * time.Second),
 		Stream: StreamOptions{
 			SchedulerMode:           "adaptive",
 			CapacityMode:            "fixed",
@@ -90,6 +113,7 @@ func DefaultConfig() Config {
 			ChunkSize:               64 * 1024,
 			QueueFrames:             256,
 			BandwidthMbps:           []uint32{128, 500},
+			MaxActiveLegs:           smp3core.DefaultMaxActiveStreamLegs,
 			MaxReorderFrames:        4096,
 			MaxInflightFrames:       1024,
 			AckInterval:             Duration(20 * time.Millisecond),
@@ -138,6 +162,14 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func (c *Config) NormalizeAndValidate() error {
+	if (c.CarrierTLS.CertFile == "") != (c.CarrierTLS.KeyFile == "") {
+		return errors.New("carrier_tls.cert_file and carrier_tls.key_file must be configured together")
+	}
+	if c.CarrierTLS.CertFile != "" {
+		if strings.TrimSpace(c.CarrierTLS.CertFile) == "" || strings.TrimSpace(c.CarrierTLS.KeyFile) == "" {
+			return errors.New("carrier_tls certificate and key paths must not be whitespace")
+		}
+	}
 	type listenerConfig struct {
 		address string
 		field   string
@@ -147,6 +179,7 @@ func (c *Config) NormalizeAndValidate() error {
 		addresses = append(addresses, listenerConfig{address: address, field: fmt.Sprintf("sidecar_listeners[%d]", index)})
 	}
 	seen := make(map[string]string, len(addresses))
+	publicListener := false
 	for index, configured := range addresses {
 		canonical, err := normalizeListenAddress(configured.address)
 		if err != nil {
@@ -157,6 +190,10 @@ func (c *Config) NormalizeAndValidate() error {
 				return fmt.Errorf("invalid listen %q: %w", configured.address, err)
 			}
 			return fmt.Errorf("invalid %s %q: %w", configured.field, configured.address, err)
+		}
+		host, _, _ := net.SplitHostPort(configured.address)
+		if !isLoopbackHost(host) {
+			publicListener = true
 		}
 		// Port zero asks the kernel for a fresh endpoint, so repeated :0
 		// entries are independent listeners rather than duplicate endpoints.
@@ -169,6 +206,53 @@ func (c *Config) NormalizeAndValidate() error {
 	}
 	if c.Password == "" {
 		return errors.New("empty password")
+	}
+	if c.ApplicationTarget != "" {
+		target, err := normalizeDestination(c.ApplicationTarget)
+		if err != nil {
+			return fmt.Errorf("invalid application_target: %w", err)
+		}
+		c.ApplicationTarget = target
+	} else {
+		for _, configured := range addresses {
+			host, _, _ := net.SplitHostPort(configured.address)
+			if !isLoopbackHost(host) {
+				return errors.New("application_target is required when an SMP3 listener is not loopback")
+			}
+		}
+	}
+	if publicListener && c.CarrierTLS.CertFile == "" {
+		return errors.New("carrier_tls certificate and key are required when an SMP3 listener is not loopback")
+	}
+	if c.MaxSessions == 0 {
+		c.MaxSessions = 256
+	}
+	if c.MaxSessions < 1 || c.MaxSessions > 1<<20 {
+		return errors.New("invalid max_sessions: must be between 1 and 1048576")
+	}
+	if c.MaxConnections == 0 {
+		c.MaxConnections = 1024
+	}
+	if c.MaxConnections < 1 || c.MaxConnections > 1<<20 {
+		return errors.New("invalid max_connections: must be between 1 and 1048576")
+	}
+	if c.IdleTimeout.Time() < 0 {
+		return errors.New("invalid idle_timeout: must not be negative")
+	}
+	if c.GracefulShutdownTimeout.Time() <= 0 {
+		c.GracefulShutdownTimeout = Duration(30 * time.Second)
+	}
+	if c.GracefulShutdownTimeout.Time() > 10*time.Minute {
+		return errors.New("invalid graceful_shutdown_timeout: must be at most 10m")
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
+	switch strings.ToLower(c.LogLevel) {
+	case "debug", "info", "warn", "error":
+		c.LogLevel = strings.ToLower(c.LogLevel)
+	default:
+		return fmt.Errorf("invalid log_level %q", c.LogLevel)
 	}
 	if c.HelloReadTimeout.Time() <= 0 {
 		c.HelloReadTimeout = Duration(10 * time.Second)
@@ -188,6 +272,14 @@ func (c *Config) NormalizeAndValidate() error {
 		}
 	}
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func normalizeListenAddress(address string) (string, error) {
@@ -210,6 +302,12 @@ func normalizeListenAddress(address string) (string, error) {
 }
 
 func validateStream(c *StreamOptions) error {
+	if c.MaxActiveLegs == 0 {
+		c.MaxActiveLegs = smp3core.DefaultMaxActiveStreamLegs
+	}
+	if c.MaxActiveLegs < 1 || c.MaxActiveLegs > smp3core.MaxStreamLegIDCount {
+		return fmt.Errorf("invalid stream.max_active_legs: must be between 1 and %d", smp3core.MaxStreamLegIDCount)
+	}
 	if c.SchedulerMode == "" {
 		c.SchedulerMode = "adaptive"
 	}
@@ -258,8 +356,8 @@ func validateStream(c *StreamOptions) error {
 	if c.QueueFrames < 8 || c.QueueFrames > 4096 {
 		return errors.New("invalid queue_frames: must be between 8 and 4096")
 	}
-	if len(c.BandwidthMbps) != 0 && len(c.BandwidthMbps) != 2 {
-		return errors.New("invalid bandwidth_mbps: must be empty or contain two entries")
+	if len(c.BandwidthMbps) > c.MaxActiveLegs {
+		return fmt.Errorf("invalid bandwidth_mbps: cannot exceed max_active_legs (%d)", c.MaxActiveLegs)
 	}
 	for _, bandwidth := range c.BandwidthMbps {
 		if bandwidth == 0 {

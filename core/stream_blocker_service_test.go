@@ -25,7 +25,7 @@ func TestClosureReachabilityIsNotRestoredService(t *testing.T) {
 	now = now.Add(time.Second)
 	c.restrictOrdinary(1, now, "test")
 	now = now.Add(6 * time.Second)
-	c.ordinaryAssigned(1, now)
+	startRecoveryProbeForTest(t, c, 1, now, 64<<10)
 	for step := 0; step < 100 && c.admission.legs[1].limit < 16; step++ {
 		now = now.Add(5 * time.Millisecond)
 		r := send(1, 64<<10, now)
@@ -49,9 +49,9 @@ func TestClosureReachabilityIsNotRestoredService(t *testing.T) {
 
 func TestClosureGraduationDoesNotRepayProbationDebt(t *testing.T) {
 	c := slowLegUnitEngine()
-	c.assignedService = [2]uint64{100 << 20, 1 << 20}
+	c.assignedService = []uint64{100 << 20, 1 << 20}
 	c.assignedEpochMask = 3
-	c.assignedEpochWeight = [2]float64{100, 100}
+	c.assignedEpochWeight = []float64{100, 100}
 	now := time.Now()
 	c.admission.legs[1].recovering = true
 	c.admission.legs[1].limit = 128

@@ -51,6 +51,7 @@ func (s *Server) startStreamHost(session *serverSession) error {
 		_ = target.Close()
 		return errors.New("stream session closed before target setup")
 	}
+	s.logger.Info("SMP3 application target connected", "session", sessionLogID(session.id), "target", session.destination)
 
 	var completed atomic.Int32
 	var firstErrMu sync.Mutex

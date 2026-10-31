@@ -17,6 +17,8 @@ import (
 
 type TelemetryConfig struct {
 	Enabled            bool
+	MaxActiveLegs      int
+	DataSequenceEvents bool
 	SnapshotInterval   time.Duration
 	MaxActiveSessions  int
 	MaxEvents          int
@@ -32,6 +34,7 @@ type TelemetryConfig struct {
 // registry and is never loaded from or written to config.
 type TelemetryOptions struct {
 	Enabled            bool     `json:"enabled"`
+	DataSequenceEvents bool     `json:"data_sequence_events,omitempty"`
 	Listen             string   `json:"listen"`
 	SnapshotInterval   Duration `json:"snapshot_interval"`
 	MaxActiveSessions  int      `json:"max_active_sessions"`
@@ -42,9 +45,11 @@ type TelemetryOptions struct {
 	AccountingInterval Duration `json:"accounting_interval"`
 }
 
-func (o TelemetryOptions) registryConfig() TelemetryConfig {
+func (o TelemetryOptions) registryConfig(maxActiveLegs int) TelemetryConfig {
 	return TelemetryConfig{
 		Enabled:            o.Enabled,
+		MaxActiveLegs:      maxActiveLegs,
+		DataSequenceEvents: o.DataSequenceEvents,
 		SnapshotInterval:   o.SnapshotInterval.Time(),
 		MaxActiveSessions:  o.MaxActiveSessions,
 		MaxEvents:          o.MaxEvents,
@@ -57,6 +62,9 @@ func (o TelemetryOptions) registryConfig() TelemetryConfig {
 
 func (o *TelemetryOptions) NormalizeAndValidate() error {
 	if !o.Enabled {
+		if o.DataSequenceEvents {
+			return fmt.Errorf("telemetry.data_sequence_events requires telemetry.enabled")
+		}
 		return nil
 	}
 	if o.AccountingTimezone == "" {
@@ -88,6 +96,7 @@ func (o *TelemetryOptions) NormalizeAndValidate() error {
 type TelemetryLegSnapshot struct {
 	State                string
 	IngressRole          string
+	CarrierID            string
 	Generation           uint64
 	AttachAt             time.Time
 	DetachAt             time.Time
@@ -107,7 +116,7 @@ type TelemetryLegSnapshot struct {
 type TelemetryStartupSnapshot struct {
 	Applied                bool
 	Policy                 smp3core.StreamStartupPolicy
-	PreferredLeg           int8
+	PreferredLeg           int16
 	Grace                  time.Duration
 	FirstDataWaitingAt     time.Time
 	GraceStartedAt         time.Time
@@ -115,7 +124,7 @@ type TelemetryStartupSnapshot struct {
 	NonPreferredAttachedAt time.Time
 	ReleasedAt             time.Time
 	ReleaseReason          smp3core.StreamStartupReleaseReason
-	FirstDataLeg           int8
+	FirstDataLeg           int16
 }
 
 type TelemetrySessionSnapshot struct {
@@ -133,47 +142,115 @@ type TelemetrySessionSnapshot struct {
 	TargetTxBytes     uint64
 	TargetRxBytes     uint64
 	Legs              [2]TelemetryLegSnapshot
+	NLegs             []TelemetryLegSnapshot `json:"n_legs,omitempty"`
+}
+
+type TelemetryStreamLegTransport struct {
+	LegID                     uint8     `json:"leg_id"`
+	Generation                uint64    `json:"generation"`
+	Up                        bool      `json:"up"`
+	WrittenBytes              uint64    `json:"written_bytes"`
+	RetryWrittenBytes         uint64    `json:"retry_written_bytes"`
+	SentBytes                 uint64    `json:"sent_bytes"`
+	UsefulACKBytes            uint64    `json:"useful_ack_bytes"`
+	RetransmitBytes           uint64    `json:"retransmit_bytes"`
+	UniqueRXBytes             uint64    `json:"unique_rx_bytes"`
+	EffectiveWeightMbps       float64   `json:"effective_weight_mbps"`
+	CapacityWeightMbps        float64   `json:"capacity_weight_mbps"`
+	CapacityRawBPS            float64   `json:"capacity_raw_bps"`
+	CapacityEstimateBPS       float64   `json:"capacity_estimate_bps"`
+	CapacityConfidence        float64   `json:"capacity_confidence"`
+	CapacityValid             bool      `json:"capacity_valid"`
+	CapacityDemand            bool      `json:"capacity_demand"`
+	CapacitySampleAt          time.Time `json:"capacity_sample_at"`
+	CapacitySampleAgeNS       int64     `json:"capacity_sample_age_ns"`
+	CapacitySampleReason      string    `json:"capacity_sample_reason"`
+	CapacityAssignmentShare   float64   `json:"capacity_assignment_share"`
+	OrdinaryAssignedBytes     uint64    `json:"ordinary_assigned_bytes"`
+	OrdinaryOutstandingFrames int       `json:"ordinary_outstanding_frames"`
+	OrdinaryOutstanding       uint64    `json:"ordinary_outstanding_bytes"`
+	OrdinaryPending           uint64    `json:"ordinary_pending_bytes"`
+	ProbeLimit                int       `json:"probe_limit"`
+	ProbeByteLimit            uint64    `json:"probe_byte_limit"`
+	ProbeConfirmedBytes       uint64    `json:"probe_confirmed_bytes"`
+	ProbeServiceBPS           float64   `json:"probe_service_bps"`
+	SessionServiceBPS         float64   `json:"session_service_bps"`
+	FeedbackEnvelopeNS        int64     `json:"feedback_envelope_ns"`
+	AdmissionState            string    `json:"admission_state"`
+	AdmissionReason           string    `json:"admission_reason"`
+	AdmissionSince            time.Time `json:"admission_since"`
+	ProbeAfter                time.Time `json:"probe_after"`
+	RecoveryEpoch             uint64    `json:"recovery_epoch"`
+	DataTxAttemptFrames       uint64    `json:"data_tx_attempt_frames"`
+	DataTxRetransmitFrames    uint64    `json:"data_tx_retransmit_frames"`
+	CarrierWriteAttemptFrames uint64    `json:"carrier_write_attempt_frames"`
+	CarrierWriteAttemptBytes  uint64    `json:"carrier_write_attempt_bytes"`
+	RetryWriteAttemptFrames   uint64    `json:"retry_write_attempt_frames"`
+	RescueWriteAttemptFrames  uint64    `json:"rescue_write_attempt_frames"`
+	RescueWriteAttemptBytes   uint64    `json:"rescue_write_attempt_bytes"`
+	CarrierWriteErrorFrames   uint64    `json:"carrier_write_error_frames"`
+	CarrierWireBytes          uint64    `json:"carrier_wire_bytes"`
+	CarrierPartialWireBytes   uint64    `json:"carrier_partial_wire_bytes"`
+	DataRXUniqueFrames        uint64    `json:"data_rx_unique_frames"`
+	DataRXDuplicateFrames     uint64    `json:"data_rx_duplicate_frames"`
+	DataRXDuplicateBytes      uint64    `json:"data_rx_duplicate_bytes"`
+	ACKTxFrames               uint64    `json:"ack_tx_frames"`
+	ACKRxFrames               uint64    `json:"ack_rx_frames"`
+	ActivateTxFrames          uint64    `json:"activate_tx_frames"`
+	ActivateRxFrames          uint64    `json:"activate_rx_frames"`
+	CloseTxFrames             uint64    `json:"close_tx_frames"`
+	CloseRxFrames             uint64    `json:"close_rx_frames"`
+	RescueAttemptFrames       uint64    `json:"rescue_attempt_frames"`
+	RescueAttemptBytes        uint64    `json:"rescue_attempt_bytes"`
+	FirstTXDataAt             time.Time `json:"first_tx_data_at"`
+	FirstRXUniqueDataAt       time.Time `json:"first_rx_unique_data_at"`
 }
 
 // Local TX means server-to-client for downloads. Byte counters are monotonic;
 // weights and queue depths are point-in-time values, never lifetime shares.
 type TelemetryStreamTransport struct {
-	ProbeLimit          [2]int       `json:"probe_limit"`
-	ProbeByteLimit      [2]uint64    `json:"probe_byte_limit"`
-	ProbeConfirmedBytes [2]uint64    `json:"probe_confirmed_bytes"`
-	ProbeServiceBPS     [2]float64   `json:"probe_service_bps"`
-	SessionServiceBPS   [2]float64   `json:"session_service_bps"`
-	FeedbackEnvelopeNS  [2]int64     `json:"feedback_envelope_ns"`
-	UsefulACKTotal      uint64       `json:"useful_ack_total"`
-	EffectiveWeightMbps [2]float64   `json:"effective_weight_mbps"`
-	SampleReason        [2]string    `json:"sample_reason"`
-	SampleAgeNS         [2]int64     `json:"sample_age_ns"`
-	PendingBytes        [2]uint64    `json:"pending_bytes"`
-	OutstandingBytes    [2]uint64    `json:"ordinary_outstanding_bytes"`
-	Direction           string       `json:"direction"`
-	EstimateBPS         [2]float64   `json:"estimate_bps"`
-	WeightMbps          [2]float64   `json:"weight_mbps"`
-	Confidence          [2]float64   `json:"confidence"`
-	SampleValid         [2]bool      `json:"sample_valid"`
-	SampleAt            [2]time.Time `json:"sample_at"`
-	AdmissionState      [2]string    `json:"admission_state"`
-	AdmissionReason     [2]string    `json:"admission_reason"`
-	AdmissionSince      [2]time.Time `json:"admission_since"`
-	ProbeAfter          [2]time.Time `json:"probe_after"`
-	PendingFrames       [2]int64     `json:"pending_frames"`
-	OutstandingFrames   [2]int       `json:"ordinary_outstanding_frames"`
-	OrdinaryBytes       [2]uint64    `json:"ordinary_bytes"`
-	WrittenBytes        [2]uint64    `json:"written_bytes"`
-	UsefulACKBytes      [2]uint64    `json:"useful_ack_bytes"`
-	RetryBytes          [2]uint64    `json:"retry_bytes"`
-	RescueAttempts      uint64       `json:"rescue_attempts"`
-	ACKNext             uint64       `json:"ack_next"`
-	ACKAt               time.Time    `json:"ack_at"`
-	FrontierAgeNS       int64        `json:"frontier_age_ns"`
-	FrontierLeg         int16        `json:"frontier_leg"`
-	Generation          [2]uint64    `json:"generation"`
-	RXDeliveredBytes    uint64       `json:"rx_delivered_bytes"`
-	RXPendingFrames     int          `json:"rx_pending_frames"`
+	ProbeLimit                  [2]int                               `json:"probe_limit"`
+	ProbeByteLimit              [2]uint64                            `json:"probe_byte_limit"`
+	ProbeConfirmedBytes         [2]uint64                            `json:"probe_confirmed_bytes"`
+	ProbeServiceBPS             [2]float64                           `json:"probe_service_bps"`
+	SessionServiceBPS           [2]float64                           `json:"session_service_bps"`
+	FeedbackEnvelopeNS          [2]int64                             `json:"feedback_envelope_ns"`
+	UsefulACKTotal              uint64                               `json:"useful_ack_total"`
+	EffectiveWeightMbps         [2]float64                           `json:"effective_weight_mbps"`
+	SampleReason                [2]string                            `json:"sample_reason"`
+	SampleAgeNS                 [2]int64                             `json:"sample_age_ns"`
+	PendingBytes                [2]uint64                            `json:"pending_bytes"`
+	OutstandingBytes            [2]uint64                            `json:"ordinary_outstanding_bytes"`
+	Direction                   string                               `json:"direction"`
+	EstimateBPS                 [2]float64                           `json:"estimate_bps"`
+	WeightMbps                  [2]float64                           `json:"weight_mbps"`
+	Confidence                  [2]float64                           `json:"confidence"`
+	SampleValid                 [2]bool                              `json:"sample_valid"`
+	SampleAt                    [2]time.Time                         `json:"sample_at"`
+	AdmissionState              [2]string                            `json:"admission_state"`
+	AdmissionReason             [2]string                            `json:"admission_reason"`
+	AdmissionSince              [2]time.Time                         `json:"admission_since"`
+	ProbeAfter                  [2]time.Time                         `json:"probe_after"`
+	PendingFrames               [2]int64                             `json:"pending_frames"`
+	OutstandingFrames           [2]int                               `json:"ordinary_outstanding_frames"`
+	TXOutstandingFramesTotal    int                                  `json:"tx_outstanding_frames_total"`
+	OrdinaryBytes               [2]uint64                            `json:"ordinary_bytes"`
+	WrittenBytes                [2]uint64                            `json:"written_bytes"`
+	UsefulACKBytes              [2]uint64                            `json:"useful_ack_bytes"`
+	RetryBytes                  [2]uint64                            `json:"retry_bytes"`
+	RescueAttempts              uint64                               `json:"rescue_attempts"`
+	ACKNext                     uint64                               `json:"ack_next"`
+	ACKAt                       time.Time                            `json:"ack_at"`
+	FrontierAgeNS               int64                                `json:"frontier_age_ns"`
+	FrontierLeg                 int16                                `json:"frontier_leg"`
+	Generation                  [2]uint64                            `json:"generation"`
+	RXDeliveredBytes            uint64                               `json:"rx_delivered_bytes"`
+	RXAckNext                   uint64                               `json:"rx_ack_next"`
+	RXPendingFrames             int                                  `json:"rx_pending_frames"`
+	RXPendingBytes              uint64                               `json:"rx_pending_bytes"`
+	DataRXSequenceEvents        []smp3core.StreamDataRXSequenceEvent `json:"data_rx_sequence_events,omitempty"`
+	DroppedDataRXSequenceEvents uint64                               `json:"dropped_data_rx_sequence_events"`
+	NLegs                       []TelemetryStreamLegTransport        `json:"n_legs,omitempty"`
 }
 
 type TelemetryLegAggregate struct {
@@ -215,6 +292,7 @@ type TelemetryRoleAggregate struct {
 	LogicalTxAckedBytes  uint64
 	LogicalRxUniqueBytes uint64
 	Legs                 [2]TelemetryRoleLegAggregate
+	NLegs                []TelemetryRoleLegAggregate `json:"n_legs,omitempty"`
 }
 
 const (
@@ -255,6 +333,7 @@ type TelemetrySnapshot struct {
 	CurrentWireTxRate        *float64
 	CurrentWireRxRate        *float64
 	Legs                     [2]TelemetryLegAggregate
+	NLegs                    []TelemetryLegAggregate `json:"n_legs,omitempty"`
 	Roles                    [4]TelemetryRoleAggregate
 	Sessions                 []TelemetrySessionSnapshot
 	TelemetryDroppedEvents   uint64
@@ -285,6 +364,7 @@ type telemetrySSEAggregate struct {
 	CurrentWireRxRate      *float64
 	TelemetryDroppedEvents uint64
 	Legs                   [2]TelemetryLegAggregate
+	NLegs                  []TelemetryLegAggregate `json:"n_legs,omitempty"`
 	Roles                  [4]TelemetryRoleAggregate
 	Traffic                *TrafficReport
 }
@@ -343,7 +423,7 @@ type telemetrySessionRecord struct {
 	firstLegReadyAt time.Time
 	firstDataSeenAt time.Time
 	startup         *TelemetryStartupSnapshot
-	legs            [2]telemetryLegRecord
+	legs            []telemetryLegRecord
 	stream          *smp3core.StreamEngine
 	dgram           *smp3core.DatagramEngine
 	targetTxBytes   atomic.Uint64
@@ -368,11 +448,11 @@ type TelemetryRegistry struct {
 	lastAt          time.Time
 	lastTx          uint64
 	lastRx          uint64
-	lastLegTx       [2]uint64
-	lastLegRx       [2]uint64
-	lastLegDataSent [2]uint64
-	lastLegAck      [2]uint64
-	lastLegUnique   [2]uint64
+	lastLegTx       []uint64
+	lastLegRx       []uint64
+	lastLegDataSent []uint64
+	lastLegAck      []uint64
+	lastLegUnique   []uint64
 	eventMu         sync.Mutex
 	lifecycleRing   []telemetryLifecycleEvent
 	nextEventID     atomic.Uint64
@@ -389,6 +469,9 @@ func NewTelemetryRegistry(cfg TelemetryConfig) *TelemetryRegistry {
 	}
 	if cfg.MaxActiveSessions <= 0 {
 		cfg.MaxActiveSessions = 1024
+	}
+	if cfg.MaxActiveLegs <= 0 || cfg.MaxActiveLegs > smp3core.MaxStreamLegIDCount {
+		cfg.MaxActiveLegs = smp3core.DefaultMaxActiveStreamLegs
 	}
 	if cfg.MaxEvents <= 0 {
 		cfg.MaxEvents = 1024
@@ -410,6 +493,9 @@ func NewTelemetryRegistry(cfg TelemetryConfig) *TelemetryRegistry {
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 		subscribers: make(map[uint64]*telemetrySSESubscriber),
+		lastLegTx:   make([]uint64, cfg.MaxActiveLegs), lastLegRx: make([]uint64, cfg.MaxActiveLegs),
+		lastLegDataSent: make([]uint64, cfg.MaxActiveLegs), lastLegAck: make([]uint64, cfg.MaxActiveLegs),
+		lastLegUnique: make([]uint64, cfg.MaxActiveLegs),
 	}
 	if !r.enabled {
 		close(r.done)
@@ -458,7 +544,7 @@ func (r *TelemetryRegistry) RegisterSessionWithRole(id smp3core.SessionID, mode,
 		return false
 	}
 	displayID := r.displayID(id)
-	r.sessions[id] = &telemetrySessionRecord{id: id, displayID: displayID, mode: mode, createdAt: now}
+	r.sessions[id] = &telemetrySessionRecord{id: id, displayID: displayID, mode: mode, createdAt: now, legs: make([]telemetryLegRecord, r.cfg.MaxActiveLegs)}
 	if ingressRole != "" {
 		// The role is finalized per leg when that leg is attached. This initial
 		// value is retained for single-listener sessions before the first leg
@@ -508,13 +594,17 @@ func (r *TelemetryRegistry) AttachLeg(id smp3core.SessionID, leg uint8, generati
 }
 
 func (r *TelemetryRegistry) AttachLegWithRole(id smp3core.SessionID, leg uint8, generation uint64, counters *WireCounters, ingressRole string, now time.Time) {
-	if r == nil || !r.enabled || leg >= 2 {
+	if r == nil || !r.enabled || int(leg) >= r.cfg.MaxActiveLegs {
 		return
 	}
 	var displayID, mode string
 	var found bool
 	r.mu.Lock()
 	if session := r.sessions[id]; session != nil {
+		if int(leg) >= len(session.legs) {
+			r.mu.Unlock()
+			return
+		}
 		found = true
 		displayID, mode = session.displayID, session.mode
 		if generation == 0 {
@@ -535,13 +625,17 @@ func (r *TelemetryRegistry) AttachLegWithRole(id smp3core.SessionID, leg uint8, 
 }
 
 func (r *TelemetryRegistry) DetachLeg(id smp3core.SessionID, leg uint8, now time.Time) {
-	if r == nil || !r.enabled || leg >= 2 {
+	if r == nil || !r.enabled || int(leg) >= r.cfg.MaxActiveLegs {
 		return
 	}
 	var displayID, mode string
 	var found bool
 	r.mu.Lock()
 	if session := r.sessions[id]; session != nil {
+		if int(leg) >= len(session.legs) {
+			r.mu.Unlock()
+			return
+		}
 		found = true
 		displayID, mode = session.displayID, session.mode
 		session.legs[leg].state = "down"
@@ -554,13 +648,17 @@ func (r *TelemetryRegistry) DetachLeg(id smp3core.SessionID, leg uint8, now time
 }
 
 func (r *TelemetryRegistry) MarkFirstData(id smp3core.SessionID, leg uint8, now time.Time) {
-	if r == nil || !r.enabled || leg >= 2 {
+	if r == nil || !r.enabled || int(leg) >= r.cfg.MaxActiveLegs {
 		return
 	}
 	var displayID, mode string
 	var first bool
 	r.mu.Lock()
 	if session := r.sessions[id]; session != nil {
+		if int(leg) >= len(session.legs) {
+			r.mu.Unlock()
+			return
+		}
 		displayID, mode = session.displayID, session.mode
 		if session.legs[leg].firstDataAt.IsZero() {
 			session.legs[leg].firstDataAt = now
@@ -642,9 +740,10 @@ func (r *TelemetryRegistry) buildSnapshot(now time.Time) TelemetrySnapshot {
 	r.drainEvents()
 	r.mu.Lock()
 	r.pruneClosedLocked(now)
-	snapshot := TelemetrySnapshot{Timestamp: now, Sessions: make([]TelemetrySessionSnapshot, 0, len(r.sessions))}
+	snapshot := TelemetrySnapshot{Timestamp: now, Sessions: make([]TelemetrySessionSnapshot, 0, len(r.sessions)), NLegs: make([]TelemetryLegAggregate, r.cfg.MaxActiveLegs)}
 	for index, role := range []string{TelemetryIngressNative, TelemetryIngressStandalone, TelemetryIngressUnknown, TelemetryIngressMixed} {
 		snapshot.Roles[index].Role = role
+		snapshot.Roles[index].NLegs = make([]TelemetryRoleLegAggregate, r.cfg.MaxActiveLegs)
 	}
 	for _, session := range r.sessions {
 		r.updateFromCoreLocked(session)
@@ -662,22 +761,22 @@ func (r *TelemetryRegistry) buildSnapshot(now time.Time) TelemetrySnapshot {
 			if session.closedAt.IsZero() {
 				snapshot.TotalWireTx += counters.TxBytes
 				snapshot.TotalWireRx += counters.RxBytes
-				snapshot.Legs[leg].WireTxBytes += counters.TxBytes
-				snapshot.Legs[leg].WireRxBytes += counters.RxBytes
-				snapshot.Legs[leg].DataSentBytes += session.legs[leg].dataSentBytes
-				snapshot.Legs[leg].LogicalTxAckedBytes += session.legs[leg].logicalTxAckedBytes
-				snapshot.Legs[leg].LogicalRxUniqueBytes += session.legs[leg].logicalRxUniqueBytes
-				snapshot.Legs[leg].RetransmitBytes += session.legs[leg].retransmitBytes
-				snapshot.Legs[leg].RetransmitFrames += session.legs[leg].retransmitFrames
-				snapshot.Legs[leg].DataAttemptFrames += session.legs[leg].dataAttemptFrames
-				snapshot.Legs[leg].RescueAttemptFrames += session.legs[leg].rescueAttemptFrames
-				snapshot.Legs[leg].RescueAttemptBytes += session.legs[leg].rescueAttemptBytes
+				snapshot.NLegs[leg].WireTxBytes += counters.TxBytes
+				snapshot.NLegs[leg].WireRxBytes += counters.RxBytes
+				snapshot.NLegs[leg].DataSentBytes += session.legs[leg].dataSentBytes
+				snapshot.NLegs[leg].LogicalTxAckedBytes += session.legs[leg].logicalTxAckedBytes
+				snapshot.NLegs[leg].LogicalRxUniqueBytes += session.legs[leg].logicalRxUniqueBytes
+				snapshot.NLegs[leg].RetransmitBytes += session.legs[leg].retransmitBytes
+				snapshot.NLegs[leg].RetransmitFrames += session.legs[leg].retransmitFrames
+				snapshot.NLegs[leg].DataAttemptFrames += session.legs[leg].dataAttemptFrames
+				snapshot.NLegs[leg].RescueAttemptFrames += session.legs[leg].rescueAttemptFrames
+				snapshot.NLegs[leg].RescueAttemptBytes += session.legs[leg].rescueAttemptBytes
 				if session.legs[leg].state == "up" {
-					snapshot.Legs[leg].ActiveSessions++
-					snapshot.Legs[leg].ActiveConnections++
+					snapshot.NLegs[leg].ActiveSessions++
+					snapshot.NLegs[leg].ActiveConnections++
 					snapshot.Roles[ingressRoleIndex(session.legs[leg].ingressRole)].ActiveLegs++
 				}
-				roleLeg := &snapshot.Roles[ingressRoleIndex(session.legs[leg].ingressRole)].Legs[leg]
+				roleLeg := &snapshot.Roles[ingressRoleIndex(session.legs[leg].ingressRole)].NLegs[leg]
 				roleLeg.DataSentBytes += session.legs[leg].dataSentBytes
 				roleLeg.LogicalTxAckedBytes += session.legs[leg].logicalTxAckedBytes
 				roleLeg.LogicalRxUniqueBytes += session.legs[leg].logicalRxUniqueBytes
@@ -688,22 +787,32 @@ func (r *TelemetryRegistry) buildSnapshot(now time.Time) TelemetrySnapshot {
 	wireTotal := snapshot.TotalWireTx + snapshot.TotalWireRx
 	txTotal := snapshot.TotalWireTx
 	rxTotal := snapshot.TotalWireRx
-	logicalTxTotal := snapshot.Legs[0].LogicalTxAckedBytes + snapshot.Legs[1].LogicalTxAckedBytes
-	logicalRxTotal := snapshot.Legs[0].LogicalRxUniqueBytes + snapshot.Legs[1].LogicalRxUniqueBytes
-	for leg := range snapshot.Legs {
-		legTotal := snapshot.Legs[leg].WireTxBytes + snapshot.Legs[leg].WireRxBytes
-		snapshot.Legs[leg].WireShare = calculateTelemetryShare(legTotal, wireTotal)
-		snapshot.Legs[leg].WireTxShare = calculateTelemetryShare(snapshot.Legs[leg].WireTxBytes, txTotal)
-		snapshot.Legs[leg].WireRxShare = calculateTelemetryShare(snapshot.Legs[leg].WireRxBytes, rxTotal)
-		snapshot.Legs[leg].LogicalTxShare = calculateTelemetryShare(snapshot.Legs[leg].LogicalTxAckedBytes, logicalTxTotal)
-		snapshot.Legs[leg].LogicalRxShare = calculateTelemetryShare(snapshot.Legs[leg].LogicalRxUniqueBytes, logicalRxTotal)
+	var logicalTxTotal, logicalRxTotal uint64
+	for _, leg := range snapshot.NLegs {
+		logicalTxTotal += leg.LogicalTxAckedBytes
+		logicalRxTotal += leg.LogicalRxUniqueBytes
+	}
+	for leg := range snapshot.NLegs {
+		row := &snapshot.NLegs[leg]
+		legTotal := row.WireTxBytes + row.WireRxBytes
+		row.WireShare = calculateTelemetryShare(legTotal, wireTotal)
+		row.WireTxShare = calculateTelemetryShare(row.WireTxBytes, txTotal)
+		row.WireRxShare = calculateTelemetryShare(row.WireRxBytes, rxTotal)
+		row.LogicalTxShare = calculateTelemetryShare(row.LogicalTxAckedBytes, logicalTxTotal)
+		row.LogicalRxShare = calculateTelemetryShare(row.LogicalRxUniqueBytes, logicalRxTotal)
+		if leg < len(snapshot.Legs) {
+			snapshot.Legs[leg] = *row
+		}
 	}
 	for index := range snapshot.Roles {
-		for leg := range snapshot.Roles[index].Legs {
-			roleLeg := snapshot.Roles[index].Legs[leg]
+		for leg := range snapshot.Roles[index].NLegs {
+			roleLeg := snapshot.Roles[index].NLegs[leg]
 			snapshot.Roles[index].DataSentBytes += roleLeg.DataSentBytes
 			snapshot.Roles[index].LogicalTxAckedBytes += roleLeg.LogicalTxAckedBytes
 			snapshot.Roles[index].LogicalRxUniqueBytes += roleLeg.LogicalRxUniqueBytes
+			if leg < len(snapshot.Roles[index].Legs) {
+				snapshot.Roles[index].Legs[leg] = roleLeg
+			}
 		}
 	}
 	snapshot.TotalSessions = r.total.Load()
@@ -718,7 +827,7 @@ func (r *TelemetryRegistry) updateFromCoreLocked(session *telemetrySessionRecord
 	if session.stream != nil {
 		stats := session.stream.TelemetrySnapshot()
 		frontier := session.stream.TXLedger().ProgressSnapshot()
-		session.transport = &TelemetryStreamTransport{ProbeLimit: stats.OrdinaryProbeLimit, ProbeByteLimit: stats.OrdinaryProbeByteLimit, ProbeConfirmedBytes: stats.OrdinaryProofBytes, ProbeServiceBPS: stats.OrdinaryProbeServiceBPS, SessionServiceBPS: stats.OrdinarySessionServiceBPS, FeedbackEnvelopeNS: stats.OrdinaryFeedbackEnvelopeNS, Direction: "local_tx", EstimateBPS: stats.CapacitySmoothedBPS, WeightMbps: stats.CapacityWeight, Confidence: stats.CapacityConfidence, SampleValid: stats.CapacityValid, SampleAt: stats.CapacityLastSample, AdmissionState: stats.OrdinaryAdmissionState, AdmissionReason: stats.OrdinaryAdmissionReason, AdmissionSince: stats.OrdinaryAdmissionSince, ProbeAfter: stats.OrdinaryProbeAfter, PendingFrames: stats.CapacityPending, OutstandingFrames: stats.OrdinaryOutstandingFrames, OrdinaryBytes: stats.OrdinaryAssignedBytes, WrittenBytes: stats.TxSentBytesByLeg, UsefulACKBytes: stats.TxAckedUsefulByLeg, RetryBytes: stats.TxRetransmitBytesByLeg, RescueAttempts: stats.FrontierRescueAttempts, ACKNext: frontier.AckedNext, ACKAt: stats.LastAckProgress, Generation: stats.LegGeneration, RXDeliveredBytes: stats.RxDeliveredBytes, RXPendingFrames: stats.RxPendingFrames}
+		session.transport = &TelemetryStreamTransport{ProbeLimit: stats.OrdinaryProbeLimit, ProbeByteLimit: stats.OrdinaryProbeByteLimit, ProbeConfirmedBytes: stats.OrdinaryProofBytes, ProbeServiceBPS: stats.OrdinaryProbeServiceBPS, SessionServiceBPS: stats.OrdinarySessionServiceBPS, FeedbackEnvelopeNS: stats.OrdinaryFeedbackEnvelopeNS, Direction: "local_tx", EstimateBPS: stats.CapacitySmoothedBPS, WeightMbps: stats.CapacityWeight, Confidence: stats.CapacityConfidence, SampleValid: stats.CapacityValid, SampleAt: stats.CapacityLastSample, AdmissionState: stats.OrdinaryAdmissionState, AdmissionReason: stats.OrdinaryAdmissionReason, AdmissionSince: stats.OrdinaryAdmissionSince, ProbeAfter: stats.OrdinaryProbeAfter, PendingFrames: stats.CapacityPending, OutstandingFrames: stats.OrdinaryOutstandingFrames, TXOutstandingFramesTotal: frontier.Outstanding, OrdinaryBytes: stats.OrdinaryAssignedBytes, WrittenBytes: stats.TxSentBytesByLeg, UsefulACKBytes: stats.TxAckedUsefulByLeg, RetryBytes: stats.TxRetransmitBytesByLeg, RescueAttempts: stats.FrontierRescueAttempts, ACKNext: frontier.AckedNext, ACKAt: stats.LastAckProgress, Generation: stats.LegGeneration, RXDeliveredBytes: stats.RxDeliveredBytes, RXAckNext: stats.RxAckNext, RXPendingFrames: stats.RxPendingFrames, RXPendingBytes: stats.RxPendingBytes, DataRXSequenceEvents: stats.Telemetry.DataRXSequenceEvents, DroppedDataRXSequenceEvents: stats.Telemetry.DroppedDataRXSequenceEvents}
 		session.transport.FrontierAgeNS = int64(session.stream.TXLedger().FrontierAge(time.Now()))
 		session.transport.FrontierLeg = session.stream.TXLedger().FrontierSnapshot().Owner
 		session.transport.UsefulACKTotal = stats.TxAckedUsefulTotal
@@ -731,17 +840,70 @@ func (r *TelemetryRegistry) updateFromCoreLocked(session *telemetrySessionRecord
 		}
 		session.transport.PendingBytes = stats.OrdinaryPendingBytes
 		session.transport.OutstandingBytes = stats.OrdinaryOutstandingBytes
+		session.transport.NLegs = make([]TelemetryStreamLegTransport, len(stats.Legs))
+		for id, leg := range stats.Legs {
+			row := TelemetryStreamLegTransport{
+				LegID: leg.LegID, Generation: leg.Generation, Up: leg.Up,
+				WrittenBytes: leg.TxWrittenBytes, RetryWrittenBytes: leg.TxRetryWrittenBytes,
+				SentBytes: leg.TxSentBytes, UsefulACKBytes: leg.TxAckedUsefulBytes,
+				RetransmitBytes: leg.TxRetransmitBytes, UniqueRXBytes: leg.RxUniqueBytes,
+				EffectiveWeightMbps: leg.OrdinaryEffectiveWeight, CapacityWeightMbps: leg.CapacityWeight,
+				CapacityRawBPS: leg.CapacityRawBPS, CapacityEstimateBPS: leg.CapacitySmoothedBPS,
+				CapacityConfidence: leg.CapacityConfidence, CapacityValid: leg.CapacityValid,
+				CapacityDemand: leg.CapacityDemand, CapacitySampleAt: leg.CapacityLastSample,
+				CapacitySampleAgeNS: int64(leg.CapacitySampleAge), CapacitySampleReason: leg.CapacitySampleReason,
+				CapacityAssignmentShare: leg.CapacityAssignmentShare,
+				OrdinaryAssignedBytes:   leg.OrdinaryAssignedBytes, OrdinaryOutstandingFrames: leg.OrdinaryOutstandingFrames,
+				AdmissionState: leg.OrdinaryAdmissionState, AdmissionReason: leg.OrdinaryAdmissionReason,
+				OrdinaryOutstanding: leg.OrdinaryOutstandingBytes, OrdinaryPending: leg.OrdinaryPendingBytes,
+				ProbeLimit: leg.OrdinaryProbeLimit, ProbeByteLimit: leg.OrdinaryProbeByteLimit,
+				ProbeConfirmedBytes: leg.OrdinaryProofBytes, ProbeServiceBPS: leg.OrdinaryProbeServiceBPS,
+				SessionServiceBPS: leg.OrdinarySessionServiceBPS, FeedbackEnvelopeNS: leg.OrdinaryFeedbackEnvelopeNS,
+				AdmissionSince: leg.OrdinaryAdmissionSince, ProbeAfter: leg.OrdinaryProbeAfter,
+				RecoveryEpoch: leg.OrdinaryRecoveryEpoch,
+			}
+			if id < len(stats.Telemetry.Legs) && stats.Telemetry.Legs[id].LegID == leg.LegID {
+				events := stats.Telemetry.Legs[id]
+				row.DataTxAttemptFrames = events.DataTxAttemptFrames
+				row.DataTxRetransmitFrames = events.DataTxRetransmitFrames
+				row.CarrierWriteAttemptFrames = events.DataTxCarrierWriteAttemptFrames
+				row.CarrierWriteAttemptBytes = events.DataTxAttemptBytes
+				row.RetryWriteAttemptFrames = events.DataTxRetryWriteAttemptFrames
+				row.RescueWriteAttemptFrames = events.DataTxRescueWriteAttemptFrames
+				row.RescueWriteAttemptBytes = events.DataTxRescueWriteAttemptBytes
+				row.CarrierWriteErrorFrames = events.DataTxCarrierWriteErrorFrames
+				row.CarrierWireBytes = events.DataTxCarrierWireBytes
+				row.CarrierPartialWireBytes = events.DataTxPartialWireBytes
+				row.DataRXUniqueFrames = events.DataRxUniqueFrames
+				row.DataRXDuplicateFrames = events.DataRxDuplicateFrames
+				row.DataRXDuplicateBytes = events.DataRxDuplicateBytes
+				row.ACKTxFrames, row.ACKRxFrames = events.AckTxFrames, events.AckRxFrames
+				row.ActivateTxFrames, row.ActivateRxFrames = events.ActivateTxFrames, events.ActivateRxFrames
+				row.CloseTxFrames, row.CloseRxFrames = events.CloseTxFrames, events.CloseRxFrames
+				row.RescueAttemptFrames, row.RescueAttemptBytes = events.RescueAttemptFrames, events.RescueAttemptBytes
+				row.FirstTXDataAt, row.FirstRXUniqueDataAt = events.FirstTxDataAt, events.FirstRxUniqueDataAt
+			}
+			session.transport.NLegs[id] = row
+		}
 		session.startup = copyStartupSnapshot(stats.Telemetry.Startup)
 		for leg := range session.legs {
-			session.legs[leg].dataSentBytes = stats.TxSentBytesByLeg[leg]
-			session.legs[leg].logicalTxAckedBytes = stats.TxAckedUsefulByLeg[leg]
-			session.legs[leg].logicalRxUniqueBytes = stats.RxUniqueBytesByLeg[leg]
-			session.legs[leg].retransmitBytes = stats.TxRetransmitBytesByLeg[leg]
-			session.legs[leg].retransmitFrames = stats.Telemetry.DataTxRetransmitFrames[leg]
-			session.legs[leg].dataAttemptFrames = stats.Telemetry.DataTxAttemptFrames[leg]
-			session.legs[leg].rescueAttemptFrames = stats.Telemetry.RescueAttemptFrames[leg]
-			session.legs[leg].rescueAttemptBytes = stats.Telemetry.RescueAttemptBytes[leg]
-			first := earlierTime(stats.Telemetry.FirstTxDataAt[leg], stats.Telemetry.FirstRxUniqueDataAt[leg])
+			if leg >= len(stats.Legs) || int(stats.Legs[leg].LegID) != leg {
+				continue
+			}
+			legStats := stats.Legs[leg]
+			session.legs[leg].dataSentBytes = legStats.TxSentBytes
+			session.legs[leg].logicalTxAckedBytes = legStats.TxAckedUsefulBytes
+			session.legs[leg].logicalRxUniqueBytes = legStats.RxUniqueBytes
+			session.legs[leg].retransmitBytes = legStats.TxRetransmitBytes
+			var telemetryLeg smp3core.StreamLegTelemetryStats
+			if leg < len(stats.Telemetry.Legs) && int(stats.Telemetry.Legs[leg].LegID) == leg {
+				telemetryLeg = stats.Telemetry.Legs[leg]
+			}
+			session.legs[leg].retransmitFrames = telemetryLeg.DataTxRetransmitFrames
+			session.legs[leg].dataAttemptFrames = telemetryLeg.DataTxAttemptFrames
+			session.legs[leg].rescueAttemptFrames = telemetryLeg.RescueAttemptFrames
+			session.legs[leg].rescueAttemptBytes = telemetryLeg.RescueAttemptBytes
+			first := earlierTime(telemetryLeg.FirstTxDataAt, telemetryLeg.FirstRxUniqueDataAt)
 			if !first.IsZero() && (session.legs[leg].firstDataAt.IsZero() || first.Before(session.legs[leg].firstDataAt)) {
 				session.legs[leg].firstDataAt = first
 				r.publishLifecycle("first_data", session.displayID, session.mode, uint8Ptr(uint8(leg)), first)
@@ -754,7 +916,7 @@ func (r *TelemetryRegistry) updateFromCoreLocked(session *telemetrySessionRecord
 	if session.dgram != nil {
 		session.startup = nil
 		stats := session.dgram.Snapshot()
-		for leg := range session.legs {
+		for leg := 0; leg < len(session.legs) && leg < 2; leg++ {
 			session.legs[leg].dataSentBytes = stats.TxBytes[leg]
 			session.legs[leg].logicalRxUniqueBytes = stats.RxUniqueBytes[leg]
 		}
@@ -801,6 +963,7 @@ func (r *TelemetryRegistry) sessionSnapshot(session *telemetrySessionRecord) Tel
 		FirstDataSeenAt:  session.firstDataSeenAt,
 		TargetTxBytes:    session.targetTxBytes.Load(),
 		TargetRxBytes:    session.targetRxBytes.Load(),
+		NLegs:            make([]TelemetryLegSnapshot, len(session.legs)),
 	}
 	if session.startup != nil {
 		startup := *session.startup
@@ -810,9 +973,10 @@ func (r *TelemetryRegistry) sessionSnapshot(session *telemetrySessionRecord) Tel
 	}
 	for leg := range session.legs {
 		counter := session.legs[leg].counters.snapshot()
-		row.Legs[leg] = TelemetryLegSnapshot{
+		row.NLegs[leg] = TelemetryLegSnapshot{
 			State:                session.legs[leg].state,
 			IngressRole:          session.legs[leg].ingressRole,
+			CarrierID:            fmt.Sprintf("%s/leg%d/gen%d", session.displayID, leg, session.legs[leg].generation),
 			Generation:           session.legs[leg].generation,
 			AttachAt:             session.legs[leg].attachAt,
 			DetachAt:             session.legs[leg].detachAt,
@@ -827,6 +991,9 @@ func (r *TelemetryRegistry) sessionSnapshot(session *telemetrySessionRecord) Tel
 			DataAttemptFrames:    session.legs[leg].dataAttemptFrames,
 			RescueAttemptFrames:  session.legs[leg].rescueAttemptFrames,
 			RescueAttemptBytes:   session.legs[leg].rescueAttemptBytes,
+		}
+		if leg < len(row.Legs) {
+			row.Legs[leg] = row.NLegs[leg]
 		}
 	}
 	return row
@@ -861,24 +1028,33 @@ func (r *TelemetryRegistry) updateRates(snapshot *TelemetrySnapshot) {
 			snapshot.WindowDuration = elapsed
 			snapshot.CurrentWireTxRate = byteRate(snapshot.TotalWireTx, r.lastTx, elapsed)
 			snapshot.CurrentWireRxRate = byteRate(snapshot.TotalWireRx, r.lastRx, elapsed)
-			for leg := range snapshot.Legs {
-				snapshot.Legs[leg].WireTxRate = byteRate(snapshot.Legs[leg].WireTxBytes, r.lastLegTx[leg], elapsed)
-				snapshot.Legs[leg].WireRxRate = byteRate(snapshot.Legs[leg].WireRxBytes, r.lastLegRx[leg], elapsed)
-				snapshot.Legs[leg].DataSentRate = byteRate(snapshot.Legs[leg].DataSentBytes, r.lastLegDataSent[leg], elapsed)
-				snapshot.Legs[leg].LogicalTxAckedRate = byteRate(snapshot.Legs[leg].LogicalTxAckedBytes, r.lastLegAck[leg], elapsed)
-				snapshot.Legs[leg].LogicalRxUniqueRate = byteRate(snapshot.Legs[leg].LogicalRxUniqueBytes, r.lastLegUnique[leg], elapsed)
+			for leg := range snapshot.NLegs {
+				if leg >= len(r.lastLegTx) {
+					break
+				}
+				snapshot.NLegs[leg].WireTxRate = byteRate(snapshot.NLegs[leg].WireTxBytes, r.lastLegTx[leg], elapsed)
+				snapshot.NLegs[leg].WireRxRate = byteRate(snapshot.NLegs[leg].WireRxBytes, r.lastLegRx[leg], elapsed)
+				snapshot.NLegs[leg].DataSentRate = byteRate(snapshot.NLegs[leg].DataSentBytes, r.lastLegDataSent[leg], elapsed)
+				snapshot.NLegs[leg].LogicalTxAckedRate = byteRate(snapshot.NLegs[leg].LogicalTxAckedBytes, r.lastLegAck[leg], elapsed)
+				snapshot.NLegs[leg].LogicalRxUniqueRate = byteRate(snapshot.NLegs[leg].LogicalRxUniqueBytes, r.lastLegUnique[leg], elapsed)
+				if leg < len(snapshot.Legs) {
+					snapshot.Legs[leg] = snapshot.NLegs[leg]
+				}
 			}
 		}
 	}
 	r.lastAt = snapshot.Timestamp
 	r.lastTx = snapshot.TotalWireTx
 	r.lastRx = snapshot.TotalWireRx
-	for leg := range snapshot.Legs {
-		r.lastLegTx[leg] = snapshot.Legs[leg].WireTxBytes
-		r.lastLegRx[leg] = snapshot.Legs[leg].WireRxBytes
-		r.lastLegDataSent[leg] = snapshot.Legs[leg].DataSentBytes
-		r.lastLegAck[leg] = snapshot.Legs[leg].LogicalTxAckedBytes
-		r.lastLegUnique[leg] = snapshot.Legs[leg].LogicalRxUniqueBytes
+	for leg := range snapshot.NLegs {
+		if leg >= len(r.lastLegTx) {
+			break
+		}
+		r.lastLegTx[leg] = snapshot.NLegs[leg].WireTxBytes
+		r.lastLegRx[leg] = snapshot.NLegs[leg].WireRxBytes
+		r.lastLegDataSent[leg] = snapshot.NLegs[leg].DataSentBytes
+		r.lastLegAck[leg] = snapshot.NLegs[leg].LogicalTxAckedBytes
+		r.lastLegUnique[leg] = snapshot.NLegs[leg].LogicalRxUniqueBytes
 	}
 }
 
@@ -927,9 +1103,16 @@ func (r *TelemetryRegistry) drainEvents() {
 
 func cloneTelemetrySnapshot(snapshot TelemetrySnapshot) TelemetrySnapshot {
 	snapshot.Sessions = append([]TelemetrySessionSnapshot(nil), snapshot.Sessions...)
+	snapshot.NLegs = append([]TelemetryLegAggregate(nil), snapshot.NLegs...)
+	for i := range snapshot.Roles {
+		snapshot.Roles[i].NLegs = append([]TelemetryRoleLegAggregate(nil), snapshot.Roles[i].NLegs...)
+	}
 	for i := range snapshot.Sessions {
+		snapshot.Sessions[i].NLegs = append([]TelemetryLegSnapshot(nil), snapshot.Sessions[i].NLegs...)
 		if snapshot.Sessions[i].Transport != nil {
 			transport := *snapshot.Sessions[i].Transport
+			transport.DataRXSequenceEvents = append([]smp3core.StreamDataRXSequenceEvent(nil), transport.DataRXSequenceEvents...)
+			transport.NLegs = append([]TelemetryStreamLegTransport(nil), transport.NLegs...)
 			snapshot.Sessions[i].Transport = &transport
 		}
 		if snapshot.Sessions[i].Startup != nil {

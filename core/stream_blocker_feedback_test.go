@@ -29,10 +29,14 @@ func TestClosureOrderedProbeBehindHealthyPrefix(t *testing.T) {
 	c.txLedger.MarkTransit(head, 0, now)
 	c.txLedger.MarkAttemptSent(head, 0, false, now)
 	c.restrictOrdinary(1, now, "test")
-	c.ordinaryAssigned(1, now.Add(6*time.Second))
-	c.txLedger.assignOrdinary(probe, 1, now.Add(6*time.Second))
-	c.txLedger.MarkTransit(probe, 1, now.Add(6*time.Second))
-	c.txLedger.MarkAttemptSent(probe, 1, false, now.Add(6*time.Second))
+	probeAt := now.Add(6 * time.Second)
+	c.txLedger.assignOrdinary(probe, 1, probeAt)
+	c.ordinaryAssignedRecord(1, probe, probeAt, len(probe.Payload()))
+	c.txLedger.MarkTransit(probe, 1, probeAt)
+	if !c.recoveryProbeWriteStarted(1, probe, probeAt) {
+		t.Fatal("recovery probe write start rejected")
+	}
+	c.txLedger.MarkAttemptSent(probe, 1, false, probeAt)
 	c.txLedger.ApplyACK(1, now.Add(7*time.Second))
 	ack := c.txLedger.ApplyACK(2, now.Add(7100*time.Millisecond))
 	c.admissionACK(ack)
@@ -75,7 +79,8 @@ func TestClosureRecoveryShortRecordsAndHardBounds(t *testing.T) {
 			now := time.Now()
 			c.restrictOrdinary(1, now, "test")
 			now = now.Add(6 * time.Second)
-			c.ordinaryAssigned(1, now, size)
+			probe := startRecoveryProbeForTest(t, c, 1, now, size)
+			c.admissionACK(c.txLedger.ApplyACK(probe.Sequence()+1, now.Add(time.Millisecond)))
 			for step := 0; step < 2048 && c.admission.legs[1].recovering; step++ {
 				now = now.Add(10 * time.Millisecond)
 				r := c.txLedger.Add(make([]byte, size), now)
@@ -125,7 +130,7 @@ func TestClosureCountOnlyProofCannotGrowBytes(t *testing.T) {
 	c := slowLegUnitEngine()
 	now := time.Now()
 	c.restrictOrdinary(1, now, "test")
-	c.ordinaryAssigned(1, now.Add(6*time.Second))
+	startRecoveryProbeForTest(t, c, 1, now.Add(6*time.Second), 64<<10)
 	for i := 0; i < 8; i++ {
 		c.admissionACK(StreamTXACKResult{UniqueTimelyByLeg: [2]int{0, 30}, AckedNext: uint64(i + 1), LastACKProgress: now.Add(7 * time.Second)})
 	}
@@ -160,8 +165,8 @@ func TestClosureMeasuredFeedbackStartsProbeExposureAtFrontier(t *testing.T) {
 }
 
 func TestClosureRecoveryBudgetBoundariesRemainDistinct(t *testing.T) {
-	if streamProbeBudget != 200*time.Millisecond || streamProofBudget != 700*time.Millisecond {
-		t.Fatalf("recovery budgets changed: probe=%s proof=%s", streamProbeBudget, streamProofBudget)
+	if streamProbeBudget != 200*time.Millisecond || streamProofBudget != 700*time.Millisecond || streamRestrictionCooldown != 5*time.Second {
+		t.Fatalf("recovery budgets changed: probe=%s proof=%s cooldown=%s", streamProbeBudget, streamProofBudget, streamRestrictionCooldown)
 	}
 	c := slowLegUnitEngine()
 	if got := c.frameBudget(100); got != 48 {

@@ -32,9 +32,9 @@ type benchmarkAssignmentStats struct {
 	rollback      atomic.Uint64
 	reassigned    atomic.Uint64
 	reassignments atomic.Uint64
-	admitted      [2]atomic.Uint64
-	feederHeld    [2]atomic.Int64
-	feedersDone   [2]chan struct{}
+	admitted      []atomic.Uint64
+	feederHeld    []atomic.Int64
+	feedersDone   []chan struct{}
 }
 
 const (
@@ -157,20 +157,36 @@ func (c *StreamEngine) wakeDecoupled() {
 // assignBenchmark commits ownership and accounting together. A vanished or
 // closed owner is a hard failure; a full physical queue is never considered here.
 func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment) *streamLeg {
+	// Read feedback before taking weightedMu. Key it by the concrete leg pointer
+	// so a concurrent replacement cannot transfer an old generation's RTT to a
+	// new Carrier with the same leg ID.
+	feedbackLegs := make([]*streamLeg, c.maxActiveLegs)
+	pathPenalty := make([]float64, c.maxActiveLegs)
+	for index := 0; index < len(feedbackLegs); index++ {
+		id := uint8(index)
+		leg := c.getLeg(id)
+		feedbackLegs[id] = leg
+		if leg != nil {
+			pathPenalty[id] = c.pathRTTScorePenalty(leg)
+		}
+	}
 	c.weightedMu.Lock()
 	defer c.weightedMu.Unlock()
-	var counts [2]int
+	counts := make([]int, c.maxActiveLegs)
 	if c.slowLegProtection() {
-		counts = c.txLedger.OrdinaryFrames()
+		copy(counts, c.txLedger.OrdinaryFramesByLeg())
 	}
 	now := time.Now()
-	if a.owner != nil && !a.owner.closed.Load() && (a.admitted.Load() || c.ordinaryOwnerAllowed(a.owner.id)) {
+	if a.owner != nil && !a.owner.closed.Load() && (a.admitted.Load() || c.ordinaryOwnerAllowed(a.owner.id) || c.pendingRecoveryProbeOwner(a.owner.id, r.Sequence())) {
 		return a.owner
 	}
 	var best *streamLeg
 	score := math.MaxFloat64
 	legs := c.availableLegs()
-	selectable := [2]bool{true, true}
+	selectable := make([]bool, c.maxActiveLegs)
+	for i := range selectable {
+		selectable[i] = true
+	}
 	if c.slowLegProtection() {
 		for _, leg := range legs {
 			count := counts[leg.id]
@@ -180,24 +196,37 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 			selectable[leg.id] = c.ordinaryEligible(leg.id, count, now)
 		}
 	}
-	var weights [2]float64
+	weights := make([]float64, c.maxActiveLegs)
 	for _, leg := range legs {
 		weights[leg.id] = c.effectiveSchedulerWeight(leg)
 	}
 	if c.cfg.benchmarkEpochRebase {
-		var mask uint8
+		membershipChanged := false
 		for _, leg := range legs {
 			// Temporary budget fullness is readiness, not a membership epoch.
 			// Rebase only a true restriction/rejoin, never every queue/ACK turn.
 			if !leg.closed.Load() && (c.ordinaryOwnerAllowed(leg.id) || selectable[leg.id]) {
-				mask |= 1 << leg.id
+				if !c.assignedEpochReady[leg.id] {
+					membershipChanged = true
+				}
+			} else if c.assignedEpochReady[leg.id] {
+				membershipChanged = true
 			}
 		}
-		if mask != c.assignedEpochMask {
+		if membershipChanged {
 			for _, leg := range legs {
 				if weight := weights[leg.id]; weight > 0 {
 					c.assignedEpochOrigin[leg.id] = float64(c.assignedService[leg.id]) / weight
 					c.assignedEpochWeight[leg.id] = weight
+				}
+			}
+			for _, leg := range legs {
+				c.assignedEpochReady[leg.id] = !leg.closed.Load() && (c.ordinaryOwnerAllowed(leg.id) || selectable[leg.id])
+			}
+			var mask uint8
+			for id := 0; id < 2 && id < len(c.assignedEpochReady); id++ {
+				if c.assignedEpochReady[id] {
+					mask |= 1 << id
 				}
 			}
 			c.assignedEpochMask = mask
@@ -226,6 +255,9 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 			continue
 		}
 		next := float64(c.assignedService[leg.id]+uint64(len(r.Payload())))/weight - c.assignedEpochOrigin[leg.id]
+		if int(leg.id) < len(feedbackLegs) && feedbackLegs[leg.id] == leg {
+			next += pathPenalty[leg.id]
+		}
 		if best == nil || next < score || (next == score && leg.id < best.id) {
 			best, score = leg, next
 		}
@@ -253,7 +285,10 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 	if c.slowLegProtection() && !c.txLedger.assignOrdinary(r, best.id, now) {
 		return nil
 	}
-	c.ordinaryAssigned(best.id, now, len(r.Payload()))
+	if a.owner != nil && a.owner != best {
+		c.cancelPendingRecoveryProbe(a.owner.id, r.Sequence(), now)
+	}
+	c.ordinaryAssignedRecord(best.id, r, now, len(r.Payload()))
 	if c.slowLegProtection() {
 		c.admission.mu.Lock()
 		epoch := c.admission.legs[best.id].since
@@ -279,14 +314,17 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 	c.assignedService[best.id] += n
 	c.assignedRecords[best.id]++
 	if trace := c.cfg.assignmentTrace; trace != nil && trace.armed && len(trace.samples) < 1024 {
-		trace.samples = append(trace.samples, benchmarkAssignedSample{Leg: best.id, Bytes: c.assignedService,
-			Debt: float64(c.assignedService[0])/float64(c.cfg.BandwidthMbps[0]) - float64(c.assignedService[1])/float64(c.cfg.BandwidthMbps[1])})
+		var legacyBytes [2]uint64
+		copy(legacyBytes[:], c.assignedService)
+		weight0, weight1 := float64(c.weightFor(0)), float64(c.weightFor(1))
+		trace.samples = append(trace.samples, benchmarkAssignedSample{Leg: best.id, Bytes: legacyBytes,
+			Debt: float64(c.assignedService[0])/weight0 - float64(c.assignedService[1])/weight1})
 	}
 	return best
 }
 
 func (c *StreamEngine) reassignFailedPending(id uint8) {
-	if !c.assignedDecoupledEnabled() || id >= 2 {
+	if !c.assignedDecoupledEnabled() || int(id) >= len(c.pending) {
 		return
 	}
 	for {

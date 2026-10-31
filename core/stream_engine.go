@@ -1,11 +1,15 @@
 package smp3core
 
 import (
+	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,11 +20,15 @@ const (
 	frameTypeActivate byte = byte(StreamFrameActivate)
 	frameTypeAck      byte = byte(StreamFrameACK)
 	frameTypeClose    byte = byte(StreamFrameClose)
+	frameTypePathRTT  byte = byte(StreamFramePathRTT)
+	frameTypeDrain    byte = byte(StreamFrameDrain)
 	frameHeaderSize        = StreamFrameHeaderSize
 	maxFramePayload        = MaxStreamFramePayload
 )
 
 var ErrStreamClosed = errors.New("multipath core closed")
+var ErrStreamLegNotFound = errors.New("multipath leg not found")
+var ErrStreamLastLeg = errors.New("cannot drain the last active multipath leg")
 
 type StreamSchedulerMode uint8
 
@@ -142,25 +150,192 @@ type StreamConfig struct {
 	queueRejectHook            func(*streamLeg, *StreamTXRecord, bool) // deterministic test barrier; nil in production
 	rescueRejectHook           func(*StreamTXRecord, time.Time)        // test-only interleaving; nil in production
 	activateNotifyHook         func()                                  // deterministic test barrier; nil in production
+	closeTraceHook             func(streamCloseTraceEvent)             // deterministic CLOSE lifecycle trace; nil in production
+	drainBeforeRetireHook      func(*streamLeg)                        // deterministic coordinated-drain close race; nil in production
+	recoveryTraceHook          func(streamRecoveryTraceEvent) uint64   // opt-in Phase 13 causality trace; nil in production
 	ChunkSize                  int
 	QueueFrames                int
 	ThresholdBytesPS           uint64
 	ActivationWindow           time.Duration
 	BandwidthMbps              []uint32
-	MaxReorderFrames           int
-	MaxInflightFrames          int
-	AckInterval                time.Duration
-	RetransmitTimeout          time.Duration
-	RecoveryTimeout            time.Duration
-	OnActivate                 func()
-	OnLegDown                  func(uint8, error)
-	OnFutureAck                func(next, max, count uint64)
-	NotifyPeerOnActivate       bool
-	Telemetry                  *StreamTelemetry
-	StartupPolicy              StreamStartupPolicy
-	StartupPreferredLeg        LegID
-	StartupGrace               time.Duration
-	startupTimerFactory        func(time.Duration) streamStartupTimer
+	// MaxActiveLegs bounds the number of independently attached carriers in one
+	// stream session. Zero selects the safe default. LegID remains one byte on
+	// the wire, so the protocol address space is at most 256 legs.
+	MaxActiveLegs     int
+	MaxReorderFrames  int
+	MaxInflightFrames int
+	AckInterval       time.Duration
+	RetransmitTimeout time.Duration
+	RecoveryTimeout   time.Duration
+	// DrainEventObserver receives payload-free coordinated-drain transitions.
+	// It runs synchronously on the Core goroutine and must not block.
+	DrainEventObserver    func(StreamDrainEvent)
+	ExperimentalPathAware bool
+	// ExperimentalBoundedRescue is an opt-in Phase 22 experiment. No production
+	// host config maps to it, and nil preserves the frozen Policy B behavior.
+	ExperimentalBoundedRescue *StreamBoundedRescueConfig
+	rescueEventHook           func(StreamRescueEvent) // experiment/test observer; nil in ordinary operation
+	boundedRescueClock        func() time.Time        // deterministic tests only
+	PathRole                  StreamPathRole
+	OnActivate                func()
+	OnLegDown                 func(uint8, error)
+	OnFutureAck               func(next, max, count uint64)
+	NotifyPeerOnActivate      bool
+	Telemetry                 *StreamTelemetry
+	StartupPolicy             StreamStartupPolicy
+	StartupPreferredLeg       LegID
+	StartupGrace              time.Duration
+	startupTimerFactory       func(time.Duration) streamStartupTimer
+}
+
+const (
+	DefaultMaxActiveStreamLegs = 16
+	MaxStreamLegIDCount        = 256 // LegID is a uint8 on the wire.
+)
+
+func normalizeMaxActiveStreamLegs(configured int) (int, string) {
+	if configured == 0 {
+		return DefaultMaxActiveStreamLegs, ""
+	}
+	if configured < 1 || configured > MaxStreamLegIDCount {
+		return DefaultMaxActiveStreamLegs, fmt.Sprintf("max_active_legs must be between 1 and %d", MaxStreamLegIDCount)
+	}
+	return configured, ""
+}
+
+type streamCloseTraceStage uint8
+
+const (
+	streamCloseWriteResult streamCloseTraceStage = iota + 1
+	streamCloseWaitingPreferred
+	streamCloseFrameDecoded
+	streamCloseSequenceAccepted
+)
+
+type streamCloseTraceEvent struct {
+	Stage streamCloseTraceStage
+	LegID uint8
+	Seq   uint64
+	Err   error
+	At    time.Time
+}
+
+// streamRecoveryTraceEvent is a diagnostic-only event shared by Core and
+// isolated transport fixtures. The recorder assigns a total event index and
+// a monotonic elapsed timestamp. It is intentionally absent unless the test
+// configuration supplies recoveryTraceHook.
+type streamRecoveryTraceEvent struct {
+	EventIndex                  uint64                               `json:"event_index,omitempty"`
+	ElapsedNS                   int64                                `json:"elapsed_ns,omitempty"`
+	ObservedAt                  time.Time                            `json:"observed_at,omitempty"`
+	Kind                        string                               `json:"kind"`
+	Endpoint                    string                               `json:"endpoint,omitempty"`
+	RecordSequence              uint64                               `json:"record_sequence,omitempty"`
+	FrameSequence               uint64                               `json:"frame_sequence,omitempty"`
+	FrameType                   string                               `json:"frame_type,omitempty"`
+	LegID                       int16                                `json:"leg_id"`
+	PeerLegID                   int16                                `json:"peer_leg_id"`
+	LegGeneration               uint64                               `json:"leg_generation,omitempty"`
+	RecordGeneration            uint64                               `json:"record_generation,omitempty"`
+	PayloadBytes                int                                  `json:"payload_bytes,omitempty"`
+	WriteBytes                  int                                  `json:"write_bytes,omitempty"`
+	WriteResultBytes            int                                  `json:"write_result_bytes,omitempty"`
+	CarrierAcceptedPayloadBytes uint64                               `json:"carrier_accepted_payload_bytes,omitempty"`
+	AttemptStartedAt            time.Time                            `json:"attempt_started_at,omitempty"`
+	ReferenceAt                 time.Time                            `json:"reference_at,omitempty"`
+	PolicyAt                    time.Time                            `json:"policy_at,omitempty"`
+	ActionAt                    time.Time                            `json:"action_at,omitempty"`
+	StateObservedAt             time.Time                            `json:"state_observed_at,omitempty"`
+	LedgerObservedAt            time.Time                            `json:"ledger_observed_at,omitempty"`
+	Age                         time.Duration                        `json:"age_ns,omitempty"`
+	Budget                      time.Duration                        `json:"budget_ns,omitempty"`
+	StateBefore                 string                               `json:"state_before,omitempty"`
+	ReasonBefore                string                               `json:"reason_before,omitempty"`
+	StateAfter                  string                               `json:"state_after,omitempty"`
+	ReasonAfter                 string                               `json:"reason_after,omitempty"`
+	Action                      string                               `json:"action,omitempty"`
+	DecisionEventIndex          uint64                               `json:"decision_event_index,omitempty"`
+	LedgerPresent               bool                                 `json:"ledger_present,omitempty"`
+	InTransit                   bool                                 `json:"in_transit,omitempty"`
+	TransitLeg                  uint8                                `json:"transit_leg,omitempty"`
+	TransitSince                time.Time                            `json:"transit_since,omitempty"`
+	RescueInTransit             bool                                 `json:"rescue_in_transit,omitempty"`
+	RescueLeg                   uint8                                `json:"rescue_leg,omitempty"`
+	RescueSince                 time.Time                            `json:"rescue_since,omitempty"`
+	FirstWriteAt                time.Time                            `json:"first_write_at,omitempty"`
+	LastSentAt                  time.Time                            `json:"last_sent_at,omitempty"`
+	FrontierAt                  time.Time                            `json:"frontier_at,omitempty"`
+	SendCount                   uint32                               `json:"send_count,omitempty"`
+	Rescue                      bool                                 `json:"rescue,omitempty"`
+	AckedNext                   uint64                               `json:"acked_next,omitempty"`
+	RetiredFrames               int                                  `json:"retired_frames,omitempty"`
+	QueueLength                 int                                  `json:"queue_length,omitempty"`
+	QueueCapacity               int                                  `json:"queue_capacity,omitempty"`
+	Applied                     bool                                 `json:"applied,omitempty"`
+	Error                       string                               `json:"error,omitempty"`
+	ProbeServiceLow             *StreamProbeUniqueServiceLowSnapshot `json:"probe_unique_service_low,omitempty"`
+	Decision                    *streamRecoveryDecisionSnapshot      `json:"decision,omitempty"`
+}
+
+// streamRecoveryDecisionSnapshot records inputs to an opt-in slow-leg
+// decision. PredictedServiceRemaining is diagnostic only: it is derived from
+// the completed-write EWMA and never participates in recovery policy.
+type streamRecoveryDecisionSnapshot struct {
+	Trigger                       string        `json:"trigger,omitempty"`
+	BlockedWrite                  bool          `json:"blocked_write,omitempty"`
+	WriteSlow                     bool          `json:"write_slow,omitempty"`
+	PersistentLow                 bool          `json:"persistent_low,omitempty"`
+	KnownSlow                     bool          `json:"known_slow,omitempty"`
+	AlternateBlocked              bool          `json:"alternate_blocked,omitempty"`
+	AlternateNormal               bool          `json:"alternate_normal,omitempty"`
+	FrontierOverdue               bool          `json:"frontier_overdue,omitempty"`
+	CarrierWriteInProgress        bool          `json:"carrier_write_in_progress,omitempty"`
+	CarrierWriteLeg               int16         `json:"carrier_write_leg,omitempty"`
+	CarrierWriteAge               time.Duration `json:"carrier_write_age_ns,omitempty"`
+	AlternateWriteCount           uint64        `json:"alternate_write_count,omitempty"`
+	OwnWriteBPS                   float64       `json:"own_write_bps,omitempty"`
+	AlternateWriteBPS             float64       `json:"alternate_write_bps,omitempty"`
+	OwnWriteLatency               time.Duration `json:"own_write_latency_ns,omitempty"`
+	AlternateWriteLatency         time.Duration `json:"alternate_write_latency_ns,omitempty"`
+	OwnEffectiveWeight            float64       `json:"own_effective_weight,omitempty"`
+	AlternateEffectiveWeight      float64       `json:"alternate_effective_weight,omitempty"`
+	WriteStartedAt                time.Time     `json:"write_started_at,omitempty"`
+	PredictedServiceRemaining     time.Duration `json:"predicted_service_remaining_ns,omitempty"`
+	PredictedServiceEstimateBasis string        `json:"predicted_service_estimate_basis,omitempty"`
+	SuspectSince                  time.Time     `json:"suspect_since,omitempty"`
+	SuspectObservedAt             time.Time     `json:"suspect_observed_at,omitempty"`
+	AdmissionAge                  time.Duration `json:"admission_age_ns,omitempty"`
+	FrontierAge                   time.Duration `json:"frontier_age_ns,omitempty"`
+	RestrictionEligible           bool          `json:"restriction_eligible,omitempty"`
+	RescueAction                  string        `json:"rescue_action,omitempty"`
+	RescueAvoidLeg                int16         `json:"rescue_avoid_leg,omitempty"`
+}
+
+func (c *StreamEngine) traceRecoveryEvent(event streamRecoveryTraceEvent) uint64 {
+	if c == nil || c.cfg.recoveryTraceHook == nil {
+		return 0
+	}
+	if event.ObservedAt.IsZero() {
+		event.ObservedAt = time.Now()
+	}
+	return c.cfg.recoveryTraceHook(event)
+}
+
+func streamRecoveryEndpoint(role StreamPathRole) string {
+	switch role {
+	case StreamPathRoleClient:
+		return "client"
+	case StreamPathRoleServer:
+		return "server"
+	default:
+		return "unspecified"
+	}
+}
+
+func (c *StreamEngine) traceCloseEvent(stage streamCloseTraceStage, legID uint8, seq uint64, err error) {
+	if hook := c.cfg.closeTraceHook; hook != nil {
+		hook(streamCloseTraceEvent{Stage: stage, LegID: legID, Seq: seq, Err: err, At: time.Now()})
+	}
 }
 
 func (c *StreamEngine) assignedDecoupledEnabled() bool {
@@ -255,78 +430,136 @@ type StreamStats struct {
 
 	RxUniqueBytesByLeg [2]uint64
 	RxDeliveredBytes   uint64
+	RxAckNext          uint64 // next receive DATA sequence advertised by cumulative ACK
 	RxPendingFrames    int
 	RxPendingBytes     uint64
 	RxGapAge           time.Duration
 	RxMaxPendingFrames int
 	RxMaxGapAge        time.Duration
 
-	LegUp                      [2]bool
-	Telemetry                  StreamTelemetryStats
-	CapacityRawBPS             [2]float64
-	CapacitySmoothedBPS        [2]float64
-	CapacityConfidence         [2]float64
-	CapacityValid              [2]bool
-	CapacityDemand             [2]bool
-	CapacityLastSample         [2]time.Time
-	CapacitySampleReason       [2]string
-	CapacitySampleAge          [2]time.Duration
-	OrdinaryEffectiveWeight    [2]float64 // zero when current ordinary admission is not eligible
-	CapacityWeight             [2]float64
-	CapacityPending            [2]int64
-	CapacityAssignmentShare    [2]float64
-	OrdinaryAssignedBytes      [2]uint64 // cumulative initial ordinary allocations; no epoch reset or copies/migrations
-	OrdinaryOutstandingFrames  [2]int
-	OrdinaryOutstandingBytes   [2]uint64
-	OrdinaryPendingBytes       [2]uint64 // includes planner/feeder held pre-admission records
-	OrdinaryProbeLimit         [2]int
-	OrdinaryProbeByteLimit     [2]uint64
-	OrdinaryProofBytes         [2]uint64
-	OrdinaryProbeServiceBPS    [2]float64
-	OrdinarySessionServiceBPS  [2]float64
-	OrdinaryFeedbackEnvelopeNS [2]int64
-	OrdinaryAdmissionState     [2]string
-	OrdinaryAdmissionReason    [2]string
-	OrdinaryAdmissionSince     [2]time.Time
-	OrdinaryProbeAfter         [2]time.Time
-	LegGeneration              [2]uint64
-	ActivationDemandBPS        float64
-	ActivationCapacityBPS      float64
-	ActivationConfidence       float64
-	ActivationOverloadRatio    float64
-	ActivationOverloadAge      time.Duration
-	ActivationReason           string
-	HOLCorrections             uint64
-	HOLFrontierCandidates      uint64
-	HOLPredictedEarlier        uint64
-	HOLMaxCorrectionStreak     uint64
+	LegUp                            [2]bool
+	Telemetry                        StreamTelemetryStats
+	CapacityRawBPS                   [2]float64
+	CapacitySmoothedBPS              [2]float64
+	CapacityConfidence               [2]float64
+	CapacityValid                    [2]bool
+	CapacityDemand                   [2]bool
+	CapacityLastSample               [2]time.Time
+	CapacitySampleReason             [2]string
+	CapacitySampleAge                [2]time.Duration
+	OrdinaryEffectiveWeight          [2]float64 // zero when current ordinary admission is not eligible
+	CapacityWeight                   [2]float64
+	CapacityPending                  [2]int64
+	CapacityAssignmentShare          [2]float64
+	OrdinaryAssignedBytes            [2]uint64 // cumulative initial ordinary allocations; no epoch reset or copies/migrations
+	OrdinaryOutstandingFrames        [2]int
+	OrdinaryOutstandingBytes         [2]uint64
+	OrdinaryPendingBytes             [2]uint64 // includes planner/feeder held pre-admission records
+	OrdinaryProbeLimit               [2]int
+	OrdinaryProbeByteLimit           [2]uint64
+	OrdinaryProofBytes               [2]uint64
+	OrdinaryProbeServiceBPS          [2]float64
+	OrdinarySessionServiceBPS        [2]float64
+	OrdinaryFeedbackEnvelopeNS       [2]int64
+	OrdinaryAdmissionState           [2]string
+	OrdinaryAdmissionReason          [2]string
+	OrdinaryAdmissionSince           [2]time.Time
+	OrdinaryProbeAfter               [2]time.Time
+	OrdinaryRecoveryEpoch            [2]uint64
+	LegGeneration                    [2]uint64
+	ActivationDemandBPS              float64
+	ActivationCapacityBPS            float64
+	ActivationConfidence             float64
+	ActivationOverloadRatio          float64
+	ActivationOverloadAge            time.Duration
+	ActivationReason                 string
+	HOLCorrections                   uint64
+	HOLFrontierCandidates            uint64
+	HOLPredictedEarlier              uint64
+	HOLMaxCorrectionStreak           uint64
+	Phase19PolicyARescueSuppressions uint64 // experimental diagnostic; zero in the default candidate
+	BoundedRescue                    StreamBoundedRescueStats
+	// Legs contains the N-leg view. The fixed arrays above remain compatibility
+	// mirrors for the first two protocol leg IDs.
+	Legs []StreamLegStats
+}
+
+type StreamLegStats struct {
+	LegID                                                                                   uint8
+	Up                                                                                      bool
+	Generation                                                                              uint64
+	OutstandingFrames                                                                       int
+	OldestOutstanding                                                                       time.Duration
+	TxWrittenBytes, TxRetryWrittenBytes, TxSentBytes, TxAckedUsefulBytes, TxRetransmitBytes uint64
+	RxUniqueBytes                                                                           uint64
+	CapacityRawBPS, CapacitySmoothedBPS, CapacityConfidence                                 float64
+	CapacityValid, CapacityDemand                                                           bool
+	CapacityLastSample                                                                      time.Time
+	CapacitySampleReason                                                                    string
+	CapacitySampleAge                                                                       time.Duration
+	CapacityWeight, OrdinaryEffectiveWeight                                                 float64
+	CapacityPending                                                                         int64
+	CapacityAssignmentShare                                                                 float64
+	OrdinaryAssignedBytes                                                                   uint64
+	OrdinaryOutstandingFrames                                                               int
+	OrdinaryOutstandingBytes, OrdinaryPendingBytes                                          uint64
+	OrdinaryProbeLimit                                                                      int
+	OrdinaryProbeByteLimit, OrdinaryProofBytes                                              uint64
+	OrdinaryProbeServiceBPS, OrdinarySessionServiceBPS                                      float64
+	OrdinaryFeedbackEnvelopeNS                                                              int64
+	OrdinaryAdmissionState, OrdinaryAdmissionReason                                         string
+	OrdinaryAdmissionSince, OrdinaryProbeAfter                                              time.Time
+	OrdinaryRecoveryEpoch                                                                   uint64
 }
 
 type dataFrame struct {
-	seq  uint64
-	data []byte
-	leg  uint8
+	seq        uint64
+	data       []byte
+	leg        uint8
+	generation uint64
+	readAt     time.Time
 }
 
 type txSendAttempt struct {
-	record   *StreamTXRecord
-	rescue   bool
-	queuedNs int64
-	ordinary bool
-	started  time.Time // identity of this ledger attempt, not a generation-wide cancellation
+	record                   *StreamTXRecord
+	rescue                   bool
+	rescueCandidateID        uint64
+	queuedNs                 int64
+	ordinary                 bool
+	started                  time.Time // identity of this ledger attempt, not a generation-wide cancellation
+	rescueClass              StreamRescueClass
+	boundedRescueReservation uint64
+}
+
+const streamRescueCandidateAckLinksPerRecord = 64
+
+type streamRescueCandidateAckLink struct {
+	candidateID uint64
+	class       StreamRescueClass
 }
 
 type legControl struct {
 	typ   byte
 	value uint64
+	data  []byte
 	done  chan error
 }
 
 type streamLeg struct {
 	writeStartedNs atomic.Int64
 	activateQueued atomic.Bool
+	draining       atomic.Bool
+	dispatchMu     sync.RWMutex
+	priorMbps      atomic.Uint32
 	id             uint8
+	generation     uint64
 	conn           StreamLeg
+	pathBinding    StreamPathBinding
+	pathIdentity   StreamPathIdentity
+	pathRTTEnabled bool
+	drainAuth      StreamPathAuth
+	drainBinding   [16]byte
+	drainEnabled   bool
 	send           chan txSendAttempt
 	rescue         chan txSendAttempt
 	control        chan legControl
@@ -375,16 +608,34 @@ type wireFrame struct {
 }
 
 type StreamEngine struct {
-	txAckedTotal          atomic.Uint64
-	ordinaryAssignedBytes [2]atomic.Uint64
-	txWrittenBytes        [2]atomic.Uint64
-	txRetryWrittenBytes   [2]atomic.Uint64
-	admission             streamAdmission
-	legGeneration         [2]atomic.Uint64
-	cfg                   StreamConfig
-	telemetry             *StreamTelemetry
-	appConn               net.Conn
-	pipeConn              net.Conn
+	txAckedTotal              atomic.Uint64
+	rescueCandidateSequence   atomic.Uint64
+	rescueObservationStart    time.Time
+	rescueCandidateAckMu      sync.Mutex
+	rescueCandidateAckLinks   map[uint64][]streamRescueCandidateAckLink
+	rescueCandidateAckDropped atomic.Uint64
+	maxActiveLegs             int
+	configError               string
+	ordinaryAssignedBytes     []atomic.Uint64
+	txWrittenBytes            []atomic.Uint64
+	txRetryWrittenBytes       []atomic.Uint64
+	admission                 streamAdmission
+	legGeneration             []atomic.Uint64
+	cfg                       StreamConfig
+	boundedRescue             *streamBoundedRescueBudget
+	boundedRescueConfigError  string
+	pathRTTCache              *streamRTTProbeCache
+	pathSessionID             SessionID
+	pathSessionSet            bool
+	drainSessionID            SessionID
+	drainSessionSet           bool
+	drainMu                   sync.Mutex
+	drainOps                  map[uint8]*streamDrainOperation
+	drainRemoteHighWater      map[streamDrainReplayKey]uint64
+	drainOperationCounter     atomic.Uint64
+	telemetry                 *StreamTelemetry
+	appConn                   net.Conn
+	pipeConn                  net.Conn
 
 	// lifecycleMu serializes the transition into FINALIZING/DONE with leg
 	// attachment. ACTIVE and graceful CLOSING still accept transport repair;
@@ -438,63 +689,65 @@ type StreamEngine struct {
 	ackForce  atomic.Bool
 	ackWakeCh chan struct{}
 
-	txSentBytes            [2]atomic.Uint64
-	txAckedUseful          [2]atomic.Uint64
-	txAckedNext            atomic.Uint64
-	txRetransmitBytes      [2]atomic.Uint64
-	frontierRescueAttempts atomic.Uint64
-	debugRescueChecks      atomic.Uint64
-	debugRescueOverdue     atomic.Uint64
-	debugRescuePlans       atomic.Uint64
-	rxUniqueBytes          [2]atomic.Uint64
-	rxDeliveredBytes       atomic.Uint64
-	rxPendingFrames        atomic.Int64
-	rxPendingBytes         atomic.Uint64
-	rxGapSinceUnixNs       atomic.Int64
-	rxMaxPendingFrames     atomic.Int64
-	rxMaxGapAgeNs          atomic.Int64
-	lastAckProgressNs      atomic.Int64
-	debugLastAckFrameNs    atomic.Int64
-	debugLastAckValue      atomic.Uint64
-	debugAckAdvances       atomic.Uint64
-	debugAckRetiredRecords atomic.Uint64
-	debugAckRetiredBytes   atomic.Uint64
-	debugLastAdmissionNs   atomic.Int64
-	debugLastDispatchNs    atomic.Int64
-	debugNewDispatches     atomic.Uint64
-	debugRetryScheduled    atomic.Uint64
-	debugRetryDispatches   atomic.Uint64
-	debugRetryRejects      atomic.Uint64
-	debugRescueDispatches  atomic.Uint64
-	debugRescueRejects     atomic.Uint64
-	benchmarkFixedDispatch atomic.Uint64
-	debugPrimarySuccess    atomic.Uint64
-	debugPrimaryFailure    atomic.Uint64
-	debugFallbackAttempts  atomic.Uint64
-	debugFallbackSuccess   atomic.Uint64
-	debugSpaceWakeEntries  atomic.Uint64
-	debugSpaceWakeWaitNs   atomic.Uint64
-	weightedMu             sync.Mutex
-	capacity               *streamCapacityEstimator
-	capacityProvider       StreamCapacityProvider
-	weightedFinish         [2]float64
-	assignedService        [2]uint64
-	assignedRecords        [2]uint64
-	assignedEpochMask      uint8
-	assignedEpochOrigin    [2]float64
-	assignedEpochWeight    [2]float64
-	pending                [2]chan *StreamTXRecord
-	pendingDepth           [2]atomic.Int64
-	pendingMax             [2]atomic.Int64
-	pendingFullWaitNs      [2]atomic.Uint64
-	plannerPendingWaitNs   atomic.Uint64
-	feederBlockedWaitNs    [2]atomic.Uint64
-	decoupledWake          [3]chan struct{}
-	decoupledStats         benchmarkAssignmentStats
-	readyStateDecisions    [4]atomic.Uint64 // both, low-only, high-only, none
-	readyRaceFailures      atomic.Uint64
-	debugRXExpected        atomic.Uint64
-	debugRXHighest         atomic.Uint64
+	txSentBytes                      []atomic.Uint64
+	txAckedUseful                    []atomic.Uint64
+	txAckedNext                      atomic.Uint64
+	txRetransmitBytes                []atomic.Uint64
+	frontierRescueAttempts           atomic.Uint64
+	phase19PolicyARescueSuppressions atomic.Uint64
+	debugRescueChecks                atomic.Uint64
+	debugRescueOverdue               atomic.Uint64
+	debugRescuePlans                 atomic.Uint64
+	rxUniqueBytes                    []atomic.Uint64
+	rxDeliveredBytes                 atomic.Uint64
+	rxPendingFrames                  atomic.Int64
+	rxPendingBytes                   atomic.Uint64
+	rxGapSinceUnixNs                 atomic.Int64
+	rxMaxPendingFrames               atomic.Int64
+	rxMaxGapAgeNs                    atomic.Int64
+	lastAckProgressNs                atomic.Int64
+	debugLastAckFrameNs              atomic.Int64
+	debugLastAckValue                atomic.Uint64
+	debugAckAdvances                 atomic.Uint64
+	debugAckRetiredRecords           atomic.Uint64
+	debugAckRetiredBytes             atomic.Uint64
+	debugLastAdmissionNs             atomic.Int64
+	debugLastDispatchNs              atomic.Int64
+	debugNewDispatches               atomic.Uint64
+	debugRetryScheduled              atomic.Uint64
+	debugRetryDispatches             atomic.Uint64
+	debugRetryRejects                atomic.Uint64
+	debugRescueDispatches            atomic.Uint64
+	debugRescueRejects               atomic.Uint64
+	benchmarkFixedDispatch           atomic.Uint64
+	debugPrimarySuccess              atomic.Uint64
+	debugPrimaryFailure              atomic.Uint64
+	debugFallbackAttempts            atomic.Uint64
+	debugFallbackSuccess             atomic.Uint64
+	debugSpaceWakeEntries            atomic.Uint64
+	debugSpaceWakeWaitNs             atomic.Uint64
+	weightedMu                       sync.Mutex
+	capacity                         *streamCapacityEstimator
+	capacityProvider                 StreamCapacityProvider
+	weightedFinish                   []float64
+	assignedService                  []uint64
+	assignedRecords                  []uint64
+	assignedEpochReady               []bool
+	assignedEpochMask                uint8 // legacy first-two membership mirror for tests/telemetry
+	assignedEpochOrigin              []float64
+	assignedEpochWeight              []float64
+	pending                          []chan *StreamTXRecord
+	pendingDepth                     []atomic.Int64
+	pendingMax                       []atomic.Int64
+	pendingFullWaitNs                []atomic.Uint64
+	plannerPendingWaitNs             atomic.Uint64
+	feederBlockedWaitNs              []atomic.Uint64
+	decoupledWake                    [3]chan struct{}
+	decoupledStats                   benchmarkAssignmentStats
+	readyStateDecisions              [4]atomic.Uint64 // both, low-only, high-only, none
+	readyRaceFailures                atomic.Uint64
+	debugRXExpected                  atomic.Uint64
+	debugRXHighest                   atomic.Uint64
 
 	// recoveryEpoch invalidates stale "no legs" recovery timers. A temporary
 	// recovery followed by a later outage must get a fresh RecoveryTimeout, not
@@ -505,6 +758,14 @@ type StreamEngine struct {
 }
 
 func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
+	maxActiveLegs, configError := normalizeMaxActiveStreamLegs(cfg.MaxActiveLegs)
+	cfg.MaxActiveLegs = maxActiveLegs
+	if int(cfg.StartupPreferredLeg) >= maxActiveLegs {
+		configError = fmt.Sprintf("startup_preferred_leg must be less than max_active_legs (%d)", maxActiveLegs)
+	}
+	if cfg.ExperimentalBoundedRescue != nil && cfg.ExperimentalBoundedRescue.Enabled && maxActiveLegs > 2 {
+		configError = "bounded rescue currently supports at most two active legs"
+	}
 	if cfg.SchedulerMode == StreamSchedulerAggregation {
 		// Production aggregation is an explicit mode. Keep the older benchmark
 		// switches as internal implementation flags so existing static/adaptive
@@ -543,56 +804,115 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 	}
 	appConn, pipeConn := net.Pipe()
 	c := &StreamEngine{
-		cfg:              cfg,
-		telemetry:        cfg.Telemetry,
-		appConn:          appConn,
-		pipeConn:         pipeConn,
-		legs:             make(map[uint8]*streamLeg),
-		retiring:         make(map[uint8]*streamLeg),
-		incoming:         make(chan dataFrame, cfg.QueueFrames*2),
-		done:             make(chan struct{}),
-		txStopped:        make(chan struct{}),
-		gracefulCh:       make(chan struct{}),
-		activeCh:         make(chan struct{}),
-		txLedger:         NewStreamTXLedger(),
-		inflight:         make(chan struct{}, cfg.MaxInflightFrames),
-		retryCh:          make(chan struct{}, 1),
-		spaceWake:        make(chan streamSpaceNotification, 1),
-		frontierRescueCh: make(chan struct{}, 1),
-		ackWakeCh:        make(chan struct{}, 1),
+		cfg:                   cfg,
+		maxActiveLegs:         maxActiveLegs,
+		configError:           configError,
+		ordinaryAssignedBytes: make([]atomic.Uint64, maxActiveLegs),
+		txWrittenBytes:        make([]atomic.Uint64, maxActiveLegs),
+		txRetryWrittenBytes:   make([]atomic.Uint64, maxActiveLegs),
+		legGeneration:         make([]atomic.Uint64, maxActiveLegs),
+		txSentBytes:           make([]atomic.Uint64, maxActiveLegs),
+		txAckedUseful:         make([]atomic.Uint64, maxActiveLegs),
+		txRetransmitBytes:     make([]atomic.Uint64, maxActiveLegs),
+		rxUniqueBytes:         make([]atomic.Uint64, maxActiveLegs),
+		weightedFinish:        make([]float64, maxActiveLegs),
+		assignedService:       make([]uint64, maxActiveLegs),
+		assignedRecords:       make([]uint64, maxActiveLegs),
+		assignedEpochReady:    make([]bool, maxActiveLegs),
+		assignedEpochOrigin:   make([]float64, maxActiveLegs),
+		assignedEpochWeight:   make([]float64, maxActiveLegs),
+		pending:               make([]chan *StreamTXRecord, maxActiveLegs),
+		pendingDepth:          make([]atomic.Int64, maxActiveLegs),
+		pendingMax:            make([]atomic.Int64, maxActiveLegs),
+		pendingFullWaitNs:     make([]atomic.Uint64, maxActiveLegs),
+		feederBlockedWaitNs:   make([]atomic.Uint64, maxActiveLegs),
+		decoupledStats: benchmarkAssignmentStats{
+			admitted:    make([]atomic.Uint64, maxActiveLegs),
+			feederHeld:  make([]atomic.Int64, maxActiveLegs),
+			feedersDone: make([]chan struct{}, maxActiveLegs),
+		},
+		admission:              streamAdmission{legs: make([]streamAdmissionLeg, maxActiveLegs)},
+		rescueObservationStart: time.Now(),
+		telemetry:              cfg.Telemetry,
+		appConn:                appConn,
+		pipeConn:               pipeConn,
+		legs:                   make(map[uint8]*streamLeg),
+		retiring:               make(map[uint8]*streamLeg),
+		drainOps:               make(map[uint8]*streamDrainOperation),
+		drainRemoteHighWater:   make(map[streamDrainReplayKey]uint64),
+		incoming:               make(chan dataFrame, cfg.QueueFrames*2),
+		done:                   make(chan struct{}),
+		txStopped:              make(chan struct{}),
+		gracefulCh:             make(chan struct{}),
+		activeCh:               make(chan struct{}),
+		txLedger:               newStreamTXLedger(maxActiveLegs),
+		inflight:               make(chan struct{}, cfg.MaxInflightFrames),
+		retryCh:                make(chan struct{}, 1),
+		spaceWake:              make(chan streamSpaceNotification, 1),
+		frontierRescueCh:       make(chan struct{}, 1),
+		ackWakeCh:              make(chan struct{}, 1),
+	}
+	if cfg.ExperimentalBoundedRescue != nil && cfg.ExperimentalBoundedRescue.Enabled {
+		manager, err := newStreamBoundedRescueBudget(*cfg.ExperimentalBoundedRescue, uint64(cfg.ChunkSize), cfg.boundedRescueClock, cfg.rescueEventHook)
+		if err != nil {
+			c.boundedRescueConfigError = err.Error()
+		} else {
+			manager.monotonicStart = c.rescueObservationStart
+			c.boundedRescue = manager
+		}
+	}
+	if cfg.recoveryTraceHook != nil {
+		c.txLedger.recoveryTraceHook = func(event streamRecoveryTraceEvent) uint64 {
+			event.Endpoint = streamRecoveryEndpoint(cfg.PathRole)
+			if event.LegID >= 0 && event.LegID < int16(len(c.legGeneration)) {
+				event.LegGeneration = c.legGeneration[event.LegID].Load()
+			}
+			return cfg.recoveryTraceHook(event)
+		}
+	}
+	if cfg.ExperimentalPathAware && (cfg.PathRole == StreamPathRoleClient || cfg.PathRole == StreamPathRoleServer) {
+		c.pathRTTCache = newStreamRTTProbeCacheForLegs(maxActiveLegs)
 	}
 	if cfg.SchedulerMode == StreamSchedulerAggregation && (cfg.CapacityMode == StreamCapacityDynamic || cfg.CapacityProvider != nil) {
 		if cfg.CapacityProvider != nil {
 			c.capacityProvider = cfg.CapacityProvider
 		} else {
-			c.capacity = newStreamCapacityEstimator(cfg.BandwidthMbps, cfg.ChunkSize)
+			c.capacity = newStreamCapacityEstimatorForLegs(cfg.BandwidthMbps, cfg.ChunkSize, maxActiveLegs)
 			c.capacityProvider = c.capacity
 		}
 		if cfg.CapacityMode == StreamCapacityDynamic {
-			_, estimate, confidence, valid, _, _ := c.capacityProvider.Telemetry()
-			now := time.Now()
-			for id := range estimate {
-				c.admission.legs[id].since = now
-				c.admission.legs[id].reason = "initial"
-				prior := float64(c.weightFor(uint8(id))) * 1e6 / 8
-				if valid[id] && confidence[id] >= .5 && estimate[id] < prior*.25 {
-					c.admission.legs[id] = streamAdmissionLeg{restricted: true, since: now, nextProbe: now.Add(streamRestrictionCooldown), reason: "warm_low_capacity"}
+			if dynamic, ok := c.capacityProvider.(StreamCapacityProviderN); ok {
+				rows := dynamic.TelemetryByLeg()
+				now := time.Now()
+				for _, row := range rows {
+					id := int(row.LegID)
+					if id >= len(c.admission.legs) {
+						continue
+					}
+					c.admission.legs[id].since = now
+					c.admission.legs[id].reason = "initial"
+					prior := float64(c.weightFor(uint8(id))) * 1e6 / 8
+					if row.Valid && row.Confidence >= .5 && row.EstimateBPS < prior*.25 {
+						c.admission.legs[id] = streamAdmissionLeg{restricted: true, since: now, nextProbe: now.Add(streamRestrictionCooldown), reason: "warm_low_capacity", recoveryEpoch: 1}
+					}
+				}
+			} else {
+				_, estimate, confidence, valid, _, _ := c.capacityProvider.Telemetry()
+				now := time.Now()
+				for id := range estimate {
+					c.admission.legs[id].since = now
+					c.admission.legs[id].reason = "initial"
+					prior := float64(c.weightFor(uint8(id))) * 1e6 / 8
+					if valid[id] && confidence[id] >= .5 && estimate[id] < prior*.25 {
+						c.admission.legs[id] = streamAdmissionLeg{restricted: true, since: now, nextProbe: now.Add(streamRestrictionCooldown), reason: "warm_low_capacity", recoveryEpoch: 1}
+					}
 				}
 			}
 		}
 	}
 	if cfg.BenchmarkAssignedDecoupled || cfg.SchedulerMode == StreamSchedulerAggregation {
-		depth := cfg.BenchmarkPendingFrames
-		if depth <= 0 {
-			depth = 32
-		}
 		for id := range c.decoupledWake {
 			c.decoupledWake[id] = make(chan struct{}, 1)
-		}
-		for id := 0; id < 2; id++ {
-			c.pending[id] = make(chan *StreamTXRecord, depth)
-			c.decoupledStats.feedersDone[id] = make(chan struct{})
-			go c.pendingFeeder(uint8(id))
 		}
 	}
 	c.startup = newStreamStartupGate(cfg)
@@ -613,8 +933,68 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 	return c, appConn
 }
 
+func (c *StreamEngine) emitRescueObservation(event StreamRescueEvent) {
+	if c == nil || c.cfg.rescueEventHook == nil {
+		return
+	}
+	if !c.rescueObservationStart.IsZero() {
+		event.MonotonicElapsedNS = time.Since(c.rescueObservationStart).Nanoseconds()
+		event.MonotonicTimeValid = true
+	}
+	c.cfg.rescueEventHook(event)
+}
+
 func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) error {
+	return c.attachLeg(id, conn, onClose, nil, 0)
+}
+
+// AttachLegWithBandwidthPrior attaches a new generation with its configured
+// scheduler prior already installed, before the leg becomes visible to the
+// assignment loop.
+func (c *StreamEngine) AttachLegWithBandwidthPrior(id LegID, conn StreamLeg, onClose func(error), mbps uint32) error {
+	return c.attachLeg(id, conn, onClose, nil, mbps)
+}
+
+// AttachLegWithPathAuth attaches a stream leg whose Version6 READY exchange
+// was authenticated by Core. The handle contains no caller-readable key.
+func (c *StreamEngine) AttachLegWithPathAuth(id LegID, conn StreamLeg, onClose func(error), auth StreamPathAuth) error {
+	return c.AttachLegWithProtocolAuth(id, conn, onClose, auth)
+}
+
+// AttachLegWithProtocolAuth attaches a carrier after an authenticated Version6
+// or Version7 READY exchange. RTT and coordinated drain are independent
+// negotiated capabilities; each is enabled only when selected by the peer.
+func (c *StreamEngine) AttachLegWithProtocolAuth(id LegID, conn StreamLeg, onClose func(error), auth StreamPathAuth) error {
+	if auth.PathRTTEnabled() && (!c.cfg.ExperimentalPathAware || c.pathRTTCache == nil) {
+		return ErrStreamPathNegotiation
+	}
+	if !auth.PathRTTEnabled() && !auth.CoordinatedDrainEnabled() {
+		return ErrStreamPathNegotiation
+	}
+	return c.attachLeg(id, conn, onClose, &auth, 0)
+}
+
+// AttachLegWithPathAuthAndBandwidthPrior is the authenticated-RTT counterpart
+// of AttachLegWithBandwidthPrior. Both the path identity and scheduler prior
+// are installed before the generation is published.
+func (c *StreamEngine) AttachLegWithPathAuthAndBandwidthPrior(id LegID, conn StreamLeg, onClose func(error), auth StreamPathAuth, mbps uint32) error {
+	if auth.PathRTTEnabled() && (!c.cfg.ExperimentalPathAware || c.pathRTTCache == nil) {
+		return ErrStreamPathNegotiation
+	}
+	if !auth.PathRTTEnabled() && !auth.CoordinatedDrainEnabled() {
+		return ErrStreamPathNegotiation
+	}
+	return c.attachLeg(id, conn, onClose, &auth, mbps)
+}
+
+func (c *StreamEngine) attachLeg(id LegID, conn StreamLeg, onClose func(error), auth *StreamPathAuth, priorMbps uint32) error {
 	id8 := uint8(id)
+	if c.configError != "" {
+		return errors.New(c.configError)
+	}
+	if int(id8) >= c.maxActiveLegs {
+		return errInvalidLeg
+	}
 	for {
 		c.lifecycleMu.Lock()
 		if c.finalizing.Load() {
@@ -648,30 +1028,136 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 				return ErrStreamClosed
 			}
 		}
+		previousGeneration := c.legGeneration[id8].Load()
+		if previousGeneration == ^uint64(0) {
+			c.legsMu.Unlock()
+			c.lifecycleMu.Unlock()
+			return ErrStreamRTTGenerationReuse
+		}
+		generation := previousGeneration + 1
+		var pathBinding StreamPathBinding
+		var pathIdentity StreamPathIdentity
+		pathRTTEnabled := auth != nil && auth.PathRTTEnabled()
+		drainEnabled := auth != nil && auth.CoordinatedDrainEnabled()
+		if auth != nil && !pathRTTEnabled && !drainEnabled {
+			c.legsMu.Unlock()
+			c.lifecycleMu.Unlock()
+			return ErrStreamPathNegotiation
+		}
+		if pathRTTEnabled && (!c.cfg.ExperimentalPathAware || c.pathRTTCache == nil) {
+			c.legsMu.Unlock()
+			c.lifecycleMu.Unlock()
+			return ErrStreamPathNegotiation
+		}
+		if pathRTTEnabled {
+			localDirection, _, ok := c.pathDirections()
+			if !ok {
+				c.legsMu.Unlock()
+				c.lifecycleMu.Unlock()
+				return ErrStreamPathRole
+			}
+			if c.pathSessionSet && c.pathSessionID != auth.sessionID {
+				c.legsMu.Unlock()
+				c.lifecycleMu.Unlock()
+				return ErrStreamPathMessage
+			}
+			pathBinding = StreamPathBinding{
+				SessionID: auth.sessionID, LegID: id, CarrierID: fmt.Sprintf("%x/%d/%d", auth.sessionID, id8, generation),
+				Generation: generation,
+			}
+			if !auth.validFor(pathBinding) {
+				c.legsMu.Unlock()
+				c.lifecycleMu.Unlock()
+				return ErrStreamPathMessage
+			}
+			if err := c.pathRTTCache.bindLeg(pathBinding, *auth); err != nil {
+				c.legsMu.Unlock()
+				c.lifecycleMu.Unlock()
+				return err
+			}
+			c.pathSessionID = auth.sessionID
+			c.pathSessionSet = true
+			pathIdentity = StreamPathIdentity{
+				SessionID: auth.sessionID, LegID: id, CarrierID: pathBinding.CarrierID,
+				Generation: generation, Direction: localDirection,
+			}
+			c.pathRTTCache.recordHandshakeSample(pathBinding, pathIdentity, *auth)
+		}
+		if drainEnabled {
+			if c.drainSessionSet && c.drainSessionID != auth.sessionID {
+				c.legsMu.Unlock()
+				c.lifecycleMu.Unlock()
+				return ErrStreamDrainMessage
+			}
+			if auth.drainBinding == ([16]byte{}) {
+				c.legsMu.Unlock()
+				c.lifecycleMu.Unlock()
+				return ErrStreamDrainMessage
+			}
+			c.drainSessionID = auth.sessionID
+			c.drainSessionSet = true
+		}
+		var drainAuth StreamPathAuth
+		var drainBinding [16]byte
+		if auth != nil {
+			drainAuth = *auth
+			drainBinding = auth.drainBinding
+		}
 
 		leg := &streamLeg{
-			id:      id8,
-			conn:    conn,
-			send:    make(chan txSendAttempt, c.cfg.QueueFrames),
-			rescue:  make(chan txSendAttempt, 8),
-			control: make(chan legControl, 8),
-			ackWake: make(chan struct{}, 1),
-			onClose: onClose,
-			done:    make(chan struct{}),
-			retired: make(chan struct{}),
+			id:             id8,
+			generation:     generation,
+			conn:           conn,
+			pathBinding:    pathBinding,
+			pathIdentity:   pathIdentity,
+			pathRTTEnabled: pathRTTEnabled,
+			drainAuth:      drainAuth,
+			drainBinding:   drainBinding,
+			drainEnabled:   drainEnabled,
+			send:           make(chan txSendAttempt, c.cfg.QueueFrames),
+			rescue:         make(chan txSendAttempt, 8),
+			control:        make(chan legControl, 8),
+			ackWake:        make(chan struct{}, 1),
+			onClose:        onClose,
+			done:           make(chan struct{}),
+			retired:        make(chan struct{}),
+		}
+		if priorMbps > 0 {
+			leg.priorMbps.Store(priorMbps)
+		} else if int(id8) < len(c.cfg.BandwidthMbps) && c.cfg.BandwidthMbps[id8] > 0 {
+			leg.priorMbps.Store(c.cfg.BandwidthMbps[id8])
+		} else {
+			leg.priorMbps.Store(1)
 		}
 		leg.workers.Add(2)
+		if pathRTTEnabled {
+			leg.workers.Add(1)
+		}
 		c.legs[id8] = leg
-		c.legGeneration[id8].Add(1)
-		c.admissionRejoined(id8, time.Now())
+		startFeeder := c.assignedDecoupledEnabled() && c.pending[id8] == nil
+		if startFeeder {
+			depth := c.cfg.BenchmarkPendingFrames
+			if depth <= 0 {
+				depth = 32
+			}
+			c.pending[id8] = make(chan *StreamTXRecord, depth)
+			c.decoupledStats.feedersDone[id8] = make(chan struct{})
+		}
+		c.admissionRejoined(id8, generation, time.Now())
 		if c.capacityProvider != nil {
 			c.capacityProvider.Reset(id8, time.Now())
 		}
-		if c.cfg.wakeTelemetry != nil && id8 < 2 {
-			c.cfg.wakeTelemetry.legs[id8] = leg
+		if c.cfg.wakeTelemetry != nil {
+			c.cfg.wakeTelemetry.setLeg(id8, leg)
 		}
 		c.legsMu.Unlock()
 		c.lifecycleMu.Unlock()
+		if startFeeder {
+			go c.pendingFeeder(id8)
+		}
+		if pathRTTEnabled {
+			c.queuePathRTTProbe(leg)
+		}
 
 		// Any successful join/rejoin cancels an older zero-leg recovery deadline.
 		c.recoveryEpoch.Add(1)
@@ -683,6 +1169,12 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 			defer leg.workers.Done()
 			c.legReadLoop(leg)
 		}()
+		if pathRTTEnabled {
+			go func() {
+				defer leg.workers.Done()
+				c.pathRTTProbeLoop(leg)
+			}()
+		}
 		if c.telemetry != nil {
 			c.telemetry.markStartupAttached(id8, time.Now())
 		}
@@ -695,6 +1187,90 @@ func (c *StreamEngine) AttachLeg(id LegID, conn StreamLeg, onClose func(error)) 
 		}
 		return nil
 	}
+}
+
+func (c *StreamEngine) pathDirections() (local, peer StreamRTTDirection, ok bool) {
+	switch c.cfg.PathRole {
+	case StreamPathRoleClient:
+		return StreamRTTClientToServer, StreamRTTServerToClient, true
+	case StreamPathRoleServer:
+		return StreamRTTServerToClient, StreamRTTClientToServer, true
+	default:
+		return 0, 0, false
+	}
+}
+
+func (c *StreamEngine) queuePathRTTProbe(leg *streamLeg) bool {
+	if leg == nil || !leg.pathRTTEnabled || c.pathRTTCache == nil {
+		return false
+	}
+	token, wire, err := c.pathRTTCache.startProbe(leg.pathIdentity)
+	if err != nil {
+		return false
+	}
+	select {
+	case leg.control <- legControl{typ: frameTypePathRTT, data: wire}:
+		return true
+	case <-leg.done:
+		c.pathRTTCache.cancelProbe(leg.pathIdentity, token)
+		return false
+	default:
+		c.pathRTTCache.cancelProbe(leg.pathIdentity, token)
+		return false
+	}
+}
+
+func (c *StreamEngine) pathRTTProbeLoop(leg *streamLeg) {
+	ticker := time.NewTicker(streamRTTProbeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-leg.done:
+			return
+		case <-ticker.C:
+			c.pathRTTCache.expirePending()
+			c.queuePathRTTProbe(leg)
+		}
+	}
+}
+
+func (c *StreamEngine) handlePathRTTFrame(leg *streamLeg, wire []byte) error {
+	if !leg.pathRTTEnabled || c.pathRTTCache == nil {
+		return ErrStreamPathNegotiation
+	}
+	_, peerDirection, ok := c.pathDirections()
+	if !ok {
+		return ErrStreamPathRole
+	}
+	if len(wire) != StreamRTTMessageSize {
+		return ErrStreamPathMessage
+	}
+	switch StreamRTTMessageKind(wire[9]) {
+	case StreamRTTProbe:
+		echo, err := c.pathRTTCache.acceptProbe(leg.pathBinding, peerDirection, wire)
+		if err != nil {
+			return fmt.Errorf("accept same-carrier RTT probe: %w", err)
+		}
+		select {
+		case leg.control <- legControl{typ: frameTypePathRTT, data: echo}:
+		default:
+			// A full control queue drops only this echo. The sender will time out
+			// this unique token and retry with a later, never-reused token.
+		}
+	case StreamRTTEcho:
+		err := c.pathRTTCache.acceptEcho(leg.pathIdentity, wire)
+		if errors.Is(err, ErrStreamRTTNoPending) || errors.Is(err, ErrStreamRTTProbeExpired) || errors.Is(err, ErrStreamRTTReplay) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("accept same-carrier RTT echo kind=%d direction=%d expected=%d token=%d: %w", wire[9], wire[10], leg.pathIdentity.Direction, binary.BigEndian.Uint64(wire[28:36]), err)
+		}
+	default:
+		return ErrStreamPathMessage
+	}
+	return nil
 }
 
 // ReplaceLeg intentionally tears down one carrier while keeping the logical
@@ -710,22 +1286,89 @@ func (c *StreamEngine) ReplaceLeg(id LegID, err error) bool {
 	return true
 }
 
+// WaitLegRetired waits until both workers from a removed generation have
+// exited. It is separate from DrainLeg because a successful DrainLeg commits
+// logical removal before carrier worker cleanup finishes. Hosts that intend to
+// reuse the same Leg ID must cross this barrier before dialing or attaching the
+// replacement generation.
+func (c *StreamEngine) WaitLegRetired(ctx context.Context, id LegID) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c == nil || int(id) >= c.maxActiveLegs {
+		return ErrStreamLegNotFound
+	}
+	for {
+		c.legsMu.RLock()
+		retiring := c.retiring[uint8(id)]
+		active := c.legs[uint8(id)]
+		c.legsMu.RUnlock()
+		if active != nil {
+			return errors.New("multipath leg is still active")
+		}
+		if retiring == nil {
+			return nil
+		}
+		select {
+		case <-retiring.retired:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return ErrStreamClosed
+		}
+	}
+}
+
+// SetLegBandwidthPrior updates only the named live carrier's scheduler prior.
+// It is used by hosts when a new route is added to an existing Core Session;
+// it does not change the Core policy or the configured rescue budget.
+func (c *StreamEngine) SetLegBandwidthPrior(id LegID, mbps uint32) bool {
+	if c == nil || mbps == 0 {
+		return false
+	}
+	leg := c.getLeg(uint8(id))
+	if leg == nil || leg.closed.Load() {
+		return false
+	}
+	leg.priorMbps.Store(mbps)
+	return true
+}
+
 func (c *StreamEngine) AppConn() net.Conn     { return c.appConn }
 func (c *StreamEngine) Done() <-chan struct{} { return c.done }
+
+// PathFeedback returns the immutable, fresh RTT snapshot for the active leg.
+// It performs no I/O and is safe for host telemetry and tests.
+func (c *StreamEngine) PathFeedback(id LegID) (StreamPathFeedback, bool) {
+	if c == nil || c.pathRTTCache == nil || int(id) >= c.maxActiveLegs {
+		return StreamPathFeedback{}, false
+	}
+	leg := c.getLeg(uint8(id))
+	if leg == nil || !leg.pathRTTEnabled || leg.closed.Load() {
+		return StreamPathFeedback{}, false
+	}
+	return c.pathRTTCache.PathFeedback(leg.pathIdentity)
+}
 
 func (c *StreamEngine) Snapshot() StreamStats {
 	now := time.Now()
 	stats := StreamStats{
-		TxSentBytesByLeg:       [2]uint64{c.txSentBytes[0].Load(), c.txSentBytes[1].Load()},
-		TxAckedUsefulByLeg:     [2]uint64{c.txAckedUseful[0].Load(), c.txAckedUseful[1].Load()},
-		TxRetransmitBytesByLeg: [2]uint64{c.txRetransmitBytes[0].Load(), c.txRetransmitBytes[1].Load()},
+		TxSentBytesByLeg:       [2]uint64{loadAtomicUint64At(c.txSentBytes, 0), loadAtomicUint64At(c.txSentBytes, 1)},
+		TxAckedUsefulByLeg:     [2]uint64{loadAtomicUint64At(c.txAckedUseful, 0), loadAtomicUint64At(c.txAckedUseful, 1)},
+		TxRetransmitBytesByLeg: [2]uint64{loadAtomicUint64At(c.txRetransmitBytes, 0), loadAtomicUint64At(c.txRetransmitBytes, 1)},
 		FrontierRescueAttempts: c.frontierRescueAttempts.Load(),
-		RxUniqueBytesByLeg:     [2]uint64{c.rxUniqueBytes[0].Load(), c.rxUniqueBytes[1].Load()},
+		RxUniqueBytesByLeg:     [2]uint64{loadAtomicUint64At(c.rxUniqueBytes, 0), loadAtomicUint64At(c.rxUniqueBytes, 1)},
 		RxDeliveredBytes:       c.rxDeliveredBytes.Load(),
+		RxAckNext:              c.ackNext.Load(),
 		RxPendingFrames:        int(c.rxPendingFrames.Load()),
 		RxPendingBytes:         c.rxPendingBytes.Load(),
 		RxMaxPendingFrames:     int(c.rxMaxPendingFrames.Load()),
 		RxMaxGapAge:            time.Duration(c.rxMaxGapAgeNs.Load()),
+	}
+	stats.Legs = make([]StreamLegStats, c.maxActiveLegs)
+	for id := range stats.Legs {
+		stats.Legs[id].LegID = uint8(id)
 	}
 	stats.Telemetry = c.telemetry.snapshot()
 	c.capacityStats(&stats)
@@ -749,6 +1392,11 @@ func (c *StreamEngine) Snapshot() StreamStats {
 	stats.AckFrontierLeg = uint8(txSnapshot.AckFrontierLeg)
 	stats.AckFrontierMultiPath = txSnapshot.AckFrontierMultiPath
 	stats.AckFrontierAge = txSnapshot.AckFrontierAge
+	for id, leg := range txSnapshot.PerLeg {
+		if id < len(stats.Legs) {
+			stats.Legs[id].OutstandingFrames, stats.Legs[id].OldestOutstanding = leg.OutstandingFrames, leg.OldestOutstanding
+		}
+	}
 
 	for id := range stats.LegUp {
 		stats.LegUp[id] = c.hasLeg(uint8(id))
@@ -767,12 +1415,17 @@ func (c *StreamEngine) TelemetrySnapshot() StreamStats {
 		RxPendingFrames:        int(c.rxPendingFrames.Load()),
 		RxPendingBytes:         c.rxPendingBytes.Load(),
 		RxMaxPendingFrames:     int(c.rxMaxPendingFrames.Load()),
-		TxSentBytesByLeg:       [2]uint64{c.txSentBytes[0].Load(), c.txSentBytes[1].Load()},
-		TxAckedUsefulByLeg:     [2]uint64{c.txAckedUseful[0].Load(), c.txAckedUseful[1].Load()},
-		TxRetransmitBytesByLeg: [2]uint64{c.txRetransmitBytes[0].Load(), c.txRetransmitBytes[1].Load()},
-		RxUniqueBytesByLeg:     [2]uint64{c.rxUniqueBytes[0].Load(), c.rxUniqueBytes[1].Load()},
+		TxSentBytesByLeg:       [2]uint64{loadAtomicUint64At(c.txSentBytes, 0), loadAtomicUint64At(c.txSentBytes, 1)},
+		TxAckedUsefulByLeg:     [2]uint64{loadAtomicUint64At(c.txAckedUseful, 0), loadAtomicUint64At(c.txAckedUseful, 1)},
+		TxRetransmitBytesByLeg: [2]uint64{loadAtomicUint64At(c.txRetransmitBytes, 0), loadAtomicUint64At(c.txRetransmitBytes, 1)},
+		RxUniqueBytesByLeg:     [2]uint64{loadAtomicUint64At(c.rxUniqueBytes, 0), loadAtomicUint64At(c.rxUniqueBytes, 1)},
 		RxDeliveredBytes:       c.rxDeliveredBytes.Load(),
+		RxAckNext:              c.ackNext.Load(),
 		Telemetry:              c.telemetry.snapshot(),
+	}
+	stats.Legs = make([]StreamLegStats, c.maxActiveLegs)
+	for id := range stats.Legs {
+		stats.Legs[id].LegID = uint8(id)
 	}
 	c.capacityStats(&stats)
 	if timestamp := c.lastAckProgressNs.Load(); timestamp != 0 {
@@ -787,11 +1440,23 @@ func (c *StreamEngine) TelemetrySnapshot() StreamStats {
 // capacityStats leaves legacy snapshots free of capacity accounting locks.
 func (c *StreamEngine) capacityStats(stats *StreamStats) {
 	stats.TxAckedUsefulTotal = c.txAckedTotal.Load()
+	if c.boundedRescue != nil {
+		stats.BoundedRescue = c.boundedRescue.Snapshot(c.boundedRescueNow())
+	} else if c.boundedRescueConfigError != "" {
+		stats.BoundedRescue.ConfigError = c.boundedRescueConfigError
+	}
 	if c.slowLegProtection() {
-		stats.OrdinaryOutstandingFrames = c.txLedger.OrdinaryFrames()
-		stats.OrdinaryOutstandingBytes, stats.OrdinaryPendingBytes = c.txLedger.OrdinaryAdmissionBytes()
+		framesByLeg := c.txLedger.OrdinaryFramesByLeg()
+		outstandingByLeg, pendingByLeg := c.txLedger.OrdinaryAdmissionBytesByLeg()
+		for id := 0; id < 2 && id < len(framesByLeg); id++ {
+			stats.OrdinaryOutstandingFrames[id] = framesByLeg[id]
+			stats.OrdinaryOutstandingBytes[id], stats.OrdinaryPendingBytes[id] = outstandingByLeg[id], pendingByLeg[id]
+		}
 		c.admission.mu.Lock()
 		for id, s := range c.admission.legs {
+			if id >= len(stats.OrdinaryAdmissionState) {
+				continue
+			}
 			state := "normal"
 			if s.restricted {
 				state = "restricted"
@@ -800,6 +1465,7 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 			}
 			stats.OrdinaryAdmissionState[id], stats.OrdinaryAdmissionReason[id] = state, s.reason
 			stats.OrdinaryAdmissionSince[id], stats.OrdinaryProbeAfter[id] = s.since, s.nextProbe
+			stats.OrdinaryRecoveryEpoch[id] = s.recoveryEpoch
 			stats.OrdinaryProbeLimit[id] = s.limit
 			stats.OrdinaryProbeByteLimit[id] = s.byteLimit
 			stats.OrdinaryProofBytes[id] = s.proofBytes
@@ -810,6 +1476,9 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 		c.admission.mu.Unlock()
 	}
 	for id := range stats.OrdinaryAssignedBytes {
+		if id >= len(c.txWrittenBytes) || id >= len(c.txRetryWrittenBytes) || id >= len(c.ordinaryAssignedBytes) || id >= len(c.legGeneration) {
+			continue
+		}
 		stats.TxWrittenBytesByLeg[id] = c.txWrittenBytes[id].Load()
 		stats.TxRetryWrittenBytesByLeg[id] = c.txRetryWrittenBytes[id].Load()
 		stats.OrdinaryAssignedBytes[id] = c.ordinaryAssignedBytes[id].Load()
@@ -821,8 +1490,30 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 		if source, ok := c.capacityProvider.(interface{ SampleReason() [2]string }); ok {
 			stats.CapacitySampleReason = source.SampleReason()
 		}
+		if source, ok := c.capacityProvider.(StreamCapacityProviderN); ok {
+			for _, sample := range source.TelemetryByLeg() {
+				id := int(sample.LegID)
+				if id >= len(stats.Legs) {
+					continue
+				}
+				row := &stats.Legs[id]
+				row.CapacityRawBPS, row.CapacitySmoothedBPS, row.CapacityConfidence = sample.RawBPS, sample.EstimateBPS, sample.Confidence
+				row.CapacityValid, row.CapacityDemand = sample.Valid, sample.Demand
+				row.CapacityLastSample, row.CapacitySampleReason = sample.SampledAt, sample.SampleReason
+			}
+			if reasons := source.SampleReasonByLeg(); len(reasons) > 0 {
+				for id, reason := range reasons {
+					if id < len(stats.Legs) && stats.Legs[id].CapacitySampleReason == "" {
+						stats.Legs[id].CapacitySampleReason = reason
+					}
+				}
+			}
+		}
 	}
 	for id := range stats.CapacityWeight {
+		if id >= len(c.pendingDepth) {
+			continue
+		}
 		if leg := c.getLeg(uint8(id)); leg != nil && !leg.closed.Load() {
 			stats.CapacityWeight[id] = c.effectiveSchedulerWeight(leg)
 			if c.ordinaryEligible(uint8(id), stats.OrdinaryOutstandingFrames[id], time.Now()) {
@@ -837,10 +1528,69 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 		}
 		stats.CapacityPending[id] = c.pendingDepth[id].Load()
 	}
-	assigned, _ := c.assignedSnapshot()
-	if total := assigned[0] + assigned[1]; total > 0 {
-		for id := range assigned {
-			stats.CapacityAssignmentShare[id] = float64(assigned[id]) / float64(total)
+	assigned, _ := c.assignedSnapshotByLeg()
+	var assignedTotal uint64
+	for _, value := range assigned {
+		assignedTotal += value
+	}
+	if assignedTotal > 0 {
+		for id, value := range assigned {
+			share := float64(value) / float64(assignedTotal)
+			if id < 2 {
+				stats.CapacityAssignmentShare[id] = share
+			}
+			if id < len(stats.Legs) {
+				stats.Legs[id].CapacityAssignmentShare = share
+			}
+		}
+	}
+	framesByLeg := c.txLedger.OrdinaryFramesByLeg()
+	outstandingByLeg, pendingByLeg := c.txLedger.OrdinaryAdmissionBytesByLeg()
+	for id := range stats.Legs {
+		row := &stats.Legs[id]
+		row.Up = c.hasLeg(uint8(id))
+		row.Generation = c.legGeneration[id].Load()
+		row.TxWrittenBytes, row.TxRetryWrittenBytes = c.txWrittenBytes[id].Load(), c.txRetryWrittenBytes[id].Load()
+		row.TxSentBytes, row.TxAckedUsefulBytes = c.txSentBytes[id].Load(), c.txAckedUseful[id].Load()
+		row.TxRetransmitBytes, row.RxUniqueBytes = c.txRetransmitBytes[id].Load(), c.rxUniqueBytes[id].Load()
+		row.OrdinaryAssignedBytes = c.ordinaryAssignedBytes[id].Load()
+		row.CapacityPending = c.pendingDepth[id].Load()
+		if id < len(framesByLeg) {
+			row.OrdinaryOutstandingFrames = framesByLeg[id]
+		}
+		if id < len(outstandingByLeg) {
+			row.OrdinaryOutstandingBytes, row.OrdinaryPendingBytes = outstandingByLeg[id], pendingByLeg[id]
+		}
+		if id < len(stats.Legs) {
+			if leg := c.getLeg(uint8(id)); leg != nil && !leg.closed.Load() {
+				row.CapacityWeight = c.effectiveSchedulerWeight(leg)
+				if id < len(framesByLeg) && c.ordinaryEligible(uint8(id), framesByLeg[id], time.Now()) {
+					row.OrdinaryEffectiveWeight = row.CapacityWeight
+				}
+			}
+			if row.CapacityLastSample.IsZero() && id < 2 {
+				row.CapacityLastSample = stats.CapacityLastSample[id]
+			}
+			if !row.CapacityLastSample.IsZero() {
+				if age := time.Since(row.CapacityLastSample); age > 0 {
+					row.CapacitySampleAge = age
+				}
+			}
+			if id < len(c.admission.legs) {
+				c.admission.mu.Lock()
+				state := c.admission.legs[id]
+				c.admission.mu.Unlock()
+				row.OrdinaryProbeLimit, row.OrdinaryProbeByteLimit, row.OrdinaryProofBytes = state.limit, state.byteLimit, state.proofBytes
+				row.OrdinaryProbeServiceBPS, row.OrdinarySessionServiceBPS = state.probeRate, state.serviceRate
+				row.OrdinaryFeedbackEnvelopeNS = int64(state.feedbackMax)
+				row.OrdinaryAdmissionState, row.OrdinaryAdmissionReason = "normal", state.reason
+				if state.restricted {
+					row.OrdinaryAdmissionState = "restricted"
+				} else if state.recovering {
+					row.OrdinaryAdmissionState = "recovering"
+				}
+				row.OrdinaryAdmissionSince, row.OrdinaryProbeAfter, row.OrdinaryRecoveryEpoch = state.since, state.nextProbe, state.recoveryEpoch
+			}
 		}
 	}
 	stats.ActivationDemandBPS = math.Float64frombits(c.activationDemandBPS.Load())
@@ -860,15 +1610,24 @@ func (c *StreamEngine) capacityStats(stats *StreamStats) {
 	stats.HOLFrontierCandidates = c.holFrontierCandidates.Load()
 	stats.HOLPredictedEarlier = c.holPredictedEarlier.Load()
 	stats.HOLMaxCorrectionStreak = c.holMaxCorrectionStreak.Load()
+	stats.Phase19PolicyARescueSuppressions = c.phase19PolicyARescueSuppressions.Load()
+}
+
+func loadAtomicUint64At(values []atomic.Uint64, index int) uint64 {
+	if index < 0 || index >= len(values) {
+		return 0
+	}
+	return values[index].Load()
 }
 
 func (c *StreamEngine) Close() error {
-	// Explicit core shutdown is not a carrier-health signal. Mark it before
-	// closing the done channel so host-side carrier health cannot turn normal
-	// teardown into a global cooldown.
+	// Explicit Core shutdown is not a carrier-health signal or a protocol EOF.
+	// If graceful completion already won the lifecycle race, its pipe close keeps
+	// the application's pending Read observable as EOF. Otherwise fail records a
+	// forced-close error and closes the application endpoint.
 	c.closing.Store(true)
 	c.releaseCapacityProvider()
-	c.fail(io.EOF)
+	c.fail(ErrStreamClosed)
 	return nil
 }
 
@@ -894,11 +1653,19 @@ func (c *StreamEngine) StartGracefulClose(err error) {
 	}
 	c.closing.Store(true)
 	c.gracefulOnce.Do(func() {
+		c.lifecycleMu.Lock()
+		select {
+		case <-c.done:
+			c.lifecycleMu.Unlock()
+			return
+		default:
+		}
 		close(c.gracefulCh)
-		// Closing the application side wakes txLoop if the router/application has
-		// not already done so. Successful net.Pipe writes are synchronous, so once
-		// txLoop stops, every byte accepted from appConn is represented in TX state.
-		_ = c.appConn.Close()
+		// Close the Core endpoint of the application pipe. This wakes txLoop but
+		// leaves the application's endpoint readable, so protocol EOF is visible
+		// as io.EOF instead of ErrClosedPipe.
+		_ = c.pipeConn.Close()
+		c.lifecycleMu.Unlock()
 		go func(closeErr error) {
 			select {
 			case <-c.done:
@@ -922,7 +1689,7 @@ func (c *StreamEngine) StartGracefulClose(err error) {
 				c.fail(errors.New("stream CLOSE notification did not complete within recovery bound"))
 				return
 			}
-			c.fail(closeErr)
+			c.finishGracefulClose(closeErr)
 		}(err)
 	})
 }
@@ -940,10 +1707,31 @@ func (c *StreamEngine) beginFinalizing() bool {
 }
 
 func (c *StreamEngine) fail(err error) {
+	c.failWithAppClose(err, true)
+}
+
+func (c *StreamEngine) finishGracefulClose(err error) {
+	if err == nil {
+		err = io.EOF
+	}
+	if !errors.Is(err, io.EOF) {
+		c.fail(err)
+		return
+	}
+	c.failWithAppClose(err, false)
+}
+
+func (c *StreamEngine) failWithAppClose(err error, closeApp bool) {
 	if err == nil {
 		err = ErrStreamClosed
 	}
 	c.releaseCapacityProvider()
+	if c.boundedRescue != nil {
+		c.boundedRescue.Close()
+	}
+	if c.pathRTTCache != nil {
+		c.pathRTTCache.close()
+	}
 	c.closeOne.Do(func() {
 		if c.startup != nil {
 			c.startup.markSessionClosed()
@@ -955,8 +1743,16 @@ func (c *StreamEngine) fail(err error) {
 		c.finalizing.Store(true)
 		c.closeErr.Store(err)
 		close(c.done)
+		c.rescueCandidateAckMu.Lock()
+		c.rescueCandidateAckLinks = nil
+		c.rescueCandidateAckMu.Unlock()
+		if closeApp {
+			// Close the application endpoint first so an in-flight application
+			// Read cannot observe the peer-pipe EOF that follows and misclassify
+			// an abnormal termination as a normal logical EOF.
+			_ = c.appConn.Close()
+		}
 		_ = c.pipeConn.Close()
-		_ = c.appConn.Close()
 		c.legsMu.RLock()
 		legs := make([]*streamLeg, 0, len(c.legs))
 		for _, leg := range c.legs {
@@ -1034,6 +1830,9 @@ func (c *StreamEngine) txLoop() {
 				}
 			}
 			record := c.txLedger.addLocal(buffer[:n], time.Now())
+			if c.boundedRescue != nil {
+				c.boundedRescue.RecordOriginal(record.Sequence(), uint64(n), record.createdAt)
+			}
 			if p := c.cfg.frontierProbe; p != nil {
 				p.observe(c.txLedger.frontierSnapshot(), time.Now())
 			}
@@ -1354,10 +2153,31 @@ func (c *StreamEngine) availableLegs() []*streamLeg {
 	c.legsMu.RLock()
 	legs := make([]*streamLeg, 0, len(c.legs))
 	for _, leg := range c.legs {
-		legs = append(legs, leg)
+		if !leg.closed.Load() && !leg.draining.Load() {
+			legs = append(legs, leg)
+		}
 	}
 	c.legsMu.RUnlock()
+	sort.Slice(legs, func(i, j int) bool { return legs[i].id < legs[j].id })
 	return legs
+}
+
+// bestAlternateLeg selects a live path for a copy while respecting the
+// scheduler's current measured/prior capacity weights. Ties are deterministic
+// by protocol LegID.
+func (c *StreamEngine) bestAlternateLeg(owner int16) *streamLeg {
+	var best *streamLeg
+	bestWeight := -1.0
+	for _, leg := range c.availableLegs() {
+		if int16(leg.id) == owner {
+			continue
+		}
+		weight := c.effectiveSchedulerWeight(leg)
+		if best == nil || weight > bestWeight || weight == bestWeight && leg.id < best.id {
+			best, bestWeight = leg, weight
+		}
+	}
+	return best
 }
 
 func (c *StreamEngine) legCount() int {
@@ -1372,6 +2192,11 @@ func (c *StreamEngine) hasOutstanding() bool {
 }
 
 func (c *StreamEngine) weightFor(id uint8) uint32 {
+	if leg := c.getLeg(id); leg != nil {
+		if prior := leg.priorMbps.Load(); prior > 0 {
+			return prior
+		}
+	}
 	if int(id) < len(c.cfg.BandwidthMbps) && c.cfg.BandwidthMbps[id] > 0 {
 		return c.cfg.BandwidthMbps[id]
 	}
@@ -1437,6 +2262,53 @@ func (c *StreamEngine) effectiveSchedulerWeight(leg *streamLeg) float64 {
 	return base
 }
 
+// pathRTTScorePenalty adds a measured completion-time prior only when both
+// active legs have fresh, authenticated samples and neither leg is in slow-leg
+// restriction/recovery. One score unit is 8 microseconds (the existing score
+// uses bytes divided by Mbps), so this preserves capacity weighting while
+// biasing short-flow cold start toward the lower-RTT path.
+func (c *StreamEngine) pathRTTScorePenalty(leg *streamLeg) float64 {
+	if !c.cfg.ExperimentalPathAware || leg == nil || !leg.pathRTTEnabled || c.pathRTTCache == nil {
+		return 0
+	}
+	legs := c.availableLegs()
+	if len(legs) < 2 {
+		return 0
+	}
+	if c.slowLegProtection() {
+		c.admission.mu.Lock()
+		restricted := false
+		for _, active := range legs {
+			state := c.admission.legs[active.id]
+			if state.restricted || state.recovering {
+				restricted = true
+				break
+			}
+		}
+		c.admission.mu.Unlock()
+		if restricted {
+			return 0
+		}
+	}
+	var ownRTT time.Duration
+	for _, active := range legs {
+		if !active.pathRTTEnabled {
+			return 0
+		}
+		feedback, ok := c.pathRTTCache.PathFeedback(active.pathIdentity)
+		if !ok || feedback.RTT <= 0 {
+			return 0
+		}
+		if active == leg {
+			ownRTT = feedback.RTT
+		}
+	}
+	if ownRTT <= 0 {
+		return 0
+	}
+	return float64(ownRTT.Nanoseconds()) / 8000
+}
+
 func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 	if c.cfg.BenchmarkWeightedDeficit {
 		legs := c.availableLegs()
@@ -1474,7 +2346,7 @@ func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 		}
 	}
 	if !active {
-		if primary := c.getLeg(0); primary != nil && int16(primary.id) != avoid {
+		if primary := c.getLeg(0); primary != nil && !primary.draining.Load() && int16(primary.id) != avoid {
 			return primary
 		}
 	}
@@ -1487,7 +2359,7 @@ func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 		}
 		weight := c.effectiveSchedulerWeight(leg)
 		dispatched := uint64(0)
-		if leg.id < uint8(len(c.txSentBytes)) {
+		if int(leg.id) < len(c.txSentBytes) {
 			dispatched = c.txSentBytes[leg.id].Load()
 		}
 		// A fast writer can make its channel look empty on every scheduler turn.
@@ -1495,6 +2367,7 @@ func (c *StreamEngine) chooseLeg(active bool, avoid int16) *streamLeg {
 		// scheduling converges toward usable path capacity instead of selecting the
 		// same empty queue indefinitely.
 		score := (float64(dispatched) + float64(len(leg.send)+1)*float64(c.cfg.ChunkSize)) / weight
+		score += c.pathRTTScorePenalty(leg)
 		if best == nil || score < bestScore {
 			best = leg
 			bestScore = score
@@ -1520,8 +2393,8 @@ func (c *StreamEngine) chargeWeightedService(leg *streamLeg, bytes int) {
 }
 
 func (c *StreamEngine) chooseLegWithStartupHint(active bool, avoid, preferred int16) *streamLeg {
-	if preferred >= 0 && preferred < 2 && preferred != avoid {
-		if leg := c.getLeg(uint8(preferred)); leg != nil && !leg.closed.Load() {
+	if preferred >= 0 && preferred < int16(c.maxActiveLegs) && preferred != avoid {
+		if leg := c.getLeg(uint8(preferred)); leg != nil && !leg.closed.Load() && !leg.draining.Load() {
 			return leg
 		}
 	}
@@ -1553,6 +2426,7 @@ func (c *StreamEngine) chooseAssignedLeg(avoid int16, payload int) *streamLeg {
 			continue
 		}
 		score := float64(c.assignedService[leg.id]+uint64(payload)) / weight
+		score += c.pathRTTScorePenalty(leg)
 		if best == nil || score < bestScore {
 			best, bestScore = leg, score
 		}
@@ -1563,7 +2437,16 @@ func (c *StreamEngine) chooseAssignedLeg(avoid int16, payload int) *streamLeg {
 func (c *StreamEngine) assignedSnapshot() ([2]uint64, [2]uint64) {
 	c.weightedMu.Lock()
 	defer c.weightedMu.Unlock()
-	return c.assignedService, c.assignedRecords
+	var service, records [2]uint64
+	copy(service[:], c.assignedService)
+	copy(records[:], c.assignedRecords)
+	return service, records
+}
+
+func (c *StreamEngine) assignedSnapshotByLeg() ([]uint64, []uint64) {
+	c.weightedMu.Lock()
+	defer c.weightedMu.Unlock()
+	return append([]uint64(nil), c.assignedService...), append([]uint64(nil), c.assignedRecords...)
 }
 
 func (c *StreamEngine) readyLegs() ([]*streamLeg, uint8) {
@@ -1576,7 +2459,7 @@ func (c *StreamEngine) readyLegs() ([]*streamLeg, uint8) {
 		ready = append(ready, leg)
 	}
 	state := uint8(3)
-	if len(ready) == 2 {
+	if len(ready) >= 2 {
 		state = 0
 	} else if len(ready) == 1 {
 		if ready[0].id == 0 {
@@ -1641,15 +2524,25 @@ func (c *StreamEngine) attemptCurrent(record *StreamTXRecord, legID uint8, rescu
 
 func (c *StreamEngine) markAttemptSent(record *StreamTXRecord, legID uint8, rescue bool) StreamTXAttemptResult {
 	result := c.txLedger.MarkAttemptSent(record, LegID(legID), rescue, time.Now())
-	if !result.Applied || legID >= uint8(len(c.txSentBytes)) {
+	if !result.Applied || int(legID) >= len(c.txSentBytes) {
 		return result
 	}
 	if result.Retransmit {
 		c.txRetransmitBytes[legID].Add(uint64(result.Bytes))
 	}
 	c.txSentBytes[legID].Add(uint64(result.Bytes))
-	if c.telemetry != nil {
-		c.telemetry.markDataTx(legID, result.Retransmit, rescue, uint64(result.Bytes))
+	return result
+}
+
+// commitSuccessfulDataWrite records ledger effects when the record is still
+// outstanding, while recording telemetry for every complete successful
+// Carrier DATA write. A cumulative ACK may retire the record after the peer
+// receives the frame but before this writer callback commits the ledger.
+func (c *StreamEngine) commitSuccessfulDataWrite(attempt txSendAttempt, legID uint8) StreamTXAttemptResult {
+	result := c.markAttemptSent(attempt.record, legID, attempt.rescue)
+	if c.telemetry != nil && attempt.record != nil {
+		retransmit := result.Retransmit || attempt.rescue || !attempt.ordinary
+		c.telemetry.markDataTx(legID, retransmit, attempt.rescue, uint64(len(attempt.record.Payload())))
 	}
 	return result
 }
@@ -1659,7 +2552,12 @@ func (c *StreamEngine) isOutstanding(record *StreamTXRecord) bool {
 }
 
 func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bool) bool {
-	if leg.closed.Load() {
+	if leg == nil {
+		return false
+	}
+	leg.dispatchMu.RLock()
+	defer leg.dispatchMu.RUnlock()
+	if leg.closed.Load() || leg.draining.Load() {
 		return false
 	}
 	if !retry && record.trace != nil {
@@ -1671,12 +2569,23 @@ func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bo
 		return !c.isOutstanding(record)
 	}
 	attempt := txSendAttempt{record: record, queuedNs: time.Now().UnixNano(), ordinary: !retry, started: started}
-	saturated := len(leg.send) >= cap(leg.send)-1 || (leg.id < 2 && c.pendingDepth[leg.id].Load() > 0)
+	saturated := len(leg.send) >= cap(leg.send)-1 || (int(leg.id) < len(c.pendingDepth) && c.pendingDepth[leg.id].Load() > 0)
 	select {
 	case <-leg.done:
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "send_queue_aborted", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), LegID: int16(leg.id), LegGeneration: leg.generation,
+			AttemptStartedAt: started, PayloadBytes: len(record.Payload()), Error: "leg_closed",
+		})
 		c.clearAttemptAt(record, leg.id, false, started)
 		return false
 	case leg.send <- attempt:
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "send_queue_accepted", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), LegID: int16(leg.id), LegGeneration: leg.generation,
+			AttemptStartedAt: started, PayloadBytes: len(record.Payload()),
+			QueueLength: len(leg.send), QueueCapacity: cap(leg.send), Applied: true,
+		})
 		if !retry && c.slowLegProtection() {
 			c.txLedger.markOrdinaryAdmitted(record, leg.id)
 		}
@@ -1734,6 +2643,12 @@ func (c *StreamEngine) tryQueue(leg *streamLeg, record *StreamTXRecord, retry bo
 		}
 		return true
 	default:
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "send_queue_rejected", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), LegID: int16(leg.id), LegGeneration: leg.generation,
+			AttemptStartedAt: started, PayloadBytes: len(record.Payload()),
+			QueueLength: len(leg.send), QueueCapacity: cap(leg.send), Error: "queue_full",
+		})
 		leg.debugQueueFullRejects.Add(1)
 		if !c.active.Load() && c.legCount() == 1 {
 			c.activationReason.Store("queue_congestion")
@@ -1755,7 +2670,100 @@ func (c *StreamEngine) tryQueueRescue(leg *streamLeg, record *StreamTXRecord) bo
 }
 
 func (c *StreamEngine) tryQueueRescueOwned(leg *streamLeg, record *StreamTXRecord, owner int16) bool {
-	if leg == nil || leg.closed.Load() {
+	return c.tryQueueRescueOwnedAttempt(leg, record, owner, StreamRescueOtherCoreRetry, 0)
+}
+
+func (c *StreamEngine) tryQueueBoundedFrontierRescue(leg *streamLeg, record *StreamTXRecord, owner int16, recoveryEpoch uint64, overdue bool) bool {
+	if c.boundedRescue == nil {
+		return c.tryQueueRescueOwned(leg, record, owner)
+	}
+	evidence := c.boundedFrontierEvidence(leg, record, owner, recoveryEpoch, overdue)
+	decision := c.boundedRescue.Reserve(evidence, uint64(len(record.Payload())), c.boundedRescueNow())
+	if !decision.Admitted {
+		return false
+	}
+	return c.tryQueueRescueOwnedAttemptWithCandidateID(leg, record, evidence.OwnerLeg, decision.Class, decision.ReservationID, decision.CandidateID)
+}
+
+func (c *StreamEngine) boundedRescueNow() time.Time {
+	if c != nil && c.cfg.boundedRescueClock != nil {
+		return c.cfg.boundedRescueClock()
+	}
+	return time.Now()
+}
+
+func (c *StreamEngine) boundedFrontierEvidence(leg *streamLeg, record *StreamTXRecord, owner int16, recoveryEpoch uint64, overdue bool) StreamRescueEvidence {
+	snapshot := c.txLedger.rescueEvidenceSnapshot(record)
+	evidenceOwner := owner
+	if evidenceOwner < 0 || evidenceOwner >= int16(len(c.legGeneration)) {
+		evidenceOwner = snapshot.OrdinaryOwner
+	}
+	evidence := StreamRescueEvidence{
+		Sequence: record.Sequence(), AckedNext: snapshot.AckedNext, OwnerLeg: evidenceOwner, RecordOwnerLeg: snapshot.OrdinaryOwner,
+		TargetLeg: 255, OriginGeneration: snapshot.OriginGeneration, RecoveryEpoch: recoveryEpoch,
+		Cause: StreamRescueCauseFrontier, IsData: true, IsRescue: true,
+		Outstanding: snapshot.Exists, FrontierOverdue: overdue,
+		OriginalWriteObserved: !snapshot.FirstWriteAt.IsZero(), OwnerInvalidated: snapshot.Invalidated,
+		OriginalWriteInTransit: snapshot.InTransit, OriginalWriteLeg: uint8(snapshot.TransitLeg),
+		GenerationMatchesOrigin: snapshot.OriginGeneration != 0 && evidenceOwner >= 0 && evidenceOwner < int16(len(c.legGeneration)) &&
+			c.legGeneration[evidenceOwner].Load() == snapshot.OriginGeneration,
+	}
+	if leg != nil {
+		evidence.TargetLeg = leg.id
+		evidence.TargetGeneration = leg.generation
+		evidence.TargetAvailable = c.getLeg(leg.id) == leg && !leg.closed.Load()
+		evidence.TargetGenerationMatches = c.legGeneration[leg.id].Load() == leg.generation
+	}
+	if evidenceOwner >= 0 && evidenceOwner < int16(len(c.legGeneration)) {
+		id := uint8(evidenceOwner)
+		evidence.OwnerGeneration = c.legGeneration[id].Load()
+		evidence.OwnerLive = c.hasLeg(id)
+		evidence.ProbeData = c.pendingRecoveryProbeOwner(id, record.Sequence())
+		c.admission.mu.Lock()
+		state := c.admission.legs[id]
+		evidence.OwnerRestricted = state.restricted
+		if evidence.RecoveryEpoch == 0 {
+			evidence.RecoveryEpoch = state.recoveryEpoch
+		}
+		evidence.RecoveryEpochCurrent = evidence.RecoveryEpoch == state.recoveryEpoch
+		c.admission.mu.Unlock()
+	}
+	return evidence
+}
+
+func (c *StreamEngine) revalidateBoundedRescueBeforeWrite(leg *streamLeg, record *StreamTXRecord, reservationID uint64) (StreamRescueClass, uint64, bool) {
+	if c == nil || c.boundedRescue == nil || leg == nil || record == nil {
+		return StreamRescueDuplicateOrRejected, 0, false
+	}
+	expected, ok := c.boundedRescue.reservationEvidence(reservationID)
+	if !ok {
+		return StreamRescueDuplicateOrRejected, 0, false
+	}
+	if c.getLeg(leg.id) != leg || leg.closed.Load() {
+		c.boundedRescue.Release(reservationID, "target_generation_retired_before_carrier_write", c.boundedRescueNow())
+		return StreamRescueDuplicateOrRejected, 0, false
+	}
+	current := c.boundedFrontierEvidence(leg, record, expected.OwnerLeg, expected.RecoveryEpoch, expected.FrontierOverdue)
+	return c.boundedRescue.RevalidateBeforeWrite(reservationID, current, c.boundedRescueNow())
+}
+
+func (c *StreamEngine) tryQueueRescueOwnedAttempt(leg *streamLeg, record *StreamTXRecord, owner int16, class StreamRescueClass, reservationID uint64) bool {
+	return c.tryQueueRescueOwnedAttemptWithCandidateID(leg, record, owner, class, reservationID, 0)
+}
+
+func (c *StreamEngine) tryQueueRescueOwnedAttemptWithCandidateID(leg *streamLeg, record *StreamTXRecord, owner int16, class StreamRescueClass, reservationID, candidateID uint64) bool {
+	if leg == nil {
+		if c.boundedRescue != nil && reservationID != 0 {
+			c.boundedRescue.Release(reservationID, "leg_unavailable_before_queue", c.boundedRescueNow())
+		}
+		return false
+	}
+	leg.dispatchMu.RLock()
+	defer leg.dispatchMu.RUnlock()
+	if leg.closed.Load() || leg.draining.Load() {
+		if c.boundedRescue != nil && reservationID != 0 {
+			c.boundedRescue.Release(reservationID, "leg_unavailable_before_queue", c.boundedRescueNow())
+		}
 		return false
 	}
 	var started time.Time
@@ -1766,15 +2774,33 @@ func (c *StreamEngine) tryQueueRescueOwned(leg *streamLeg, record *StreamTXRecor
 		started, marked = c.markRescueTransit(record, leg.id)
 	}
 	if !marked {
+		if c.boundedRescue != nil && reservationID != 0 {
+			c.boundedRescue.Release(reservationID, "ledger_claim_rejected", c.boundedRescueNow())
+		}
 		already := !c.txLedger.IsOutstanding(record) || c.txLedger.RescueInTransit(record)
 		return already
 	}
-	attempt := txSendAttempt{record: record, rescue: true, queuedNs: time.Now().UnixNano(), started: started}
+	attempt := txSendAttempt{record: record, rescue: true, rescueCandidateID: candidateID, queuedNs: time.Now().UnixNano(), started: started,
+		rescueClass: class, boundedRescueReservation: reservationID}
 	select {
 	case <-leg.done:
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "rescue_queue_aborted", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), LegID: int16(leg.id), LegGeneration: leg.generation,
+			AttemptStartedAt: started, PayloadBytes: len(record.Payload()), Rescue: true, Error: "leg_closed",
+		})
 		c.clearAttemptAt(record, leg.id, true, started)
+		if c.boundedRescue != nil && reservationID != 0 {
+			c.boundedRescue.Release(reservationID, "leg_closed_before_queue", c.boundedRescueNow())
+		}
 		return false
 	case leg.rescue <- attempt:
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "rescue_queue_accepted", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), LegID: int16(leg.id), LegGeneration: leg.generation,
+			AttemptStartedAt: started, PayloadBytes: len(record.Payload()), Rescue: true,
+			QueueLength: len(leg.rescue), QueueCapacity: cap(leg.rescue), Applied: true,
+		})
 		if p := c.cfg.frontierProbe; p != nil {
 			p.rescue(c, record, time.Now())
 		}
@@ -1786,16 +2812,28 @@ func (c *StreamEngine) tryQueueRescueOwned(leg *streamLeg, record *StreamTXRecor
 		c.markRescueQueued(record, leg.id, started)
 		if leg.closed.Load() {
 			c.clearAttemptAt(record, leg.id, true, started)
+			if c.boundedRescue != nil && reservationID != 0 {
+				c.boundedRescue.Release(reservationID, "leg_closed_after_queue", c.boundedRescueNow())
+			}
 			return false
 		}
 		return true
 	default:
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "rescue_queue_rejected", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), LegID: int16(leg.id), LegGeneration: leg.generation,
+			AttemptStartedAt: started, PayloadBytes: len(record.Payload()), Rescue: true,
+			QueueLength: len(leg.rescue), QueueCapacity: cap(leg.rescue), Error: "queue_full",
+		})
 		leg.debugRescueFullRejects.Add(1)
 		c.debugRescueRejects.Add(1)
 		if c.cfg.rescueRejectHook != nil {
 			c.cfg.rescueRejectHook(record, started)
 		}
 		c.clearAttemptAt(record, leg.id, true, started)
+		if c.boundedRescue != nil && reservationID != 0 {
+			c.boundedRescue.Release(reservationID, "rescue_queue_full", c.boundedRescueNow())
+		}
 		return false
 	}
 }
@@ -2013,7 +3051,7 @@ func (c *StreamEngine) enqueueRecord(record *StreamTXRecord, avoid int16) error 
 }
 
 func (c *StreamEngine) enqueueRecordWithHint(record *StreamTXRecord, avoid, preferred int16) error {
-	if preferred < 0 || preferred > 1 || preferred == avoid || !c.isOutstanding(record) {
+	if preferred < 0 || preferred >= int16(c.maxActiveLegs) || preferred == avoid || !c.isOutstanding(record) {
 		return c.enqueueRecord(record, avoid)
 	}
 	active := c.active.Load()
@@ -2050,6 +3088,25 @@ func (c *StreamEngine) tryEnqueueRecord(record *StreamTXRecord, avoid int16) boo
 	if leg == nil {
 		return false
 	}
+	if c.cfg.recoveryTraceHook != nil {
+		snapshot := c.txLedger.probeReferenceSnapshot(record, false)
+		reason := "ordinary_retry_candidate"
+		if snapshot.Invalidated {
+			reason = "original_owner_invalidated"
+		}
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "retry_candidate_selected", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), FrameSequence: record.Sequence(), FrameType: "data",
+			LegID: int16(leg.id), LegGeneration: leg.generation, RecordGeneration: snapshot.OriginGeneration,
+			PayloadBytes: len(record.Payload()), LedgerObservedAt: snapshot.LedgerObservedAt,
+			AckedNext: snapshot.AckedNext, LedgerPresent: snapshot.Exists,
+			InTransit: snapshot.InTransit, TransitLeg: snapshot.TransitLeg, TransitSince: snapshot.TransitSince,
+			RescueInTransit: snapshot.RescueInTransit, RescueLeg: snapshot.RescueLeg, RescueSince: snapshot.RescueSince,
+			FirstWriteAt: snapshot.FirstWriteAt, LastSentAt: snapshot.LastSentAt,
+			SendCount: snapshot.SendCount, ReasonBefore: reason, Action: "ordinary_retry_target_selected",
+			Applied: true, ObservedAt: time.Now(),
+		})
+	}
 	if c.tryQueue(leg, record, true) {
 		return true
 	}
@@ -2071,6 +3128,10 @@ func (c *StreamEngine) tryEnqueueRecord(record *StreamTXRecord, avoid int16) boo
 }
 
 func (c *StreamEngine) enqueueRescue(record *StreamTXRecord, avoid int16) error {
+	return c.enqueueRescueWithCandidateID(record, avoid, 0)
+}
+
+func (c *StreamEngine) enqueueRescueWithCandidateID(record *StreamTXRecord, avoid int16, candidateID uint64) error {
 	select {
 	case <-c.done:
 		return ErrStreamClosed
@@ -2094,18 +3155,30 @@ func (c *StreamEngine) enqueueRescue(record *StreamTXRecord, avoid int16) error 
 	if leg == nil || (len(legs) > 1 && int16(leg.id) == avoid) {
 		return nil
 	}
-	_ = c.tryQueueRescue(leg, record)
+	if candidateID != 0 {
+		_ = c.tryQueueRescueOwnedAttemptWithCandidateID(leg, record, -1, StreamRescueOtherCoreRetry, 0, candidateID)
+	} else {
+		_ = c.tryQueueRescue(leg, record)
+	}
 	return nil
 }
 
 func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
+	defer c.releaseQueuedBoundedRescues(leg)
 	leg.debugWriterState.Store(0)
 	defer leg.debugWriterState.Store(0)
 	var ackSent uint64
 
 	writeControl := func(control legControl) bool {
-		header := encodeControlFrame(control.typ, control.value)
-		err := writeAll(leg.conn, header[:])
+		var err error
+		if control.typ == frameTypePathRTT {
+			err = writePathRTTFrame(leg.conn, control.data)
+		} else if control.typ == frameTypeDrain {
+			err = writeStreamControlPayload(leg.conn, StreamFrameDrain, control.data)
+		} else {
+			header := encodeControlFrame(control.typ, control.value)
+			err = writeAll(leg.conn, header[:])
+		}
 		if control.done != nil {
 			control.done <- err
 		}
@@ -2149,7 +3222,21 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 		if record == nil {
 			return true
 		}
+		if attempt.queuedNs != 0 && c.cfg.recoveryTraceHook != nil {
+			queuedAt := time.Unix(0, attempt.queuedNs)
+			c.traceRecoveryEvent(streamRecoveryTraceEvent{
+				Kind: "writer_dequeue", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+				RecordSequence: record.Sequence(), FrameSequence: record.Sequence(), FrameType: "data",
+				LegID: int16(leg.id), LegGeneration: leg.generation, RecordGeneration: c.txLedger.originGenerationSnapshot(record),
+				PayloadBytes: len(record.Payload()), AttemptStartedAt: attempt.started,
+				ReferenceAt: queuedAt, Age: time.Since(queuedAt), Rescue: attempt.rescue,
+				QueueLength: len(leg.send), QueueCapacity: cap(leg.send), Applied: true,
+			})
+		}
 		if !c.attemptCurrent(record, leg.id, attempt.rescue) {
+			if c.boundedRescue != nil && attempt.boundedRescueReservation != 0 {
+				c.boundedRescue.Release(attempt.boundedRescueReservation, "stale_before_carrier_write", c.boundedRescueNow())
+			}
 			if attempt.ordinary && c.cfg.loadProbe != nil {
 				c.cfg.loadProbe.complete(leg.id, len(record.Payload()))
 			}
@@ -2158,19 +3245,130 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 		if attempt.ordinary && c.cfg.loadProbe != nil {
 			defer c.cfg.loadProbe.complete(leg.id, len(record.Payload()))
 		}
-		writeStarted := time.Now()
-		c.txLedger.markWriteStarted(record, leg.id, attempt.rescue, writeStarted)
-		leg.writeStartedNs.Store(writeStarted.UnixNano())
-		defer leg.writeStartedNs.Store(0)
-		if !attempt.rescue && record.trace != nil {
-			record.traceT6Ns = writeStarted.UnixNano()
-		}
+		reservationID := attempt.boundedRescueReservation
 		leg.debugWriterState.Store(2)
-		if err := writeDataFrame(leg.conn, dataFrame{seq: record.Sequence(), data: record.Payload()}); err != nil {
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "core_data_write_enter", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), FrameSequence: record.Sequence(), FrameType: "data",
+			LegID: int16(leg.id), LegGeneration: leg.generation, PayloadBytes: len(record.Payload()),
+			AttemptStartedAt: attempt.started,
+			Rescue:           attempt.rescue,
+		})
+		// Keep synchronous trace and ledger work ahead of the recovery transition.
+		// The transition itself runs in the callback immediately before the DATA
+		// buffers are handed to the carrier, after all pre-write queue/lock delay.
+		c.txLedger.markWriteStarted(record, leg.id, attempt.rescue, time.Now())
+		var writeStarted time.Time
+		var b0RescueEvidence StreamRescueEvidence
+		var b0RescueWriteObserved bool
+		defer leg.writeStartedNs.Store(0)
+		wireBytes, carrierWriteAttempted, writeErr := writeDataFrameWithGate(leg.conn, dataFrame{seq: record.Sequence(), data: record.Payload()}, func() error {
+			if c.boundedRescue != nil && reservationID != 0 {
+				_, currentReservation, valid := c.revalidateBoundedRescueBeforeWrite(leg, record, reservationID)
+				if !valid {
+					reservationID = 0
+					return errBoundedRescueNotWritable
+				}
+				reservationID = currentReservation
+				if reservationID != 0 && !c.txLedger.beginBoundedRescueWrite(record, c.boundedRescue, reservationID, c.boundedRescueNow()) {
+					reservationID = 0
+					return errBoundedRescueNotWritable
+				}
+			}
+			c.telemetry.markDataCarrierWriteAttempt(leg.id, attempt.rescue || !attempt.ordinary, attempt.rescue, uint64(len(record.Payload())))
+			var probeStarted bool
+			if attempt.ordinary && !attempt.rescue {
+				writeStarted, probeStarted = c.recoveryProbeWriteStartedAtWriteBoundary(leg.id, record)
+			} else {
+				writeStarted = time.Now()
+			}
+			if attempt.rescue && c.boundedRescue == nil && c.cfg.rescueEventHook != nil {
+				ledger := c.txLedger.rescueEvidenceSnapshot(record)
+				b0RescueEvidence = StreamRescueEvidence{
+					Sequence: record.Sequence(), AckedNext: ledger.AckedNext, OwnerLeg: ledger.OrdinaryOwner, RecordOwnerLeg: ledger.OrdinaryOwner,
+					TargetLeg: leg.id, TargetGeneration: leg.generation, TargetAvailable: c.getLeg(leg.id) == leg && !leg.closed.Load(),
+					TargetGenerationMatches: c.legGeneration[leg.id].Load() == leg.generation, OriginGeneration: ledger.OriginGeneration,
+					Cause: StreamRescueCauseNone, IsData: true, IsRescue: true,
+					Outstanding: ledger.Exists, OriginalWriteInTransit: ledger.InTransit, OriginalWriteLeg: uint8(ledger.TransitLeg),
+					OriginalWriteObserved: !ledger.FirstWriteAt.IsZero(), OwnerInvalidated: ledger.Invalidated,
+				}
+				if ledger.OrdinaryOwner >= 0 && ledger.OrdinaryOwner < int16(len(c.legGeneration)) {
+					ownerID := uint8(ledger.OrdinaryOwner)
+					b0RescueEvidence.OwnerGeneration = c.legGeneration[ownerID].Load()
+					b0RescueEvidence.OwnerLive = c.hasLeg(ownerID)
+					b0RescueEvidence.GenerationMatchesOrigin = ledger.OriginGeneration != 0 && b0RescueEvidence.OwnerGeneration == ledger.OriginGeneration
+					c.admission.mu.Lock()
+					b0RescueEvidence.RecoveryEpoch = c.admission.legs[ownerID].recoveryEpoch
+					b0RescueEvidence.RecoveryEpochCurrent = b0RescueEvidence.RecoveryEpoch != 0
+					c.admission.mu.Unlock()
+				}
+				b0RescueWriteObserved = true
+				c.emitRescueObservation(StreamRescueEvent{
+					At: writeStarted, SessionID: c.pathSessionID, CandidateID: attempt.rescueCandidateID, PolicyVariant: "B0", Kind: "b0_rescue_carrier_write_started",
+					Evidence: b0RescueEvidence, Class: attempt.rescueClass, PayloadBytes: uint64(len(record.Payload())),
+					Reason: "B0 carrier write boundary; reason not reclassified by this observer", FinalDecision: "write_started",
+					FinalDecisionReason: "legacy B0 path dispatched rescue",
+				})
+			}
+			if c.cfg.recoveryTraceHook != nil {
+				c.traceRecoveryEvent(streamRecoveryTraceEvent{
+					Kind: "core_data_write_dispatch", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+					RecordSequence: record.Sequence(), FrameSequence: record.Sequence(), FrameType: "data",
+					LegID: int16(leg.id), LegGeneration: leg.generation, RecordGeneration: c.txLedger.originGenerationSnapshot(record),
+					PayloadBytes: len(record.Payload()), AttemptStartedAt: attempt.started,
+					ActionAt: writeStarted, Applied: probeStarted, Rescue: attempt.rescue,
+				})
+			}
+			leg.writeStartedNs.Store(writeStarted.UnixNano())
+			if !attempt.rescue && record.trace != nil {
+				record.traceT6Ns = writeStarted.UnixNano()
+			}
+			return nil
+		})
+		c.telemetry.finishDataCarrierWrite(leg.id, uint64(wireBytes), uint64(frameHeaderSize+len(record.Payload())), carrierWriteAttempted, writeErr)
+		if b0RescueWriteObserved {
+			reason := "carrier_write_complete"
+			if writeErr != nil {
+				reason = writeErr.Error()
+			}
+			c.emitRescueObservation(StreamRescueEvent{
+				At: time.Now(), SessionID: c.pathSessionID, CandidateID: attempt.rescueCandidateID, PolicyVariant: "B0", Kind: "b0_rescue_carrier_write_settled",
+				Evidence: b0RescueEvidence, Class: attempt.rescueClass, PayloadBytes: uint64(len(record.Payload())),
+				AcceptedBytes: streamDataPayloadAccepted(wireBytes, len(record.Payload())), Reason: reason,
+				FinalDecision: "write_settled", FinalDecisionReason: reason,
+			})
+		}
+		if errors.Is(writeErr, errBoundedRescueNotWritable) {
+			leg.debugWriterState.Store(0)
+			c.clearAttemptAt(record, leg.id, attempt.rescue, attempt.started)
+			return true
+		}
+		if c.boundedRescue != nil && reservationID != 0 {
+			if settleErr := c.boundedRescue.Settle(reservationID, streamDataPayloadAccepted(wireBytes, len(record.Payload())), writeErr, c.boundedRescueNow()); settleErr != nil {
+				c.fail(fmt.Errorf("bounded rescue budget settlement: %w", settleErr))
+				return false
+			}
+		}
+		c.traceRecoveryEvent(streamRecoveryTraceEvent{
+			Kind: "core_data_write_return", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+			RecordSequence: record.Sequence(), FrameSequence: record.Sequence(), FrameType: "data",
+			LegID: int16(leg.id), LegGeneration: leg.generation, PayloadBytes: len(record.Payload()),
+			WriteBytes: frameHeaderSize + len(record.Payload()), WriteResultBytes: int(wireBytes),
+			CarrierAcceptedPayloadBytes: streamDataPayloadAccepted(wireBytes, len(record.Payload())),
+			AttemptStartedAt:            attempt.started, Applied: writeErr == nil,
+			Rescue: attempt.rescue,
+			Error: func() string {
+				if writeErr != nil {
+					return writeErr.Error()
+				}
+				return ""
+			}(),
+		})
+		if writeErr != nil {
 			leg.debugWriteErrors.Add(1)
 			leg.debugWriterState.Store(0)
 			c.clearAttemptAt(record, leg.id, attempt.rescue, attempt.started)
-			c.handleLegFailure(leg, err)
+			c.handleLegFailure(leg, writeErr)
 			return false
 		}
 		leg.perf.observeWrite(len(record.Payload()), time.Since(writeStarted))
@@ -2183,7 +3381,7 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 		leg.debugLastWriteDurationNs.Store(int64(time.Since(writeStarted)))
 		leg.debugLastWriteNs.Store(time.Now().UnixNano())
 		leg.debugWriterState.Store(0)
-		c.markAttemptSent(record, leg.id, attempt.rescue)
+		c.commitSuccessfulDataWrite(attempt, leg.id)
 		return true
 	}
 
@@ -2271,6 +3469,25 @@ func (c *StreamEngine) legWriteLoop(leg *streamLeg) {
 	}
 }
 
+func (c *StreamEngine) releaseQueuedBoundedRescues(leg *streamLeg) {
+	if leg == nil || c.boundedRescue == nil {
+		return
+	}
+	for {
+		select {
+		case attempt := <-leg.rescue:
+			if attempt.record != nil {
+				c.clearAttemptAt(attempt.record, leg.id, true, attempt.started)
+			}
+			if attempt.boundedRescueReservation != 0 {
+				c.boundedRescue.Release(attempt.boundedRescueReservation, "writer_exit_before_carrier_write", c.boundedRescueNow())
+			}
+		default:
+			return
+		}
+	}
+}
+
 func (c *StreamEngine) legReadLoop(leg *streamLeg) {
 	for {
 		frame, err := readWireFrame(leg.conn, c)
@@ -2290,26 +3507,45 @@ func (c *StreamEngine) legReadLoop(leg *streamLeg) {
 			if c.telemetry != nil {
 				c.telemetry.markControlRx(leg.id, frame.typ)
 			}
-			if err := c.handleAck(frame.seq); err != nil {
-				c.handleLegFailure(leg, err)
+			var ackErr error
+			if c.cfg.recoveryTraceHook != nil {
+				ackErr = c.handleAckWithSource(frame.seq, int16(leg.id))
+			} else {
+				ackErr = c.handleAck(frame.seq)
+			}
+			if ackErr != nil {
+				c.handleLegFailure(leg, ackErr)
 				return
 			}
 		case frameTypeClose:
+			c.traceCloseEvent(streamCloseFrameDecoded, leg.id, frame.seq, nil)
 			if c.telemetry != nil {
 				c.telemetry.markControlRx(leg.id, frame.typ)
 			}
-			// CLOSE carries the sender's final next-sequence value. The sender only
-			// emits it after our cumulative ACK has retired all of those DATA frames,
-			// so a value beyond ackNext is inconsistent and must not truncate data.
-			if frame.seq > c.ackNext.Load() {
-				c.handleLegFailure(leg, errors.New("multipath CLOSE beyond received sequence"))
+			// CLOSE carries the sender's final next-sequence value. It must exactly
+			// match our cumulative receive frontier; both stale and future values
+			// are invalid and cannot terminate the logical stream.
+			if frame.seq != c.ackNext.Load() {
+				c.handleLegFailure(leg, errors.New("multipath CLOSE sequence does not match receive frontier"))
 				return
 			}
+			c.traceCloseEvent(streamCloseSequenceAccepted, leg.id, frame.seq, nil)
 			c.StartGracefulClose(io.EOF)
 			return
+		case frameTypePathRTT:
+			if err := c.handlePathRTTFrame(leg, frame.data); err != nil {
+				c.handleLegFailure(leg, err)
+				return
+			}
+		case frameTypeDrain:
+			if err := c.handleDrainControlFrame(leg, frame.data); err != nil {
+				c.handleLegFailure(leg, err)
+				return
+			}
 		case frameTypeData:
+			readAt := time.Now()
 			select {
-			case c.incoming <- dataFrame{seq: frame.seq, data: frame.data, leg: leg.id}:
+			case c.incoming <- dataFrame{seq: frame.seq, data: frame.data, leg: leg.id, generation: leg.generation, readAt: readAt}:
 			case <-c.done:
 				c.putBuffer(frame.data)
 				return
@@ -2319,6 +3555,9 @@ func (c *StreamEngine) legReadLoop(leg *streamLeg) {
 }
 
 func (c *StreamEngine) handleLegFailure(leg *streamLeg, err error) {
+	if leg.pathRTTEnabled && c.pathRTTCache != nil {
+		c.pathRTTCache.invalidateLeg(leg.pathBinding)
+	}
 	leg.close(err)
 	removed := false
 	c.legsMu.Lock()
@@ -2338,7 +3577,11 @@ func (c *StreamEngine) handleLegFailure(leg *streamLeg, err error) {
 	if p := c.cfg.frontierProbe; p != nil {
 		p.failure(c, leg.id, time.Now())
 	}
-	c.txLedger.InvalidateLeg(LegID(leg.id))
+	reason := "carrier_failure"
+	if err != nil {
+		reason = err.Error()
+	}
+	c.txLedger.InvalidateLegWithReason(LegID(leg.id), leg.generation, reason)
 	if c.assignedDecoupledEnabled() {
 		go c.reassignFailedPending(leg.id)
 	}
@@ -2498,7 +3741,7 @@ type retryCandidate struct {
 func streamLegAvailability(legs []*streamLeg) StreamLegAvailability {
 	var available StreamLegAvailability
 	for _, leg := range legs {
-		if leg.id < uint8(len(available)) {
+		if int(leg.id) < len(available) {
 			available[leg.id] = true
 		}
 	}
@@ -2535,8 +3778,9 @@ func (c *StreamEngine) scheduleFrontierRescue() {
 	c.debugRescueChecks.Add(1)
 	now := time.Now()
 	var live StreamLegAvailability
-	live[0] = c.hasLeg(0)
-	live[1] = c.hasLeg(1)
+	for _, leg := range c.availableLegs() {
+		live[LegID(leg.id)] = !leg.closed.Load()
+	}
 	candidate := c.txLedger.FrontierCandidate(now, c.cfg.RetransmitTimeout)
 	if p := c.cfg.frontierProbe; p != nil {
 		candidate = p.apply(candidate, now, c.cfg.RetransmitTimeout)
@@ -2547,15 +3791,99 @@ func (c *StreamEngine) scheduleFrontierRescue() {
 		candidate = c.txLedger.FrontierCandidate(now, c.cfg.RetransmitTimeout)
 	}
 	candidate = c.protectFrontier(candidate, now)
+	// Deciding a frontier repair is pure. Compute the preview before Policy A's
+	// optional early return so diagnostic runs can count the exact opportunities
+	// Policy A would see without steering the default Policy B action.
+	plan := DecideStreamTXFrontierRepair(candidate, live)
+	if c.cfg.recoveryTraceHook != nil && plan.Action == StreamTXFrontierRescue && plan.Record != nil {
+		c.traceRecoveryEvent(c.phase20PolicyAShadowEvaluation(candidate, now))
+	}
+	var b0CandidateID uint64
+	if c.boundedRescue == nil && c.cfg.rescueEventHook != nil && plan.Action == StreamTXFrontierRescue && plan.Record != nil {
+		b0CandidateID = c.rescueCandidateSequence.Add(1)
+		owner := candidate.owner
+		var target *streamLeg
+		if owner >= 0 && int(owner) < c.maxActiveLegs {
+			target = c.chooseLeg(c.active.Load(), owner)
+		}
+		evidence := c.boundedFrontierEvidence(target, plan.Record, owner, 0, candidate.overdue)
+		class := ClassifyStreamRescue(evidence)
+		c.emitRescueObservation(StreamRescueEvent{
+			At: now, SessionID: c.pathSessionID, CandidateID: b0CandidateID, PolicyVariant: "B0",
+			Kind: "b0_frontier_candidate", Evidence: evidence, Class: class,
+			PayloadBytes: uint64(len(plan.Record.Payload())), FinalDecision: "observed",
+			FinalDecisionReason: "B0 legacy decision path continues",
+		})
+		c.linkB0RescueCandidateToACK(plan.Record.Sequence(), b0CandidateID, class, now)
+	}
 	if c.benchmarkPendingOnly(candidate.record) && !c.slowLegProtection() {
 		return
 	}
 	if candidate.overdue {
 		c.debugRescueOverdue.Add(1)
 	}
-	plan := DecideStreamTXFrontierRepair(candidate, live)
 	if plan.Action == StreamTXFrontierRescue {
 		c.debugRescuePlans.Add(1)
+		if c.cfg.recoveryTraceHook != nil && plan.Record != nil {
+			ledger := c.txLedger.probeReferenceSnapshot(plan.Record, false)
+			owner := candidate.owner
+			var generation uint64
+			var carrierWriteStartedAt time.Time
+			var carrierWriteInProgress bool
+			var carrierWriteAge time.Duration
+			var ownerWriteBPS float64
+			state := streamAdmissionLeg{}
+			if owner >= 0 && int(owner) < c.maxActiveLegs {
+				generation = c.legGeneration[uint8(owner)].Load()
+				if ownerLeg := c.getLeg(uint8(owner)); ownerLeg != nil {
+					ownerWriteBPS, _, _ = ownerLeg.perf.snapshot()
+					if writeStartedNS := ownerLeg.writeStartedNs.Load(); writeStartedNS != 0 &&
+						ledger.InTransit && ledger.TransitLeg == uint8(owner) {
+						carrierWriteStartedAt = time.Unix(0, writeStartedNS)
+						carrierWriteAge = now.Sub(carrierWriteStartedAt)
+						carrierWriteInProgress = carrierWriteAge >= 0
+					}
+				}
+				c.admission.mu.Lock()
+				state = c.admission.legs[owner]
+				c.admission.mu.Unlock()
+			}
+			stateName := "normal"
+			if state.restricted {
+				stateName = "restricted"
+			} else if state.recovering {
+				stateName = "recovering"
+			}
+			predictedRemaining := time.Duration(0)
+			estimateBasis := "unavailable"
+			if carrierWriteInProgress && ownerWriteBPS > 0 && len(plan.Record.Payload()) > 0 {
+				predictedService := time.Duration(float64(len(plan.Record.Payload())) / ownerWriteBPS * float64(time.Second))
+				predictedRemaining = predictedService - carrierWriteAge
+				if predictedRemaining < 0 {
+					predictedRemaining = 0
+				}
+				estimateBasis = "owner_completed_write_bps_ewma_minus_current_in_transit_write_age"
+			}
+			c.traceRecoveryEvent(streamRecoveryTraceEvent{
+				Kind: "frontier_rescue_decision", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+				RecordSequence: plan.Record.Sequence(), FrameSequence: plan.Record.Sequence(), FrameType: "data",
+				LegID: owner, PeerLegID: plan.Avoid, LegGeneration: generation, RecordGeneration: ledger.OriginGeneration,
+				PayloadBytes: len(plan.Record.Payload()), ReferenceAt: candidate.reference, PolicyAt: now,
+				Age: now.Sub(candidate.reference), StateBefore: stateName, ReasonBefore: state.reason,
+				LedgerObservedAt: ledger.LedgerObservedAt, LedgerPresent: ledger.Exists,
+				AckedNext: ledger.AckedNext, InTransit: ledger.InTransit,
+				TransitLeg: ledger.TransitLeg, TransitSince: ledger.TransitSince,
+				RescueInTransit: ledger.RescueInTransit, RescueLeg: ledger.RescueLeg, RescueSince: ledger.RescueSince,
+				FirstWriteAt: ledger.FirstWriteAt, LastSentAt: ledger.LastSentAt, FrontierAt: ledger.FrontierAt,
+				SendCount: ledger.SendCount, Action: "enqueue_frontier_rescue", Applied: true,
+				Decision: &streamRecoveryDecisionSnapshot{
+					FrontierOverdue: candidate.overdue, RescueAction: "rescue", RescueAvoidLeg: plan.Avoid,
+					CarrierWriteInProgress: carrierWriteInProgress, CarrierWriteLeg: owner,
+					CarrierWriteAge: carrierWriteAge, WriteStartedAt: carrierWriteStartedAt,
+					PredictedServiceRemaining: predictedRemaining, PredictedServiceEstimateBasis: estimateBasis,
+				},
+			})
+		}
 	}
 	switch plan.Action {
 	case StreamTXFrontierNeedActivation:
@@ -2563,20 +3891,34 @@ func (c *StreamEngine) scheduleFrontierRescue() {
 			c.activate()
 		}
 	case StreamTXFrontierRescue:
-		if c.slowLegProtection() && plan.Avoid >= 0 && plan.Avoid < 2 {
+		if c.boundedRescue != nil {
+			c.scheduleBoundedFrontierRescue(plan, candidate)
+			return
+		}
+		if c.slowLegProtection() && plan.Avoid >= 0 && int(plan.Avoid) < c.maxActiveLegs {
 			id := uint8(plan.Avoid)
 			c.admission.mu.Lock()
 			state := c.admission.legs[id]
 			c.admission.mu.Unlock()
 			if state.restricted {
-				leg := c.getLeg(1 - id)
+				leg := c.bestAlternateLeg(int16(id))
 				if leg != nil {
 					budget := 256 << 10
 					if c.cfg.ChunkSize > budget {
 						budget = c.cfg.ChunkSize
 					}
 					for _, record := range c.txLedger.RestrictedFrontierBatch(plan.Record, plan.Avoid, now, state.since, c.cfg.RetransmitTimeout, budget) {
-						if !c.tryQueueRescueOwned(leg, record, plan.Avoid) {
+						candidateID := uint64(0)
+						if b0CandidateID != 0 && record.Sequence() == plan.Record.Sequence() {
+							candidateID = b0CandidateID
+						}
+						queued := false
+						if candidateID != 0 {
+							queued = c.tryQueueRescueOwnedAttemptWithCandidateID(leg, record, plan.Avoid, StreamRescueOtherCoreRetry, 0, candidateID)
+						} else {
+							queued = c.tryQueueRescueOwned(leg, record, plan.Avoid)
+						}
+						if !queued {
 							break
 						}
 					}
@@ -2584,19 +3926,158 @@ func (c *StreamEngine) scheduleFrontierRescue() {
 				}
 			}
 		}
-		if err := c.enqueueRescue(plan.Record, plan.Avoid); err != nil && !errors.Is(err, ErrStreamClosed) {
+		if err := c.enqueueRescueWithCandidateID(plan.Record, plan.Avoid, b0CandidateID); err != nil && !errors.Is(err, ErrStreamClosed) {
 			c.fail(err)
 		}
 	}
 }
 
+func (c *StreamEngine) scheduleBoundedFrontierRescue(plan StreamTXFrontierPlan, candidate StreamTXFrontierCandidate) {
+	if plan.Record == nil || c.boundedRescue == nil {
+		return
+	}
+	owner := candidate.owner
+	if owner < 0 || int(owner) >= c.maxActiveLegs {
+		evidence := c.boundedFrontierEvidence(nil, plan.Record, owner, 0, candidate.overdue)
+		decision := c.boundedRescue.Reserve(evidence, uint64(len(plan.Record.Payload())), c.boundedRescueNow())
+		if decision.Admitted && decision.Exempt {
+			legs := c.availableLegs()
+			var target *streamLeg
+			if len(legs) == 1 {
+				target = legs[0]
+			} else if len(legs) > 1 {
+				target = c.chooseLeg(true, owner)
+			}
+			c.tryQueueRescueOwnedAttemptWithCandidateID(target, plan.Record, evidence.OwnerLeg, decision.Class, 0, decision.CandidateID)
+		}
+		// Unclassifiable candidates do not gain a budget exemption. The ordinary
+		// retry planner remains independent and may still schedule a necessary retry.
+		return
+	}
+	id := uint8(owner)
+	c.admission.mu.Lock()
+	state := c.admission.legs[id]
+	c.admission.mu.Unlock()
+	if state.restricted && c.slowLegProtection() {
+		leg := c.bestAlternateLeg(int16(id))
+		if leg == nil {
+			return
+		}
+		budget := 256 << 10
+		if c.cfg.ChunkSize > budget {
+			budget = c.cfg.ChunkSize
+		}
+		for _, record := range c.txLedger.RestrictedFrontierBatch(plan.Record, int16(id), c.boundedRescueNow(), state.since, c.cfg.RetransmitTimeout, budget) {
+			if !c.tryQueueBoundedFrontierRescue(leg, record, int16(id), state.recoveryEpoch, candidate.overdue) {
+				// The same session budget covers both legs. Once the head candidate
+				// is denied, do not skip it and duplicate later ordered DATA.
+				return
+			}
+		}
+		return
+	}
+	legs := c.availableLegs()
+	if len(legs) == 0 {
+		return
+	}
+	var target *streamLeg
+	if len(legs) == 1 {
+		target = legs[0]
+	} else {
+		target = c.chooseLeg(true, int16(id))
+	}
+	if target == nil {
+		return
+	}
+	c.tryQueueBoundedFrontierRescue(target, plan.Record, int16(id), state.recoveryEpoch, candidate.overdue)
+}
+
+// linkB0RescueCandidateToACK joins a read-only B0 candidate observation to its
+// later cumulative ACK. It is active only when the opt-in observer is present;
+// no transport or scheduler decision reads this map.
+func (c *StreamEngine) linkB0RescueCandidateToACK(sequence, candidateID uint64, class StreamRescueClass, at time.Time) {
+	hook := c.cfg.rescueEventHook
+	if hook == nil || candidateID == 0 {
+		return
+	}
+	var event *StreamRescueEvent
+	c.rescueCandidateAckMu.Lock()
+	select {
+	case <-c.done:
+		c.rescueCandidateAckMu.Unlock()
+		return
+	default:
+	}
+	ackedNext := c.txAckedNext.Load()
+	if sequence < ackedNext {
+		event = &StreamRescueEvent{
+			At: at, SessionID: c.pathSessionID, CandidateID: candidateID, PolicyVariant: "B0",
+			Kind: "candidate_ack_outcome", Evidence: StreamRescueEvidence{Sequence: sequence, AckedNext: ackedNext},
+			Class: class, AckedAtDecision: true, AckedAtAttempt: true, AckOutcome: "acked_before_link",
+			FinalDecision: "data_acked", FinalDecisionReason: "cumulative_ack_advanced_before_candidate_link",
+		}
+	} else {
+		if c.rescueCandidateAckLinks == nil {
+			c.rescueCandidateAckLinks = make(map[uint64][]streamRescueCandidateAckLink)
+		}
+		links := c.rescueCandidateAckLinks[sequence]
+		if len(links) >= streamRescueCandidateAckLinksPerRecord {
+			c.rescueCandidateAckDropped.Add(1)
+			event = &StreamRescueEvent{
+				At: at, SessionID: c.pathSessionID, CandidateID: candidateID, PolicyVariant: "B0",
+				Kind: "candidate_ack_link_dropped", Evidence: StreamRescueEvidence{Sequence: sequence, AckedNext: ackedNext},
+				Class: class, FinalDecision: "link_dropped", FinalDecisionReason: "per_record_ack_link_limit",
+			}
+		} else {
+			c.rescueCandidateAckLinks[sequence] = append(links, streamRescueCandidateAckLink{candidateID: candidateID, class: class})
+		}
+	}
+	c.rescueCandidateAckMu.Unlock()
+	if event != nil {
+		c.emitRescueObservation(*event)
+	}
+}
+
+func (c *StreamEngine) emitB0RescueCandidateACKs(ackedNext uint64, at time.Time) {
+	hook := c.cfg.rescueEventHook
+	if hook == nil {
+		return
+	}
+	var events []StreamRescueEvent
+	c.rescueCandidateAckMu.Lock()
+	for sequence, links := range c.rescueCandidateAckLinks {
+		if sequence >= ackedNext {
+			continue
+		}
+		for _, link := range links {
+			events = append(events, StreamRescueEvent{
+				At: at, SessionID: c.pathSessionID, CandidateID: link.candidateID, PolicyVariant: "B0",
+				Kind: "candidate_ack_outcome", Evidence: StreamRescueEvidence{Sequence: sequence, AckedNext: ackedNext},
+				Class: link.class, AckedAtDecision: false, AckedAtAttempt: true, AckOutcome: "acked_after_candidate",
+				FinalDecision: "data_acked", FinalDecisionReason: "cumulative_ack_advanced_past_candidate_sequence",
+			})
+		}
+		delete(c.rescueCandidateAckLinks, sequence)
+	}
+	c.rescueCandidateAckMu.Unlock()
+	for _, event := range events {
+		c.emitRescueObservation(event)
+	}
+}
+
 func (c *StreamEngine) handleAck(next uint64) error {
+	return c.handleAckWithSource(next, -1)
+}
+
+func (c *StreamEngine) handleAckWithSource(next uint64, sourceLeg int16) error {
 	result := c.txLedger.ApplyACK(next, time.Now())
+	if c.boundedRescue != nil && result.Disposition != StreamTXACKFuture {
+		c.boundedRescue.AckThrough(result.AckedNext, result.LastACKProgress)
+	}
 	// Keep the sender-side cumulative frontier available to the bounded HOL
 	// correction without taking the ledger mutex on every new assignment.
-	if result.AckedNext > c.txAckedNext.Load() {
-		c.txAckedNext.Store(result.AckedNext)
-	}
+	advanceAtomicUint64Max(&c.txAckedNext, result.AckedNext)
+	c.emitB0RescueCandidateACKs(result.AckedNext, result.LastACKProgress)
 	if result.Disposition == StreamTXACKFuture {
 		// This ACK cannot safely prove delivery of any local payload. A live
 		// alpha2 test observed such an anomaly around transport rejoin; treating
@@ -2613,6 +4094,19 @@ func (c *StreamEngine) handleAck(next uint64) error {
 		return nil
 	}
 	if result.Released > 0 {
+		if c.cfg.recoveryTraceHook != nil {
+			var ackGeneration uint64
+			if sourceLeg >= 0 && int(sourceLeg) < len(c.legGeneration) {
+				ackGeneration = c.legGeneration[sourceLeg].Load()
+			}
+			c.traceRecoveryEvent(streamRecoveryTraceEvent{
+				Kind: "ack_frontier_advanced", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+				RecordSequence: result.AckedNext, FrameSequence: next, FrameType: "ack",
+				LegID: sourceLeg, LegGeneration: ackGeneration, AckedNext: result.AckedNext,
+				WriteResultBytes: int(result.RetiredBytes), RetiredFrames: result.Released,
+				PolicyAt: result.LastACKProgress, Action: "retire_unique_tx_and_advance_frontier", Applied: true,
+			})
+		}
 		c.txAckedTotal.Add(result.RetiredBytes)
 		if p := c.cfg.frontierProbe; p != nil {
 			p.ack(result.AckedNext, time.Now())
@@ -2620,8 +4114,8 @@ func (c *StreamEngine) handleAck(next uint64) error {
 		}
 		c.debugAckAdvances.Add(1)
 		c.debugAckRetiredRecords.Add(uint64(result.Released))
-		for _, bytes := range result.AckedBytesByLeg {
-			c.debugAckRetiredBytes.Add(bytes)
+		for _, legResult := range result.PerLeg {
+			c.debugAckRetiredBytes.Add(legResult.AckedBytes)
 		}
 		now := result.LastACKProgress
 		for {
@@ -2638,15 +4132,16 @@ func (c *StreamEngine) handleAck(next uint64) error {
 			provider.ObserveActivationDemand(0, result.RetiredBytes, now)
 		}
 		c.lastAckProgressNs.Store(now.UnixNano())
-		for legID, bytes := range result.AckedBytesByLeg {
-			if bytes <= 0 {
+		for legID, legResult := range result.PerLeg {
+			bytes := legResult.AckedBytes
+			if bytes <= 0 || legID >= len(c.txAckedUseful) {
 				continue
 			}
 			c.txAckedUseful[legID].Add(bytes)
 			if c.capacityProvider != nil {
 				sample := bytes
 				if c.slowLegProtection() {
-					sample = result.SampleBytesByLeg[legID]
+					sample = legResult.SampleBytes
 				}
 				c.capacityProvider.Ack(uint8(legID), sample, now)
 			}
@@ -2669,6 +4164,23 @@ func (c *StreamEngine) handleAck(next uint64) error {
 	// create repair work.
 	c.kickFrontierRescue()
 	return nil
+}
+
+type atomicUint64MaxTarget interface {
+	Load() uint64
+	CompareAndSwap(old, next uint64) bool
+}
+
+// advanceAtomicUint64Max keeps the cached cumulative frontier monotonic when
+// ACK callbacks from multiple legs race. A stale callback must retry its CAS
+// against the newest value rather than overwrite it with a later Store.
+func advanceAtomicUint64Max(target atomicUint64MaxTarget, next uint64) {
+	for {
+		old := target.Load()
+		if next <= old || target.CompareAndSwap(old, next) {
+			return
+		}
+	}
 }
 
 func (c *StreamEngine) requestAck(next uint64) {
@@ -2782,21 +4294,94 @@ func (c *StreamEngine) queueControl(leg *streamLeg, typ byte, value uint64, wait
 
 // CLOSE has no wire acknowledgement. Queue and write success remain distinct;
 // a stalled/full last carrier must not strand finalization forever.
+func (c *StreamEngine) preferredCloseLeg(legs []*streamLeg) (uint8, time.Duration, bool) {
+	if !c.cfg.ExperimentalPathAware || c.pathRTTCache == nil {
+		return 0, 0, false
+	}
+	var preferred uint8
+	var preferredRTT time.Duration
+	var firstRTT time.Duration
+	active := 0
+	allEqual := true
+	for _, leg := range legs {
+		if leg == nil || int(leg.id) >= c.maxActiveLegs || leg.closed.Load() {
+			continue
+		}
+		active++
+		feedback, found := c.PathFeedback(LegID(leg.id))
+		if !found || feedback.RTT <= 0 {
+			return 0, 0, false
+		}
+		if active == 1 {
+			preferred, preferredRTT = leg.id, feedback.RTT
+			firstRTT = feedback.RTT
+		} else {
+			if feedback.RTT != firstRTT {
+				allEqual = false
+			}
+			if feedback.RTT < preferredRTT {
+				preferred, preferredRTT = leg.id, feedback.RTT
+			}
+		}
+	}
+	// A preference is useful only when both active Carriers have a fresh,
+	// authenticated sample for this session and generation. Otherwise retain the
+	// legacy any-success behavior rather than guessing from leg order or capacity.
+	if active < 2 || allEqual {
+		return 0, 0, false
+	}
+	return preferred, preferredRTT, true
+}
+
 func (c *StreamEngine) sendCloseFrame(value uint64) bool {
 	legs := c.availableLegs()
 	if len(legs) == 0 {
 		return false
 	}
+	preferredID, preferredGrace, hasPreferred := c.preferredCloseLeg(legs)
 	timeout := c.cfg.RecoveryTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	tick := time.NewTicker(50 * time.Millisecond)
+	var preferredFallbackTimer *time.Timer
+	var preferredFallbackC <-chan time.Time
+	defer func() {
+		if preferredFallbackTimer != nil {
+			preferredFallbackTimer.Stop()
+		}
+	}()
+	retryInterval := 50 * time.Millisecond
+	if hasPreferred {
+		// Queue pressure is transient, so retry well before the preferred path's
+		// RTT fallback expires. A fixed 50 ms retry can miss the entire grace
+		// window on a 20 ms path.
+		retryInterval = preferredGrace / 8
+		if retryInterval < time.Millisecond {
+			retryInterval = time.Millisecond
+		}
+		if retryInterval > 50*time.Millisecond {
+			retryInterval = 50 * time.Millisecond
+		}
+	}
+	tick := time.NewTicker(retryInterval)
 	defer tick.Stop()
-	var wait [2]chan error
-	var queued [2]bool
+	type closeWriteResult struct {
+		leg uint8
+		err error
+	}
+	queued := make([]bool, c.maxActiveLegs)
+	results := make(chan closeWriteResult, len(legs))
+	var preferredFailed bool
+	fallbackWriteSucceeded := false
+	preferredCanStillSend := func() bool {
+		if !hasPreferred {
+			return false
+		}
+		leg := c.getLeg(preferredID)
+		return leg != nil && !leg.closed.Load()
+	}
 	for {
 		live := false
 		for _, leg := range legs {
@@ -2804,31 +4389,68 @@ func (c *StreamEngine) sendCloseFrame(value uint64) bool {
 				continue
 			}
 			live = true
-			if !queued[leg.id] {
+			if int(leg.id) < len(queued) && !queued[leg.id] {
 				if done, ok := c.queueControl(leg, frameTypeClose, value, true); ok {
-					wait[leg.id] = done
 					queued[leg.id] = true
+					go func(id uint8, current *streamLeg, completion <-chan error) {
+						select {
+						case err := <-completion:
+							select {
+							case results <- closeWriteResult{leg: id, err: err}:
+							case <-c.done:
+							}
+						case <-current.done:
+							select {
+							case results <- closeWriteResult{leg: id, err: net.ErrClosed}:
+							case <-c.done:
+							}
+						case <-c.done:
+						}
+					}(leg.id, leg, done)
 				}
 			}
 		}
 		if !live {
-			return false
+			return fallbackWriteSucceeded
+		}
+		if fallbackWriteSucceeded && (preferredFailed || !preferredCanStillSend()) {
+			return true
 		}
 		select {
 		case <-c.done:
 			return false
 		case <-timer.C:
-			return false
-		case err := <-wait[0]:
-			if err == nil {
+			// A successful redundant local write is a bounded fallback if the
+			// preferred Carrier never completes its local Write.
+			return fallbackWriteSucceeded
+		case result := <-results:
+			id, err := result.leg, result.err
+			c.traceCloseEvent(streamCloseWriteResult, id, value, err)
+			if err == nil && (!hasPreferred || id == preferredID) {
 				return true
 			}
-			wait[0] = nil
-		case err := <-wait[1]:
+			if err != nil && hasPreferred && id == preferredID {
+				preferredFailed = true
+				if fallbackWriteSucceeded {
+					return true
+				}
+				continue
+			}
 			if err == nil {
+				fallbackWriteSucceeded = true
+				if !hasPreferred || preferredFailed || !preferredCanStillSend() {
+					return true
+				}
+				if preferredFallbackTimer == nil {
+					preferredFallbackTimer = time.NewTimer(preferredGrace)
+					preferredFallbackC = preferredFallbackTimer.C
+				}
+				c.traceCloseEvent(streamCloseWaitingPreferred, preferredID, value, nil)
+			}
+		case <-preferredFallbackC:
+			if fallbackWriteSucceeded {
 				return true
 			}
-			wait[1] = nil
 		case <-tick.C:
 		}
 	}
@@ -2885,8 +4507,38 @@ func (c *StreamEngine) rxLoop() {
 			if frame.seq > c.debugRXHighest.Load() {
 				c.debugRXHighest.Store(frame.seq)
 			}
-			disposition, err := window.Insert(rxFrame, time.Now())
+			rxObservedAt := time.Now()
+			disposition, err := window.Insert(rxFrame, rxObservedAt)
+			if c.telemetry != nil {
+				c.telemetry.recordDataRXSequence(StreamDataRXSequenceEvent{
+					CarrierReadAt:  frame.readAt,
+					CoreAcceptedAt: rxObservedAt,
+					Sequence:       frame.seq,
+					LegID:          frame.leg,
+					LegGeneration:  frame.generation,
+					PayloadBytes:   uint32(len(frame.data)),
+					Disposition:    streamRXDispositionName(disposition, err),
+					Unique:         err == nil && (disposition == StreamRXReady || disposition == StreamRXBuffered),
+				})
+			}
 			c.debugRXExpected.Store(window.Expected())
+			if c.cfg.recoveryTraceHook != nil {
+				dispositionName := "unique_contiguous"
+				switch disposition {
+				case StreamRXDuplicate:
+					dispositionName = "duplicate"
+				case StreamRXBufferedDuplicate:
+					dispositionName = "buffered_duplicate"
+				case StreamRXBuffered:
+					dispositionName = "buffered_out_of_order"
+				}
+				c.traceRecoveryEvent(streamRecoveryTraceEvent{
+					Kind: "rx_data_received", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+					RecordSequence: frame.seq, FrameSequence: frame.seq, FrameType: "data",
+					LegID: int16(frame.leg), PayloadBytes: len(frame.data), Action: dispositionName,
+					Applied: err == nil, ObservedAt: rxObservedAt,
+				})
+			}
 			if err != nil {
 				c.putBuffer(frame.data)
 				c.fail(err)
@@ -2910,7 +4562,7 @@ func (c *StreamEngine) rxLoop() {
 				if c.telemetry != nil {
 					c.telemetry.markDataRxUnique(frame.leg)
 				}
-				if frame.leg < uint8(len(c.rxUniqueBytes)) {
+				if int(frame.leg) < len(c.rxUniqueBytes) {
 					c.rxUniqueBytes[frame.leg].Add(uint64(len(frame.data)))
 				}
 				c.syncRXStatsFromWindow(window)
@@ -2919,14 +4571,42 @@ func (c *StreamEngine) rxLoop() {
 			if c.telemetry != nil {
 				c.telemetry.markDataRxUnique(frame.leg)
 			}
-			if frame.leg < uint8(len(c.rxUniqueBytes)) {
+			if int(frame.leg) < len(c.rxUniqueBytes) {
 				c.rxUniqueBytes[frame.leg].Add(uint64(len(frame.data)))
 			}
 			for {
-				if err := writeAll(c.pipeConn, rxFrame.Payload); err != nil {
+				pipeWriteStartedAt := time.Now()
+				if c.cfg.recoveryTraceHook != nil {
+					c.traceRecoveryEvent(streamRecoveryTraceEvent{
+						Kind: "rx_contiguous_delivery", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+						RecordSequence: rxFrame.Sequence, FrameSequence: rxFrame.Sequence, FrameType: "data",
+						LegID: int16(rxFrame.Leg), PayloadBytes: len(rxFrame.Payload), Applied: true,
+						ObservedAt: pipeWriteStartedAt,
+					})
+				}
+				pipeWriteErr := writeAll(c.pipeConn, rxFrame.Payload)
+				pipeWriteReturnedAt := time.Now()
+				if c.cfg.recoveryTraceHook != nil {
+					writeResultBytes := 0
+					if pipeWriteErr == nil {
+						writeResultBytes = len(rxFrame.Payload)
+					}
+					traceEvent := streamRecoveryTraceEvent{
+						Kind: "rx_app_pipe_write_return", Endpoint: streamRecoveryEndpoint(c.cfg.PathRole),
+						RecordSequence: rxFrame.Sequence, FrameSequence: rxFrame.Sequence, FrameType: "data",
+						LegID: int16(rxFrame.Leg), PayloadBytes: len(rxFrame.Payload),
+						WriteBytes: len(rxFrame.Payload), WriteResultBytes: writeResultBytes,
+						Applied: pipeWriteErr == nil, ObservedAt: pipeWriteReturnedAt,
+					}
+					if pipeWriteErr != nil {
+						traceEvent.Error = pipeWriteErr.Error()
+					}
+					c.traceRecoveryEvent(traceEvent)
+				}
+				if pipeWriteErr != nil {
 					c.putBuffer(rxFrame.Payload)
 					if !c.closing.Load() {
-						c.fail(err)
+						c.fail(pipeWriteErr)
 					}
 					return
 				}
@@ -2945,6 +4625,24 @@ func (c *StreamEngine) rxLoop() {
 	}
 }
 
+func streamRXDispositionName(disposition StreamRXDisposition, err error) string {
+	if err != nil {
+		return "rejected"
+	}
+	switch disposition {
+	case StreamRXReady:
+		return "unique_contiguous"
+	case StreamRXBuffered:
+		return "unique_buffered"
+	case StreamRXDuplicate:
+		return "duplicate"
+	case StreamRXBufferedDuplicate:
+		return "buffered_duplicate"
+	default:
+		return "unknown"
+	}
+}
+
 func encodeControlFrame(typ byte, value uint64) [frameHeaderSize]byte {
 	var header [frameHeaderSize]byte
 	_ = EncodeStreamFrameHeader(header[:], StreamFrameHeader{
@@ -2955,17 +4653,73 @@ func encodeControlFrame(typ byte, value uint64) [frameHeaderSize]byte {
 }
 
 func writeDataFrame(conn StreamLeg, frame dataFrame) error {
+	_, _, err := writeDataFrameWithStart(conn, frame, nil)
+	return err
+}
+
+// streamDataWriteStartLeg starts recovery accounting from the first actual
+// carrier Write call for a DATA frame, rather than from the earlier point at
+// which the frame buffers are prepared for net.Buffers.WriteTo.
+type streamDataWriteStartLeg struct {
+	StreamLeg
+	beforeFirstWrite func() error
+	started          bool
+}
+
+func (c *streamDataWriteStartLeg) Write(p []byte) (int, error) {
+	if !c.started {
+		if c.beforeFirstWrite != nil {
+			if err := c.beforeFirstWrite(); err != nil {
+				return 0, err
+			}
+		}
+		c.started = true
+	}
+	return c.StreamLeg.Write(p)
+}
+
+func writeDataFrameWithStart(conn StreamLeg, frame dataFrame, beforeWrite func()) (int64, bool, error) {
+	var beforeFirstWrite func() error
+	if beforeWrite != nil {
+		beforeFirstWrite = func() error {
+			beforeWrite()
+			return nil
+		}
+	}
+	return writeDataFrameWithGate(conn, frame, beforeFirstWrite)
+}
+
+func writeDataFrameWithGate(conn StreamLeg, frame dataFrame, beforeWrite func() error) (int64, bool, error) {
 	var header [frameHeaderSize]byte
 	if err := EncodeStreamFrameHeader(header[:], StreamFrameHeader{
 		Type:   StreamFrameData,
 		Value:  frame.seq,
 		Length: uint32(len(frame.data)),
 	}); err != nil {
-		return err
+		return 0, false, err
 	}
 	buffers := net.Buffers{header[:], frame.data}
-	_, err := buffers.WriteTo(conn)
-	return err
+	writeLeg := &streamDataWriteStartLeg{
+		StreamLeg:        conn,
+		beforeFirstWrite: beforeWrite,
+	}
+	written, err := buffers.WriteTo(writeLeg)
+	expected := int64(frameHeaderSize + len(frame.data))
+	if err == nil && written != expected {
+		err = io.ErrShortWrite
+	}
+	return written, writeLeg.started, err
+}
+
+func streamDataPayloadAccepted(wireBytes int64, payloadBytes int) uint64 {
+	payload := wireBytes - frameHeaderSize
+	if payload <= 0 || payloadBytes <= 0 {
+		return 0
+	}
+	if payload > int64(payloadBytes) {
+		payload = int64(payloadBytes)
+	}
+	return uint64(payload)
 }
 
 func readWireFrame(conn StreamLeg, core *StreamEngine) (wireFrame, error) {
@@ -2974,6 +4728,13 @@ func readWireFrame(conn StreamLeg, core *StreamEngine) (wireFrame, error) {
 		return wireFrame{}, err
 	}
 	frame := wireFrame{typ: byte(header.Type), seq: header.Value}
+	if header.Type == StreamFramePathRTT || header.Type == StreamFrameDrain {
+		frame.data = make([]byte, int(header.Length))
+		if _, err := io.ReadFull(conn, frame.data); err != nil {
+			return wireFrame{}, err
+		}
+		return frame, nil
+	}
 	if header.Type != StreamFrameData {
 		return frame, nil
 	}
@@ -2988,6 +4749,32 @@ func readWireFrame(conn StreamLeg, core *StreamEngine) (wireFrame, error) {
 		return wireFrame{}, err
 	}
 	return frame, nil
+}
+
+func writePathRTTFrame(conn StreamLeg, message []byte) error {
+	if len(message) != StreamRTTMessageSize {
+		return ErrStreamPathMessage
+	}
+	frame := make([]byte, frameHeaderSize+len(message))
+	if err := EncodeStreamFrameHeader(frame[:frameHeaderSize], StreamFrameHeader{
+		Type: StreamFramePathRTT, Length: uint32(len(message)),
+	}); err != nil {
+		return err
+	}
+	copy(frame[frameHeaderSize:], message)
+	return writeAll(conn, frame)
+}
+
+func writeStreamControlPayload(conn StreamLeg, typ StreamFrameType, payload []byte) error {
+	if len(payload) == 0 || uint64(len(payload)) > uint64(MaxStreamFramePayload) {
+		return ErrStreamDrainMessage
+	}
+	frame := make([]byte, frameHeaderSize+len(payload))
+	if err := EncodeStreamFrameHeader(frame[:frameHeaderSize], StreamFrameHeader{Type: typ, Length: uint32(len(payload))}); err != nil {
+		return err
+	}
+	copy(frame[frameHeaderSize:], payload)
+	return writeAll(conn, frame)
 }
 
 func writeAll(writer io.Writer, buffer []byte) error {
@@ -3009,6 +4796,17 @@ func (c *StreamEngine) Activate() { c.activate() }
 
 // HasLeg reports whether a concrete leg generation is currently attached.
 func (c *StreamEngine) HasLeg(id LegID) bool { return c.hasLeg(uint8(id)) }
+
+// LegGeneration returns the generation number of the currently attached
+// carrier for a logical Leg ID. The value is diagnostic; callers must never
+// use it as authentication in place of the READY/Leg-join protocol.
+func (c *StreamEngine) LegGeneration(id LegID) (uint64, bool) {
+	leg := c.getLeg(uint8(id))
+	if leg == nil || leg.closed.Load() {
+		return 0, false
+	}
+	return leg.generation, true
+}
 
 // LegCount reports the number of currently attached legs.
 func (c *StreamEngine) LegCount() int { return c.legCount() }

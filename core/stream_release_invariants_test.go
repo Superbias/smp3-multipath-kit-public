@@ -37,7 +37,7 @@ func TestReleaseStaleACKResultCannotProveNewRecovery(t *testing.T) {
 	c.txLedger.InvalidateLeg(1)
 	c.legGeneration[1].Add(1)
 	c.restrictOrdinary(1, now.Add(20*time.Millisecond), "new_generation")
-	c.ordinaryAssigned(1, now.Add(time.Second))
+	startRecoveryProbeForTest(t, c, 1, now.Add(time.Second), 1)
 	c.admissionACK(old)
 	c.admission.mu.Lock()
 	defer c.admission.mu.Unlock()

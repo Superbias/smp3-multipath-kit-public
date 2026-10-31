@@ -386,6 +386,21 @@ func TestStreamTXLedgerRandomizedDifferential10000(t *testing.T) {
 				next := uint64(rng.Intn(int(reference.next + 3)))
 				got := ledger.ApplyACK(next, now)
 				want := reference.ack(next, now)
+				wantPerLeg := 0
+				if got.Disposition == StreamTXACKAdvanced {
+					wantPerLeg = ledger.maxLegs
+				}
+				if len(got.PerLeg) != wantPerLeg {
+					t.Fatalf("op %d dynamic ACK ledger legs=%d want=%d for disposition=%d", operation, len(got.PerLeg), wantPerLeg, got.Disposition)
+				}
+				for leg := 0; leg < len(got.AckedBytesByLeg) && leg < len(got.PerLeg); leg++ {
+					if got.PerLeg[leg].AckedBytes != got.AckedBytesByLeg[leg] {
+						t.Fatalf("op %d per-leg ACK mirror mismatch leg=%d dynamic=%d legacy=%d", operation, leg, got.PerLeg[leg].AckedBytes, got.AckedBytesByLeg[leg])
+					}
+				}
+				// The independent reference models the legacy compatibility fields;
+				// compare the new dynamic view above, then clear it for the legacy diff.
+				got.PerLeg = nil
 				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("op %d ACK got=%+v want=%+v", operation, got, want)
 				}

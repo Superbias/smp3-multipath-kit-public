@@ -163,6 +163,7 @@ func (h *telemetryHTTPServer) writeSSESnapshot(w http.ResponseWriter, snapshot T
 		CurrentWireRxRate:      snapshot.CurrentWireRxRate,
 		TelemetryDroppedEvents: snapshot.TelemetryDroppedEvents,
 		Legs:                   snapshot.Legs,
+		NLegs:                  snapshot.NLegs,
 		Roles:                  snapshot.Roles,
 		Traffic:                traffic,
 	})
@@ -181,6 +182,7 @@ func writeSSESnapshot(w http.ResponseWriter, snapshot TelemetrySnapshot) error {
 		CurrentWireRxRate:      snapshot.CurrentWireRxRate,
 		TelemetryDroppedEvents: snapshot.TelemetryDroppedEvents,
 		Legs:                   snapshot.Legs,
+		NLegs:                  snapshot.NLegs,
 	})
 }
 
@@ -215,6 +217,19 @@ func writeSSEAggregate(w http.ResponseWriter, aggregate telemetrySSEAggregate) e
 			"data_attempt_frames":        a.DataAttemptFrames,
 		}
 	}
+	nLegs := make([]map[string]any, len(aggregate.NLegs))
+	for leg, a := range aggregate.NLegs {
+		nLegs[leg] = map[string]any{
+			"leg_id": leg, "ingress_role": legIngressRoleFromAggregate(aggregate.Roles, leg),
+			"active_sessions": a.ActiveSessions, "active_connections": a.ActiveConnections,
+			"wire_tx_bytes": a.WireTxBytes, "wire_rx_bytes": a.WireRxBytes,
+			"wire_tx_rate_bps": a.WireTxRate, "wire_rx_rate_bps": a.WireRxRate,
+			"data_sent_bytes": a.DataSentBytes, "data_sent_rate_bps": a.DataSentRate,
+			"logical_tx_acked_bytes": a.LogicalTxAckedBytes, "logical_rx_unique_bytes": a.LogicalRxUniqueBytes,
+			"retransmit_bytes": a.RetransmitBytes, "retransmit_frames": a.RetransmitFrames,
+			"rescue_frames": a.RescueAttemptFrames, "rescue_bytes": a.RescueAttemptBytes,
+		}
+	}
 	payload := map[string]any{
 		"snapshot_at":              nullableTimeString(aggregate.SnapshotAt),
 		"telemetry_generation":     aggregate.Generation,
@@ -228,6 +243,7 @@ func writeSSEAggregate(w http.ResponseWriter, aggregate telemetrySSEAggregate) e
 		"wire_rx_rate_bps":         aggregate.CurrentWireRxRate,
 		"telemetry_dropped_events": aggregate.TelemetryDroppedEvents,
 		"legs":                     legs,
+		"n_legs":                   nLegs,
 		"role_stats":               roleStatsJSON(TelemetrySnapshot{Roles: aggregate.Roles}),
 	}
 	if aggregate.Traffic != nil {
@@ -242,7 +258,12 @@ func legIngressRoleFromAggregate(roles [4]TelemetryRoleAggregate, leg int) strin
 		if role.Role == TelemetryIngressUnknown || role.Role == TelemetryIngressMixed {
 			continue
 		}
-		value := role.Legs[leg]
+		var value TelemetryRoleLegAggregate
+		if leg < len(role.NLegs) {
+			value = role.NLegs[leg]
+		} else if leg < len(role.Legs) {
+			value = role.Legs[leg]
+		}
 		if value.DataSentBytes > 0 || value.LogicalTxAckedBytes > 0 || value.LogicalRxUniqueBytes > 0 || role.ActiveLegs > 0 {
 			seen[role.Role] = struct{}{}
 		}

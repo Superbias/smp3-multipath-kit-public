@@ -424,6 +424,24 @@ func TestSocksLocalConnectActivatesSecondStreamLeg(t *testing.T) {
 	}
 }
 
+func writeReadyForTest(conn net.Conn, hello smp3core.Hello, password []byte) error {
+	switch hello.Version {
+	case smp3core.Version7:
+		_, err := smp3core.WriteStreamReadyV2(conn, hello, smp3core.StreamCapabilityCoordinatedDrain, password)
+		return err
+	case smp3core.Version6:
+		selected := hello.Capabilities & smp3core.StreamCapabilityPathRTT
+		_, err := smp3core.WriteStreamReadyV2(conn, hello, selected, password)
+		return err
+	default:
+		ready, err := encodeSidecarReadyV1(hello, password)
+		if err != nil {
+			return err
+		}
+		return writeAll(conn, ready)
+	}
+}
+
 func TestStreamLegUsesConfiguredFallbackAfterPrimaryFailure(t *testing.T) {
 	fallback, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -440,11 +458,7 @@ func TestStreamLegUsesConfiguredFallbackAfterPrimaryFailure(t *testing.T) {
 		defer conn.Close()
 		hello, err := smp3core.ReadHelloAt(conn, []byte("test-password"), time.Now())
 		if err == nil {
-			var ready []byte
-			ready, err = encodeSidecarReadyV1(hello, []byte("test-password"))
-			if err == nil {
-				err = writeAll(conn, ready)
-			}
+			err = writeReadyForTest(conn, hello, []byte("test-password"))
 		}
 		helloReceived <- err
 	}()
@@ -465,7 +479,7 @@ func TestStreamLegUsesConfiguredFallbackAfterPrimaryFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &streamSession{client: instance, id: id, destination: "example.com:443", ctx: instance.ctx}
-	conn, err := session.dialLeg(1)
+	conn, _, err := session.dialLeg(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,8 +539,11 @@ func TestStreamLegTimeoutFallsBackWithSameSessionID(t *testing.T) {
 			}
 			if target == "127.0.0.1:1" {
 				close(primaryReceived)
-				_, _ = io.ReadAll(reader)
-				close(primaryClosed)
+				go func(conn net.Conn, reader *bufio.Reader) {
+					defer conn.Close()
+					_, _ = io.Copy(io.Discard, reader)
+					close(primaryClosed)
+				}(conn, reader)
 				continue
 			}
 			if target != "127.0.0.1:2" {
@@ -544,11 +561,7 @@ func TestStreamLegTimeoutFallsBackWithSameSessionID(t *testing.T) {
 			}
 			hello, err := smp3core.ReadHelloAt(reader, []byte("test-password"), time.Now())
 			if err == nil {
-				var ready []byte
-				ready, err = encodeSidecarReadyV1(hello, []byte("test-password"))
-				if err == nil {
-					err = writeAll(conn, ready)
-				}
+				err = writeReadyForTest(conn, hello, []byte("test-password"))
 			}
 			helloResult <- struct {
 				hello smp3core.Hello
@@ -562,8 +575,10 @@ func TestStreamLegTimeoutFallsBackWithSameSessionID(t *testing.T) {
 	cfg := validTestConfig()
 	cfg.UpstreamSocks.Address = listener.Addr().String()
 	cfg.UpstreamSocks.ConnectTimeout = Duration(200 * time.Millisecond)
+	cfg.SMP3.CarrierReadyTimeout = Duration(200 * time.Millisecond)
 	cfg.SMP3.Routes.Leg1 = "127.0.0.1:1"
 	cfg.SMP3.Routes.Leg1Fallback = "127.0.0.1:2"
+	cfg.SMP3.Stream.AllowV7LegacyFallback = true
 	instance, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -575,7 +590,7 @@ func TestStreamLegTimeoutFallsBackWithSameSessionID(t *testing.T) {
 	}
 	session := &streamSession{client: instance, id: id, destination: "example.com:443", ctx: instance.ctx}
 	started := time.Now()
-	conn, err := session.dialLeg(1)
+	conn, _, err := session.dialLeg(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,6 +636,7 @@ func TestStreamLegFalseSuccessReadyTimeoutFallsBack(t *testing.T) {
 		err   error
 	}, 1)
 	go func() {
+		primaryAttempts := 0
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -656,9 +672,18 @@ func TestStreamLegFalseSuccessReadyTimeoutFallsBack(t *testing.T) {
 					conn.Close()
 					return
 				}
-				close(primaryReceived)
-				_, _ = io.ReadAll(reader)
-				close(primaryClosed)
+				primaryAttempts++
+				if primaryAttempts == 1 {
+					close(primaryReceived)
+				}
+				attempt := primaryAttempts
+				go func(conn net.Conn, reader *bufio.Reader, attempt int) {
+					defer conn.Close()
+					_, _ = io.Copy(io.Discard, reader)
+					if attempt == 2 {
+						close(primaryClosed)
+					}
+				}(conn, reader, attempt)
 				continue
 			}
 			if target != "127.0.0.1:2" {
@@ -676,11 +701,7 @@ func TestStreamLegFalseSuccessReadyTimeoutFallsBack(t *testing.T) {
 			}
 			hello, err := smp3core.ReadHelloAt(reader, []byte("test-password"), time.Now())
 			if err == nil {
-				var ready []byte
-				ready, err = encodeSidecarReadyV1(hello, []byte("test-password"))
-				if err == nil {
-					err = writeAll(conn, ready)
-				}
+				err = writeReadyForTest(conn, hello, []byte("test-password"))
 			}
 			helloResult <- struct {
 				hello smp3core.Hello
@@ -697,6 +718,7 @@ func TestStreamLegFalseSuccessReadyTimeoutFallsBack(t *testing.T) {
 	cfg.SMP3.CarrierReadyTimeout = Duration(200 * time.Millisecond)
 	cfg.SMP3.Routes.Leg1 = "127.0.0.1:1"
 	cfg.SMP3.Routes.Leg1Fallback = "127.0.0.1:2"
+	cfg.SMP3.Stream.AllowV7LegacyFallback = true
 	instance, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -708,7 +730,7 @@ func TestStreamLegFalseSuccessReadyTimeoutFallsBack(t *testing.T) {
 	}
 	session := &streamSession{client: instance, id: id, destination: "example.com:443", ctx: instance.ctx}
 	started := time.Now()
-	conn, err := session.dialLeg(1)
+	conn, _, err := session.dialLeg(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +832,7 @@ func TestStreamLegParentCancellationDoesNotTryFallback(t *testing.T) {
 	session := &streamSession{client: instance, id: id, destination: "example.com:443", ctx: ctx, cancel: cancel}
 	result := make(chan error, 1)
 	go func() {
-		conn, err := session.dialLeg(1)
+		conn, _, err := session.dialLeg(1)
 		if conn != nil {
 			_ = conn.Close()
 		}

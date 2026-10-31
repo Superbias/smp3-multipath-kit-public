@@ -99,16 +99,38 @@ func (f *preferredFakeCarrier) serve(sessionID smp3core.SessionID, legID uint8, 
 		_ = conn.Close()
 		return
 	}
-	ready, err := encodeSidecarReadyV1(hello, []byte(f.password))
-	if err != nil || writeAll(conn, ready) != nil {
-		_ = conn.Close()
-		return
+	var pathAuth *smp3core.StreamPathAuth
+	switch hello.Version {
+	case smp3core.Version7:
+		auth, readyErr := smp3core.WriteStreamReadyV2(conn, hello, smp3core.StreamCapabilityCoordinatedDrain, []byte(f.password))
+		if readyErr != nil {
+			_ = conn.Close()
+			return
+		}
+		pathAuth = &auth
+	case smp3core.Version6:
+		selected := hello.Capabilities & smp3core.StreamCapabilityPathRTT
+		auth, readyErr := smp3core.WriteStreamReadyV2(conn, hello, selected, []byte(f.password))
+		if readyErr != nil {
+			_ = conn.Close()
+			return
+		}
+		if auth.PathRTTEnabled() {
+			pathAuth = &auth
+		}
+	default:
+		ready, readyErr := encodeSidecarReadyV1(hello, []byte(f.password))
+		if readyErr != nil || writeAll(conn, ready) != nil {
+			_ = conn.Close()
+			return
+		}
 	}
 	f.mu.Lock()
 	session := f.sessions[sessionID]
 	if session == nil {
 		engine, app := smp3core.NewStreamEngine(smp3core.StreamConfig{
 			SchedulerMode:     smp3core.StreamSchedulerStatic,
+			PathRole:          smp3core.StreamPathRoleServer,
 			BandwidthMbps:     []uint32{1, 1},
 			QueueFrames:       256,
 			MaxInflightFrames: 1024,
@@ -124,7 +146,12 @@ func (f *preferredFakeCarrier) serve(sessionID smp3core.SessionID, legID uint8, 
 	f.attach[sessionID] = counts
 	f.mu.Unlock()
 	wrapped := &preferredBufferedConn{Conn: conn, reader: reader}
-	if err := session.engine.AttachLeg(smp3core.LegID(legID), wrapped, nil); err != nil {
+	if pathAuth != nil {
+		err = session.engine.AttachLegWithProtocolAuth(smp3core.LegID(legID), wrapped, nil, *pathAuth)
+	} else {
+		err = session.engine.AttachLeg(smp3core.LegID(legID), wrapped, nil)
+	}
+	if err != nil {
 		_ = conn.Close()
 		return
 	}

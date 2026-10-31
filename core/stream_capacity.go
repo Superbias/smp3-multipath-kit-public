@@ -31,13 +31,24 @@ type streamCapacityLeg struct {
 
 type streamCapacityEstimator struct {
 	mu       sync.Mutex
-	legs     [2]streamCapacityLeg
+	legs     []streamCapacityLeg
 	minBytes uint64
 	window   time.Duration
 }
 
 func newStreamCapacityEstimator(weights []uint32, chunk int) *streamCapacityEstimator {
-	e := &streamCapacityEstimator{window: time.Second}
+	count := len(weights)
+	if count < 2 {
+		count = 2
+	}
+	return newStreamCapacityEstimatorForLegs(weights, chunk, count)
+}
+
+func newStreamCapacityEstimatorForLegs(weights []uint32, chunk, legCount int) *streamCapacityEstimator {
+	if legCount < 1 || legCount > MaxStreamLegIDCount {
+		legCount = 2
+	}
+	e := &streamCapacityEstimator{window: time.Second, legs: make([]streamCapacityLeg, legCount)}
 	if chunk <= 0 {
 		chunk = 64 * 1024
 	}
@@ -54,7 +65,7 @@ func newStreamCapacityEstimator(weights []uint32, chunk int) *streamCapacityEsti
 }
 
 func (e *streamCapacityEstimator) reset(id uint8, now time.Time) {
-	if e == nil || id >= 2 {
+	if e == nil || int(id) >= len(e.legs) {
 		return
 	}
 	e.mu.Lock()
@@ -73,7 +84,7 @@ func (e *streamCapacityEstimator) reset(id uint8, now time.Time) {
 // Recover is optional provider functionality, called only after bounded,
 // unique-copy ACK probation; handshake/write success never invokes it.
 func (e *streamCapacityEstimator) Recover(id uint8, seedMbps float64, now time.Time) {
-	if e == nil || id >= 2 {
+	if e == nil || int(id) >= len(e.legs) {
 		return
 	}
 	e.mu.Lock()
@@ -93,7 +104,7 @@ func (e *streamCapacityEstimator) Recover(id uint8, seedMbps float64, now time.T
 }
 
 func (e *streamCapacityEstimator) admit(id uint8, bytes uint64, saturated bool, now time.Time) {
-	if e == nil || id >= 2 || bytes == 0 {
+	if e == nil || int(id) >= len(e.legs) || bytes == 0 {
 		return
 	}
 	e.mu.Lock()
@@ -110,7 +121,7 @@ func (e *streamCapacityEstimator) admit(id uint8, bytes uint64, saturated bool, 
 }
 
 func (e *streamCapacityEstimator) ack(id uint8, bytes uint64, now time.Time) {
-	if e == nil || id >= 2 || bytes == 0 {
+	if e == nil || int(id) >= len(e.legs) || bytes == 0 {
 		return
 	}
 	e.mu.Lock()
@@ -198,13 +209,16 @@ func (e *streamCapacityEstimator) SampleReason() (reason [2]string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for id, leg := range e.legs {
+		if id >= len(reason) {
+			break
+		}
 		reason[id] = leg.sampleReason
 	}
 	return
 }
 
 func (e *streamCapacityEstimator) weight(id uint8, base float64) float64 {
-	if e == nil || id >= 2 {
+	if e == nil || int(id) >= len(e.legs) {
 		return base
 	}
 	e.mu.Lock()
@@ -228,10 +242,39 @@ func (e *streamCapacityEstimator) snapshot() (raw, estimate, confidence [2]float
 	}
 	e.mu.Lock()
 	for i, leg := range e.legs {
+		if i >= len(raw) {
+			break
+		}
 		raw[i], estimate[i], confidence[i], valid[i] = leg.raw, leg.estimate, leg.confidence, leg.valid
 	}
 	e.mu.Unlock()
 	return
+}
+
+func (e *streamCapacityEstimator) telemetryByLeg() []StreamCapacityLegTelemetry {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	rows := make([]StreamCapacityLegTelemetry, len(e.legs))
+	for i, leg := range e.legs {
+		rows[i] = StreamCapacityLegTelemetry{LegID: uint8(i), RawBPS: leg.raw, EstimateBPS: leg.estimate, Confidence: leg.confidence, Valid: leg.valid, Demand: leg.demand, SampledAt: leg.lastValid, SampleReason: leg.sampleReason}
+	}
+	return rows
+}
+
+func (e *streamCapacityEstimator) sampleReasonByLeg() []string {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	reasons := make([]string, len(e.legs))
+	for i, leg := range e.legs {
+		reasons[i] = leg.sampleReason
+	}
+	return reasons
 }
 
 func (e *streamCapacityEstimator) telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time) {
@@ -240,6 +283,9 @@ func (e *streamCapacityEstimator) telemetry() (raw, estimate, confidence [2]floa
 	}
 	e.mu.Lock()
 	for i, leg := range e.legs {
+		if i >= len(raw) {
+			break
+		}
 		raw[i], estimate[i], confidence[i], valid[i] = leg.raw, leg.estimate, leg.confidence, leg.valid
 		demand[i], sampled[i] = leg.demand, leg.lastValid
 	}

@@ -11,14 +11,14 @@ func TestReleaseRetiredGenerationCannotProveRetainedRecovery(t *testing.T) {
 	c := releaseIdleEngine(t)
 	now := time.Now()
 	c.restrictOrdinary(1, now, "test")
-	c.ordinaryAssigned(1, now)
-	for i := 0; i < 3; i++ {
+	probe := startRecoveryProbeForTest(t, c, 1, now, 1)
+	for i := 0; i < 2; i++ {
 		r := c.txLedger.Add([]byte{1}, now)
 		c.txLedger.assignOrdinary(r, 1, now)
 		c.txLedger.MarkTransit(r, 1, now)
 		c.txLedger.MarkAttemptSent(r, 1, false, now)
 	}
-	old := c.txLedger.ApplyACK(3, time.Now())
+	old := c.txLedger.ApplyACK(probe.Sequence()+3, time.Now())
 	if old.UniqueTimelyByLeg[1] != 3 {
 		t.Fatal("fixture")
 	}

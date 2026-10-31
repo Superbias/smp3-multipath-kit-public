@@ -3,6 +3,7 @@ package smp3core
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -26,11 +27,32 @@ func TestSlowLegLowRateSampling(t *testing.T) {
 }
 
 func slowLegUnitEngine() *StreamEngine {
-	c := &StreamEngine{cfg: StreamConfig{SchedulerMode: StreamSchedulerAggregation, CapacityMode: StreamCapacityDynamic, BandwidthMbps: []uint32{100, 100}, ChunkSize: 64 << 10, MaxInflightFrames: 128, benchmarkEpochRebase: true}, txLedger: NewStreamTXLedger(), legs: make(map[uint8]*streamLeg)}
+	c := &StreamEngine{cfg: StreamConfig{SchedulerMode: StreamSchedulerAggregation, CapacityMode: StreamCapacityDynamic, BandwidthMbps: []uint32{100, 100}, ChunkSize: 64 << 10, MaxInflightFrames: 128, MaxActiveLegs: DefaultMaxActiveStreamLegs, benchmarkEpochRebase: true}, maxActiveLegs: DefaultMaxActiveStreamLegs, txLedger: newStreamTXLedger(DefaultMaxActiveStreamLegs), legs: make(map[uint8]*streamLeg), admission: streamAdmission{legs: make([]streamAdmissionLeg, DefaultMaxActiveStreamLegs)}, assignedService: make([]uint64, DefaultMaxActiveStreamLegs), assignedRecords: make([]uint64, DefaultMaxActiveStreamLegs), ordinaryAssignedBytes: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), legGeneration: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), txWrittenBytes: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), txRetryWrittenBytes: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), txSentBytes: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), txAckedUseful: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), txRetransmitBytes: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), rxUniqueBytes: make([]atomic.Uint64, DefaultMaxActiveStreamLegs), pendingDepth: make([]atomic.Int64, DefaultMaxActiveStreamLegs), assignedEpochOrigin: make([]float64, DefaultMaxActiveStreamLegs), assignedEpochWeight: make([]float64, DefaultMaxActiveStreamLegs), assignedEpochReady: make([]bool, DefaultMaxActiveStreamLegs)}
 	for id := uint8(0); id < 2; id++ {
 		c.legs[id] = &streamLeg{id: id}
 	}
 	return c
+}
+
+// startRecoveryProbeForTest models assignment, dequeue, entry to the carrier
+// DATA Write, and a successful local write commit. Recovery starts only at the
+// Write boundary; assignment time retains its separate bounded pending budget.
+func startRecoveryProbeForTest(t *testing.T, c *StreamEngine, id uint8, at time.Time, size int) *StreamTXRecord {
+	t.Helper()
+	r := c.txLedger.Add(make([]byte, size), at)
+	if !c.txLedger.assignOrdinary(r, id, at) {
+		t.Fatal("recovery probe ordinary assignment failed")
+	}
+	c.ordinaryAssignedRecord(id, r, at, size)
+	c.txLedger.MarkTransit(r, LegID(id), at)
+	if !c.recoveryProbeWriteStarted(id, r, at) {
+		t.Fatal("recovery probe rejected at DATA Write start")
+	}
+	c.txLedger.MarkAttemptSent(r, LegID(id), false, at)
+	if !c.admission.legs[id].recovering {
+		t.Fatal("recovery did not begin at DATA Write start")
+	}
+	return r
 }
 
 func TestSlowLegNoACKAndAmbiguousRecovery(t *testing.T) {
@@ -67,7 +89,7 @@ func TestSlowLegNoACKAndAmbiguousRecovery(t *testing.T) {
 		if !c.ordinaryEligible(id, 0, now.Add(9*time.Second)) {
 			t.Fatal("probe never reopened")
 		}
-		c.ordinaryAssigned(id, now.Add(9*time.Second))
+		startRecoveryProbeForTest(t, c, id, now.Add(9*time.Second), 64<<10)
 		if c.ordinaryEligible(id, 1, now.Add(9*time.Second)) {
 			t.Fatal("probe budget unbounded")
 		}
@@ -132,7 +154,14 @@ func TestSlowLegSharedProviderEpochAndReset(t *testing.T) {
 	registry := NewCarrierCapacityRegistry()
 	provider := registry.Provider([2]string{"owner|out|a", "owner|out|b"}, []uint32{100, 100}, 64<<10)
 	defer provider.(interface{ Close() }).Close()
-	c := &StreamEngine{cfg: StreamConfig{SchedulerMode: StreamSchedulerAggregation, CapacityMode: StreamCapacityDynamic, BandwidthMbps: []uint32{100, 100}, benchmarkEpochRebase: true}, capacityProvider: provider, legs: map[uint8]*streamLeg{0: {id: 0}, 1: {id: 1}}}
+	c := slowLegUnitEngine()
+	// This test measures normalized scheduler entitlement in isolation from
+	// slow-leg admission. A nil ledger preserves that historical scope while
+	// the explicit two-leg bound keeps the fixture aligned with its provider.
+	c.maxActiveLegs = 2
+	c.cfg.MaxActiveLegs = 2
+	c.txLedger = nil
+	c.capacityProvider = provider
 	assign := func() uint8 {
 		return c.assignBenchmark(&StreamTXRecord{payload: make([]byte, 1024)}, &benchmarkAssignment{}).id
 	}
@@ -175,7 +204,7 @@ func TestSlowLegIdleGapAndLowPriorRecovery(t *testing.T) {
 	c.cfg.BandwidthMbps = []uint32{100, 1}
 	c.capacityProvider = e
 	c.restrictOrdinary(1, now, "test_low_prior")
-	c.ordinaryAssigned(1, now.Add(6*time.Second))
+	startRecoveryProbeForTest(t, c, 1, now.Add(6*time.Second), 64<<10)
 	for step := 0; step < 128 && c.admission.legs[1].recovering; step++ {
 		at := now.Add(7*time.Second + time.Duration(step)*10*time.Millisecond)
 		r := c.txLedger.Add(make([]byte, 64<<10), at)
@@ -193,7 +222,8 @@ func TestSlowLegBudgetReadinessDoesNotRebaseEpoch(t *testing.T) {
 	c := slowLegUnitEngine()
 	now := time.Now()
 	c.assignedEpochMask = 3
-	c.assignedEpochWeight = [2]float64{100, 100}
+	c.assignedEpochWeight = []float64{100, 100}
+	c.assignedEpochReady[0], c.assignedEpochReady[1] = true, true
 	for i := 0; i < c.ordinaryBudget(0); i++ {
 		r := c.txLedger.Add(make([]byte, 64<<10), now)
 		c.txLedger.assignOrdinary(r, 0, now)
@@ -203,7 +233,7 @@ func TestSlowLegBudgetReadinessDoesNotRebaseEpoch(t *testing.T) {
 	if leg := c.assignBenchmark(r, &benchmarkAssignment{}); leg == nil || leg.id != 1 {
 		t.Fatal("full ordinary budget did not use ready alternate")
 	}
-	if c.assignedEpochMask != 3 || c.assignedEpochOrigin != [2]float64{} {
+	if c.assignedEpochMask != 3 || c.assignedEpochOrigin[0] != 0 || c.assignedEpochOrigin[1] != 0 {
 		t.Fatal("temporary budget readiness created a membership epoch")
 	}
 }

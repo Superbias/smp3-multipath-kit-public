@@ -19,6 +19,7 @@ func TestStreamFrameEncodeGoldenHeaders(t *testing.T) {
 		{name: "activate", header: StreamFrameHeader{Type: StreamFrameActivate, Value: 0x1122334455667788}, want: "02112233445566778800000000"},
 		{name: "ack", header: StreamFrameHeader{Type: StreamFrameACK, Value: 42}, want: "03000000000000002a00000000"},
 		{name: "close", header: StreamFrameHeader{Type: StreamFrameClose, Value: 0xdeadbeef}, want: "0400000000deadbeef00000000"},
+		{name: "path_rtt", header: StreamFrameHeader{Type: StreamFramePathRTT, Length: StreamRTTMessageSize}, want: "05000000000000000000000044"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			want, err := hex.DecodeString(test.want)
@@ -46,6 +47,7 @@ func TestStreamFrameDecodeGoldenHeaders(t *testing.T) {
 		{name: "activate", wire: "02112233445566778800000000", want: StreamFrameHeader{Type: StreamFrameActivate, Value: 0x1122334455667788}},
 		{name: "ack", wire: "03000000000000002a00000000", want: StreamFrameHeader{Type: StreamFrameACK, Value: 42}},
 		{name: "close", wire: "0400000000deadbeef00000000", want: StreamFrameHeader{Type: StreamFrameClose, Value: 0xdeadbeef}},
+		{name: "path_rtt", wire: "05000000000000000000000044", want: StreamFrameHeader{Type: StreamFramePathRTT, Length: StreamRTTMessageSize}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := hex.DecodeString(test.wire)
@@ -80,6 +82,19 @@ func TestStreamFrameRejectsInvalidHeaders(t *testing.T) {
 		{name: "control_length", wire: func() []byte {
 			wire := valid(StreamFrameHeader{Type: StreamFrameACK, Value: 1})
 			wire[12] = 1
+			return wire
+		}(), wantErr: "invalid multipath control frame length"},
+		{name: "path_rtt_wrong_length", wire: func() []byte {
+			wire := make([]byte, StreamFrameHeaderSize)
+			wire[0] = byte(StreamFramePathRTT)
+			wire[12] = byte(StreamRTTMessageSize - 1)
+			return wire
+		}(), wantErr: "invalid multipath control frame length"},
+		{name: "path_rtt_nonzero_value", wire: func() []byte {
+			wire := make([]byte, StreamFrameHeaderSize)
+			wire[0] = byte(StreamFramePathRTT)
+			wire[8] = 1
+			wire[12] = byte(StreamRTTMessageSize)
 			return wire
 		}(), wantErr: "invalid multipath control frame length"},
 		{name: "zero_data_length", wire: func() []byte {

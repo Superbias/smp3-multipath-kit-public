@@ -52,12 +52,7 @@ func (o *hostCarrierOpenerImpl) Open(ctx context.Context, sessionID smp3core.Ses
 		Op:        "OPEN",
 		RequestID: requestID,
 		LegID:     legID,
-		CarrierHandle: func() string {
-			if legID == 0 {
-				return o.cfg.Leg0Handle
-			}
-			return o.cfg.Leg1Handle
-		}(),
+		CarrierHandle: o.legHandle(legID),
 		TargetHandle: o.cfg.TargetHandle,
 	}
 	if err := json.NewEncoder(control).Encode(request); err != nil {
@@ -83,4 +78,17 @@ func (o *hostCarrierOpenerImpl) Open(ctx context.Context, sessionID smp3core.Ses
 		return nil, fmt.Errorf("host carrier data authentication: %w", err)
 	}
 	return data, nil
+}
+
+func (o *hostCarrierOpenerImpl) legHandle(id uint8) string {
+	if int(id) < len(o.cfg.LegHandles) && o.cfg.LegHandles[id] != "" {
+		return o.cfg.LegHandles[id]
+	}
+	if id == 0 && o.cfg.Leg0Handle != "" {
+		return o.cfg.Leg0Handle
+	}
+	if id == 1 && o.cfg.Leg1Handle != "" {
+		return o.cfg.Leg1Handle
+	}
+	return o.cfg.CarrierHandle
 }

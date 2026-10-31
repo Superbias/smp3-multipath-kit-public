@@ -22,7 +22,7 @@ func startupTelemetryConfig(preferred uint8, grace time.Duration) StreamConfig {
 
 func assertStartupMetadata(t *testing.T, snapshot StreamStartupTelemetrySnapshot, preferred uint8, grace time.Duration) {
 	t.Helper()
-	if !snapshot.Applied || snapshot.Policy != StreamStartupPreferred || snapshot.PreferredLeg != int8(preferred) || snapshot.Grace != grace {
+	if !snapshot.Applied || snapshot.Policy != StreamStartupPreferred || snapshot.PreferredLeg != int16(preferred) || snapshot.Grace != grace {
 		t.Fatalf("startup metadata=%+v", snapshot)
 	}
 }

@@ -2,13 +2,29 @@ package smp3core
 
 import (
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestDynamicCapacityWeightChangePreservesFutureEntitlement(t *testing.T) {
-	c := &StreamEngine{cfg: StreamConfig{SchedulerMode: StreamSchedulerAggregation, CapacityMode: StreamCapacityDynamic, BandwidthMbps: []uint32{50, 200}, benchmarkEpochRebase: true}, legs: make(map[uint8]*streamLeg)}
-	c.capacity = newStreamCapacityEstimator(c.cfg.BandwidthMbps, 1024)
+	weights := []uint32{50, 200}
+	capacity := newStreamCapacityEstimatorForLegs(weights, 1024, 2)
+	c := &StreamEngine{
+		cfg:                   StreamConfig{SchedulerMode: StreamSchedulerAggregation, CapacityMode: StreamCapacityDynamic, ChunkSize: 1024, BandwidthMbps: weights, benchmarkEpochRebase: true},
+		maxActiveLegs:         2,
+		ordinaryAssignedBytes: make([]atomic.Uint64, 2),
+		txSentBytes:           make([]atomic.Uint64, 2),
+		legGeneration:         make([]atomic.Uint64, 2),
+		capacity:              capacity,
+		capacityProvider:      capacity,
+		legs:                  make(map[uint8]*streamLeg, 2),
+		assignedService:       make([]uint64, 2),
+		assignedRecords:       make([]uint64, 2),
+		assignedEpochReady:    make([]bool, 2),
+		assignedEpochOrigin:   make([]float64, 2),
+		assignedEpochWeight:   make([]float64, 2),
+	}
 	for id := uint8(0); id < 2; id++ {
 		c.legs[id] = &streamLeg{id: id}
 	}

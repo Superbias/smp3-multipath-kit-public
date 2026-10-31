@@ -17,6 +17,22 @@ type StreamCapacityProvider interface {
 	Telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time)
 }
 
+// StreamCapacityLegTelemetry is the N-leg capacity snapshot. Legacy providers
+// may implement only StreamCapacityProvider; the Core mirrors the first two
+// legs into the original fixed-size telemetry API in that case.
+type StreamCapacityLegTelemetry struct {
+	LegID                           uint8
+	RawBPS, EstimateBPS, Confidence float64
+	Valid, Demand                   bool
+	SampledAt                       time.Time
+	SampleReason                    string
+}
+
+type StreamCapacityProviderN interface {
+	TelemetryByLeg() []StreamCapacityLegTelemetry
+	SampleReasonByLeg() []string
+}
+
 // StreamActivationProvider is an optional extension used by capacity-relative
 // leg activation. It is deliberately separate from StreamCapacityProvider so
 // existing provider implementations and compatibility callers remain valid.
@@ -56,20 +72,35 @@ func NewCarrierCapacityRegistry() *CarrierCapacityRegistry {
 // Provider returns a two-leg view backed by the registry. An empty key creates
 // a private estimator for that leg and is useful for compatibility callers.
 func (r *CarrierCapacityRegistry) Provider(keys [2]string, weights []uint32, chunk int) StreamCapacityProvider {
-	if r == nil {
-		return newStreamCapacityEstimator(weights, chunk)
+	return r.ProviderForLegs(keys[:], weights, chunk, 2)
+}
+
+// ProviderForLegs returns capacity state for a configured N-leg stream. Keys
+// and weights are indexed by protocol LegID and must describe contiguous legs.
+func (r *CarrierCapacityRegistry) ProviderForLegs(keys []string, weights []uint32, chunk, legCount int) StreamCapacityProvider {
+	if legCount < 1 || legCount > MaxStreamLegIDCount {
+		legCount = 2
 	}
-	states := [2]*streamCapacityEstimator{}
+	if len(keys) < legCount {
+		padded := make([]string, legCount)
+		copy(padded, keys)
+		keys = padded
+	}
+	if r == nil {
+		return newStreamCapacityEstimatorForLegs(weights, chunk, legCount)
+	}
+	states := make([]*streamCapacityEstimator, legCount)
+	keyCopy := append([]string(nil), keys[:legCount]...)
 	r.mu.Lock()
 	r.pruneLocked(time.Now())
-	for id, key := range keys {
+	for id, key := range keyCopy {
 		if key == "" {
-			states[id] = newStreamCapacityEstimator(weightsForLeg(weights, id), chunk)
+			states[id] = newStreamCapacityEstimatorForLegs(weightsForLeg(weights, id), chunk, 1)
 			continue
 		}
 		entry := r.entries[key]
 		if entry == nil {
-			entry = &carrierCapacityEntry{estimator: newStreamCapacityEstimator(weightsForLeg(weights, id), chunk)}
+			entry = &carrierCapacityEntry{estimator: newStreamCapacityEstimatorForLegs(weightsForLeg(weights, id), chunk, 1)}
 			r.entries[key] = entry
 		}
 		entry.refs++
@@ -78,7 +109,7 @@ func (r *CarrierCapacityRegistry) Provider(keys [2]string, weights []uint32, chu
 	}
 	r.pruneLocked(time.Now())
 	r.mu.Unlock()
-	return &carrierCapacityProvider{states: states, registry: r, keys: keys}
+	return &carrierCapacityProvider{states: states, registry: r, keys: keyCopy}
 }
 
 func (r *CarrierCapacityRegistry) pruneLocked(now time.Time) {
@@ -111,9 +142,9 @@ type carrierCapacityProvider struct {
 	mu         sync.Mutex // lifecycle and this provider's unfinished logical demand
 	closed     bool
 	unfinished uint64
-	states     [2]*streamCapacityEstimator
+	states     []*streamCapacityEstimator
 	registry   *CarrierCapacityRegistry
-	keys       [2]string
+	keys       []string
 	once       sync.Once
 }
 
@@ -207,7 +238,7 @@ func (p *carrierCapacityProvider) Reset(id uint8, now time.Time) {
 	if p.closed {
 		return
 	}
-	if id < 2 && p.states[id] != nil {
+	if int(id) < len(p.states) && p.states[id] != nil {
 		state := p.states[id]
 		state.mu.Lock()
 		if state.legs[0].windowStart.IsZero() {
@@ -224,7 +255,7 @@ func (p *carrierCapacityProvider) Admit(id uint8, bytes uint64, saturated bool, 
 	if p.closed {
 		return
 	}
-	if id < 2 && p.states[id] != nil {
+	if int(id) < len(p.states) && p.states[id] != nil {
 		p.states[id].admit(0, bytes, saturated, now)
 	}
 }
@@ -235,13 +266,13 @@ func (p *carrierCapacityProvider) Ack(id uint8, bytes uint64, now time.Time) {
 	if p.closed {
 		return
 	}
-	if id < 2 && p.states[id] != nil {
+	if int(id) < len(p.states) && p.states[id] != nil {
 		p.states[id].ack(0, bytes, now)
 	}
 }
 
 func (p *carrierCapacityProvider) Weight(id uint8, base float64) float64 {
-	if id >= 2 || p.states[id] == nil {
+	if int(id) >= len(p.states) || p.states[id] == nil {
 		return base
 	}
 	return p.states[id].weight(0, base)
@@ -253,13 +284,16 @@ func (p *carrierCapacityProvider) Recover(id uint8, seedMbps float64, now time.T
 	if p.closed {
 		return
 	}
-	if id < 2 && p.states[id] != nil {
+	if int(id) < len(p.states) && p.states[id] != nil {
 		p.states[id].Recover(0, seedMbps, now)
 	}
 }
 
 func (p *carrierCapacityProvider) SampleReason() (reason [2]string) {
 	for id, state := range p.states {
+		if id >= len(reason) {
+			break
+		}
 		if state != nil {
 			reason[id] = state.SampleReason()[0]
 		}
@@ -267,8 +301,24 @@ func (p *carrierCapacityProvider) SampleReason() (reason [2]string) {
 	return
 }
 
+func (p *carrierCapacityProvider) SampleReasonByLeg() []string {
+	if p == nil {
+		return nil
+	}
+	reason := make([]string, len(p.states))
+	for id, state := range p.states {
+		if state != nil {
+			reason[id] = state.SampleReason()[0]
+		}
+	}
+	return reason
+}
+
 func (p *carrierCapacityProvider) Telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time) {
 	for id, state := range p.states {
+		if id >= len(raw) {
+			break
+		}
 		if state == nil {
 			continue
 		}
@@ -276,6 +326,24 @@ func (p *carrierCapacityProvider) Telemetry() (raw, estimate, confidence [2]floa
 		raw[id], estimate[id], confidence[id], valid[id], demand[id], sampled[id] = r[0], e[0], c[0], v[0], d[0], s[0]
 	}
 	return
+}
+
+func (p *carrierCapacityProvider) TelemetryByLeg() []StreamCapacityLegTelemetry {
+	if p == nil {
+		return nil
+	}
+	rows := make([]StreamCapacityLegTelemetry, len(p.states))
+	for id, state := range p.states {
+		rows[id].LegID = uint8(id)
+		if state == nil {
+			continue
+		}
+		r, e, c, v, d, s := state.telemetry()
+		rows[id].RawBPS, rows[id].EstimateBPS, rows[id].Confidence = r[0], e[0], c[0]
+		rows[id].Valid, rows[id].Demand, rows[id].SampledAt = v[0], d[0], s[0]
+		rows[id].SampleReason = state.SampleReason()[0]
+	}
+	return rows
 }
 
 // Close drops stream references while retaining the estimate for warm reuse.
@@ -332,3 +400,8 @@ func (e *streamCapacityEstimator) Weight(id uint8, base float64) float64     { r
 func (e *streamCapacityEstimator) Telemetry() (raw, estimate, confidence [2]float64, valid, demand [2]bool, sampled [2]time.Time) {
 	return e.telemetry()
 }
+
+func (e *streamCapacityEstimator) TelemetryByLeg() []StreamCapacityLegTelemetry {
+	return e.telemetryByLeg()
+}
+func (e *streamCapacityEstimator) SampleReasonByLeg() []string { return e.sampleReasonByLeg() }

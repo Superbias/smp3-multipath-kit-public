@@ -6,4 +6,5 @@ use (
 	./cmd/smp3-server
 	./client
 	./cmd/smp3-client
+	./front
 )

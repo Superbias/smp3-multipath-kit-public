@@ -3,11 +3,14 @@ package client
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
@@ -16,20 +19,29 @@ var ErrClientClosed = errors.New("smp3 sidecar client closed")
 
 type Client struct {
 	cfg         Config
+	carrierTLS  *tls.Config
 	hostCarrier hostCarrierOpener
 	capacity    *smp3core.CarrierCapacityRegistry
+	runtime     atomic.Pointer[clientRuntimeConfig]
 
-	mu       sync.Mutex
-	listener net.Listener
-	closed   bool
-	ctx      context.Context
-	cancel   context.CancelFunc
-	conns    map[net.Conn]struct{}
-	wg       sync.WaitGroup
+	mu         sync.Mutex
+	listener   net.Listener
+	closed     bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	conns      map[net.Conn]struct{}
+	wg         sync.WaitGroup
+	reloadMu   sync.RWMutex
+	sessionsMu sync.RWMutex
+	sessions   map[*streamSession]struct{}
 }
 
 func New(cfg Config) (*Client, error) {
 	if err := cfg.NormalizeAndValidate(); err != nil {
+		return nil, err
+	}
+	carrierTLS, err := newCarrierTLSConfig(cfg.SMP3.CarrierTLS)
+	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -37,19 +49,24 @@ func New(cfg Config) (*Client, error) {
 	if cfg.SMP3.CarrierMode == "host_bridge" {
 		hostCarrier = newHostCarrierOpener(cfg.SMP3.HostCarrier)
 	}
-	return &Client{cfg: cfg, hostCarrier: hostCarrier, capacity: smp3core.NewCarrierCapacityRegistry(), ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{})}, nil
+	return &Client{cfg: cfg, carrierTLS: carrierTLS, hostCarrier: hostCarrier, capacity: smp3core.NewCarrierCapacityRegistry(), ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{}), sessions: make(map[*streamSession]struct{})}, nil
 }
 
 func (c *Client) streamCapacityProvider() smp3core.StreamCapacityProvider {
-	if c.capacity == nil || c.cfg.SMP3.Stream.CapacityMode != "dynamic" || c.cfg.SMP3.Stream.SchedulerMode != "aggregation" {
+	return c.streamCapacityProviderFor(c.currentRuntime())
+}
+
+func (c *Client) streamCapacityProviderFor(runtime *clientRuntimeConfig) smp3core.StreamCapacityProvider {
+	if c.capacity == nil || runtime == nil || runtime.cfg.SMP3.Stream.CapacityMode != "dynamic" || runtime.cfg.SMP3.Stream.SchedulerMode != "aggregation" {
 		return nil
 	}
-	up0, up1 := c.cfg.effectiveUpstream(0).Address, c.cfg.effectiveUpstream(1).Address
-	keys := [2]string{
-		"client|outbound|" + c.cfg.SMP3.Routes.Leg0 + "|" + up0,
-		"client|outbound|" + c.cfg.SMP3.Routes.Leg1 + "|" + up1,
+	routes := runtime.cfg.SMP3.Routes.entries()
+	keys := make([]string, len(routes))
+	for id, route := range routes {
+		upstream := runtime.cfg.effectiveUpstream(uint8(id)).Address
+		keys[id] = fmt.Sprintf("client|outbound|%s|%s", route.Address, upstream)
 	}
-	return c.capacity.Provider(keys, c.cfg.SMP3.Stream.BandwidthMbps, c.cfg.SMP3.Stream.ChunkSize)
+	return c.capacity.ProviderForLegs(keys, runtime.cfg.SMP3.Stream.BandwidthMbps, runtime.cfg.SMP3.Stream.ChunkSize, runtime.cfg.SMP3.Stream.MaxActiveLegs)
 }
 
 func (c *Client) Start() error {
@@ -217,8 +234,17 @@ func (c *Client) handleConnect(conn net.Conn, reader *bufio.Reader, destination 
 		_ = conn.Close()
 		return
 	}
+	// Serialize initial Session bootstrap with Reload. Otherwise a new Session
+	// could be created from the old route set after Reload took its live-session
+	// snapshot and escape the transaction.
+	c.reloadMu.RLock()
 	session, err := newStreamSession(c, destination)
+	if err == nil {
+		c.registerStreamSession(session)
+	}
+	c.reloadMu.RUnlock()
 	if err != nil {
+		slog.Default().Warn("SMP3 stream session startup failed", "destination", destination, "error", err)
 		_ = writeSocksReply(conn, socksReplyGeneralFailure, nil)
 		_ = conn.Close()
 		return

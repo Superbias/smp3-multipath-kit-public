@@ -5,11 +5,12 @@ import (
 	"time"
 )
 
-// StreamLegAvailability is the current fixed two-leg live mask. It contains
-// no carrier object and deliberately does not generalize the wire to N legs.
-type StreamLegAvailability [2]bool
+// StreamLegAvailability is a protocol-ID-indexed live mask. LegID remains a
+// byte on the wire, while each StreamEngine independently caps the number of
+// IDs accepted for a session.
+type StreamLegAvailability [MaxStreamLegIDCount]bool
 
-func (a StreamLegAvailability) Has(id LegID) bool { return id < 2 && a[id] }
+func (a StreamLegAvailability) Has(id LegID) bool { return int(id) < len(a) && a[id] }
 func (a StreamLegAvailability) Count() int {
 	n := 0
 	for _, live := range a {
