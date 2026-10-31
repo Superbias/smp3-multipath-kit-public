@@ -1,4 +1,4 @@
-# SMP3 v2.4.0 product build workflows
+# SMP3 v2.7.0 product build workflows
 
 The product lines have explicit build ownership. `build.sh` is the canonical
 Standalone build and does not fetch, build, or import any proxy core.
@@ -34,3 +34,7 @@ optional Compatibility workflow produces `smp3-proxy-*` and
 The workflows preserve the SMP3 wire, Core, scheduler, ACK, retransmission,
 Native adapter, and Carrier semantics. External proxy protocols remain outside
 the Standalone product.
+
+Release binaries are published as GitHub Release assets and are intentionally
+not tracked in this source directory. `SHA256SUMS` and `BUILD_MANIFEST.json`
+are attached to the release alongside the binaries.

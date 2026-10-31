@@ -287,12 +287,12 @@ func TestQ4Leg1FailureDoesNotUseFallback(t *testing.T) {
 	var id [16]byte
 	id[0] = 0x44
 	session := &streamSession{client: instance, id: id, destination: "example.com:443", ctx: instance.ctx}
-	if conn, err := session.dialLeg(0); err == nil {
+	if conn, _, err := session.dialLeg(0); err == nil {
 		_ = conn.Close()
 	} else {
 		t.Fatalf("Leg0 direct dial unexpectedly failed: %v", err)
 	}
-	if _, err := session.dialLeg(1); err == nil {
+	if _, _, err := session.dialLeg(1); err == nil {
 		t.Fatal("Leg1 failure unexpectedly succeeded")
 	}
 	select {
@@ -319,7 +319,7 @@ func TestQ4Leg1FailureDoesNotUseFallback(t *testing.T) {
 }
 
 type q4SOCKSReader struct {
-	conn  net.Conn
+	conn   net.Conn
 	reader *bufio.Reader
 }
 

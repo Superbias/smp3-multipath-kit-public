@@ -20,6 +20,7 @@ var (
 	errEmptyDestination      = errors.New("empty multipath destination")
 	errInvalidDestination    = errors.New("invalid multipath destination")
 	errInvalidAuthentication = errors.New("invalid multipath authentication")
+	errInvalidCapabilities   = errors.New("invalid multipath stream capabilities")
 )
 
 const helloSkew = 90 * time.Second
@@ -33,10 +34,7 @@ func EncodeHelloParts(hello Hello, password []byte) (header []byte, destination 
 	if len(hello.Destination) == 0 || len(hello.Destination) > 65535 {
 		return nil, nil, nil, errInvalidDestination
 	}
-	if hello.LegID > 1 {
-		return nil, nil, nil, errInvalidLeg
-	}
-	if hello.Version != Version4 && hello.Version != Version5 {
+	if hello.Version != Version4 && hello.Version != Version5 && hello.Version != Version6 && hello.Version != Version7 {
 		return nil, nil, nil, errInvalidVersion
 	}
 	if hello.Version == Version4 && hello.Mode != ModeStream {
@@ -44,6 +42,21 @@ func EncodeHelloParts(hello Hello, password []byte) (header []byte, destination 
 	}
 	if hello.Version == Version5 && hello.Mode != ModeDatagram {
 		return nil, nil, nil, errInvalidMode
+	}
+	if hello.Version == Version6 && hello.Mode != ModeStream {
+		return nil, nil, nil, errInvalidMode
+	}
+	if hello.Version == Version7 && hello.Mode != ModeStream {
+		return nil, nil, nil, errInvalidMode
+	}
+	if hello.Version != Version6 && hello.Version != Version7 && hello.Capabilities != 0 {
+		return nil, nil, nil, errInvalidCapabilities
+	}
+	if hello.Version == Version6 && (hello.Capabilities&^StreamCapabilityPathRTT != 0 || hello.Capabilities&StreamCapabilityPathRTT == 0) {
+		return nil, nil, nil, errInvalidCapabilities
+	}
+	if hello.Version == Version7 && (hello.Capabilities&^knownStreamCapabilities != 0 || hello.Capabilities&StreamCapabilityCoordinatedDrain == 0) {
+		return nil, nil, nil, errInvalidCapabilities
 	}
 
 	destination = []byte(hello.Destination)
@@ -59,6 +72,19 @@ func EncodeHelloParts(hello Hello, password []byte) (header []byte, destination 
 		binary.BigEndian.PutUint64(header[23:31], uint64(hello.Timestamp))
 		copy(header[31:47], hello.Nonce[:])
 		binary.BigEndian.PutUint16(header[47:49], uint16(len(destination)))
+	} else if hello.Version == Version6 || hello.Version == Version7 {
+		// v6/v7 stream: magic(4) version(1) leg(1) mode(1) session(16) unix(8)
+		//     nonce(16) capabilities(4) destlen(2)
+		header = make([]byte, 53)
+		copy(header[0:4], helloMagic[:])
+		header[4] = byte(hello.Version)
+		header[5] = byte(hello.LegID)
+		header[6] = byte(hello.Mode)
+		copy(header[7:23], hello.SessionID[:])
+		binary.BigEndian.PutUint64(header[23:31], uint64(hello.Timestamp))
+		copy(header[31:47], hello.Nonce[:])
+		binary.BigEndian.PutUint32(header[47:51], hello.Capabilities)
+		binary.BigEndian.PutUint16(header[51:53], uint16(len(destination)))
 	} else {
 		// v4: magic(4) version(1) leg(1) session(16) unix(8) nonce(16)
 		//     destlen(2)
@@ -96,9 +122,6 @@ func ReadHelloAt(r io.Reader, password []byte, now time.Time) (Hello, error) {
 	version := Version(prefix[4])
 	hello.Version = version
 	hello.LegID = LegID(prefix[5])
-	if hello.LegID > 1 {
-		return hello, errInvalidLeg
-	}
 
 	var header []byte
 	var timestamp int64
@@ -129,6 +152,29 @@ func ReadHelloAt(r io.Reader, password []byte, now time.Time) (Hello, error) {
 		copy(hello.Nonce[:], header[31:47])
 		timestamp = int64(binary.BigEndian.Uint64(header[23:31]))
 		destinationLength = int(binary.BigEndian.Uint16(header[47:49]))
+	case Version6:
+		fallthrough
+	case Version7:
+		header = make([]byte, 53)
+		copy(header[:6], prefix)
+		if _, err := io.ReadFull(r, header[6:]); err != nil {
+			return hello, err
+		}
+		hello.Mode = HelloMode(header[6])
+		if hello.Mode != ModeStream {
+			return hello, errInvalidMode
+		}
+		copy(hello.SessionID[:], header[7:23])
+		timestamp = int64(binary.BigEndian.Uint64(header[23:31]))
+		copy(hello.Nonce[:], header[31:47])
+		hello.Capabilities = binary.BigEndian.Uint32(header[47:51])
+		if version == Version6 && (hello.Capabilities&^StreamCapabilityPathRTT != 0 || hello.Capabilities&StreamCapabilityPathRTT == 0) {
+			return hello, errInvalidCapabilities
+		}
+		if version == Version7 && (hello.Capabilities&^knownStreamCapabilities != 0 || hello.Capabilities&StreamCapabilityCoordinatedDrain == 0) {
+			return hello, errInvalidCapabilities
+		}
+		destinationLength = int(binary.BigEndian.Uint16(header[51:53]))
 	default:
 		return hello, errInvalidVersion
 	}

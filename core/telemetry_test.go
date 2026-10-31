@@ -175,14 +175,14 @@ func TestStreamTelemetryAttributesSuccessfulRescueAttempt(t *testing.T) {
 	if !engine.txLedger.MarkTransit(record, LegID(0), time.Now()) {
 		t.Fatal("failed to mark original attempt")
 	}
-	if result := engine.markAttemptSent(record, 0, false); !result.Applied {
+	if result := engine.commitSuccessfulDataWrite(txSendAttempt{record: record, ordinary: true}, 0); !result.Applied {
 		t.Fatalf("original attempt result=%+v", result)
 	}
 	started := time.Now()
 	if _, ok := engine.txLedger.MarkRescueTransit(record, LegID(1), started); !ok {
 		t.Fatal("failed to mark rescue attempt")
 	}
-	result := engine.markAttemptSent(record, 1, true)
+	result := engine.commitSuccessfulDataWrite(txSendAttempt{record: record, rescue: true}, 1)
 	if !result.Applied || !result.Retransmit {
 		t.Fatalf("mark attempt result=%+v", result)
 	}

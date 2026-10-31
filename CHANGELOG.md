@@ -1,3 +1,10 @@
+## 2.6.2 — shared Core recovery correction
+
+- Corrected recovery probe exposure accounting in the canonical shared Stream Core. Native Mihomo and Standalone use the same Core implementation.
+- Kept SMP3 wire/HELLO versions and configuration schema unchanged.
+- Release assets target Linux/amd64 and Windows/amd64 Native Mihomo, Standalone client/server, and the pinned sing-box compatibility client; Android Standalone arm64 APK is included and debug-signed.
+- Build and test evidence is in `docs/SMP3_SHARED_CORE_RECOVERY_FIX.md`. Migration parity remains policy-approval-required, Windows raw Carrier calibration remains failed, and production validation was not run. Those gates are not reported as passed.
+
 # Changelog
 
 ## 2.5.0 — opt-in aggregation scheduler

@@ -1,0 +1,329 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "SMP3 additive local TX telemetry",
+    "version": "1.0.0",
+    "description": "Existing session detail extension. Arrays index logical legs 0 and 1. Counters are cumulative; pending/outstanding are gauges. Rates are B/s or Mbps as named; durations are ns. Zero Go time means no observation. Existing authentication and other fields remain unchanged."
+  },
+  "paths": {
+    "/api/v1/sessions/{display_id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "display_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Existing session detail with optional stream_transport",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": {
+                      "type": "object",
+                      "properties": {
+                        "stream_transport": {
+                          "$ref": "#/components/schemas/StreamTransport"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "StreamTransport": {
+        "type": "object",
+        "properties": {
+          "useful_ack_total": {
+            "type": "integer"
+          },
+          "effective_weight_mbps": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number"
+            }
+          },
+          "sample_reason": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string"
+            }
+          },
+          "sample_age_ns": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "pending_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "ordinary_outstanding_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "local_tx"
+            ]
+          },
+          "estimate_bps": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number"
+            }
+          },
+          "weight_mbps": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number"
+            }
+          },
+          "confidence": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number"
+            }
+          },
+          "sample_valid": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "boolean"
+            }
+          },
+          "sample_at": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "admission_state": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "restricted",
+                "recovering"
+              ]
+            }
+          },
+          "admission_reason": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string"
+            }
+          },
+          "admission_since": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "probe_after": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "pending_frames": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "ordinary_outstanding_frames": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "ordinary_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "written_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "useful_ack_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "retry_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "rescue_attempts": {
+            "type": "integer"
+          },
+          "ack_next": {
+            "type": "integer"
+          },
+          "ack_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "frontier_age_ns": {
+            "type": "integer"
+          },
+          "frontier_leg": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 1,
+            "description": "-1 means absent frontier; 0 and 1 are logical legs."
+          },
+          "generation": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          },
+          "rx_delivered_bytes": {
+            "type": "integer"
+          },
+          "rx_pending_frames": {
+            "type": "integer"
+          },
+          "probe_limit": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Current probation record limit; not configured chunk count."
+          },
+          "probe_byte_limit": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Current probation payload byte allowance, seeded from actual first record size."
+          },
+          "probe_confirmed_bytes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "New unique payload bytes confirmed toward the current stage."
+          },
+          "probe_service_bps": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            },
+            "description": "Last completed probation unique ACK service window in B/s; zero is unknown, not physical capacity."
+          },
+          "session_service_bps": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            },
+            "description": "Per-session normal ACK service B/s, distinct from shared physical capacity."
+          },
+          "feedback_envelope_ns": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Clean ACK residence envelope in ns, including serialization and ordering; not physical RTT."
+          }
+        },
+        "nullable": true
+      }
+    }
+  }
+}

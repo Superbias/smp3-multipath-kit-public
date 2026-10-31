@@ -184,7 +184,7 @@ func TestPerLegCarrierFailureDoesNotCrossToOtherUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &streamSession{client: instance, id: id, destination: "127.0.0.1:24445", ctx: instance.ctx}
-	if conn, err := session.dialLeg(0); err == nil {
+	if conn, _, err := session.dialLeg(0); err == nil {
 		_ = conn.Close()
 		t.Fatal("unavailable leg0 unexpectedly connected")
 	}

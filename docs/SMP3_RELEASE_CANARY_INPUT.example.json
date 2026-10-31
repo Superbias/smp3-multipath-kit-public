@@ -1,0 +1,40 @@
+{
+  "release_gate": "FAIL",
+  "client_active_config_verified": false,
+  "leg0_business_health_verified": false,
+  "independent_leg0_entry_verified": false,
+  "client_transport_observability_verified": false,
+  "leg0_direct_node_discovered": true,
+  "leg0_lightweight_connection_probe_verified": true,
+  "probe_note": "Prior-audit Clash Party Snell direct-node HTTPS probes passed three times. No new production or app access this round. Sustained business B, Carrier RTT, runtime reload equivalence and old-session survival remain unverified.",
+  "measured_rtt_ms": [
+    null,
+    null
+  ],
+  "parameters": {
+    "source": "Historical prior-audit server read-only config plus user client snippet; not refreshed this round; secrets omitted",
+    "scheduler": "aggregation",
+    "capacity": "dynamic",
+    "chunk": 65536,
+    "queue_frames": 256,
+    "inflight_frames": 1024,
+    "reorder_frames": 4096,
+    "bandwidth_prior_mbps": [
+      128,
+      500
+    ],
+    "ack_ms": 20,
+    "retry_ms": 1500,
+    "recovery_seconds": 15,
+    "server_activation_seconds": 1,
+    "client_activation_seconds": 10,
+    "threshold_mbps": 80,
+    "startup": "preferred",
+    "preferred_leg": 0,
+    "startup_grace_ms": 500,
+    "leg0": "Snell v5 (reuse)",
+    "leg1": "Hysteria2 with Reality fallback",
+    "server_old_sha256": "8a7d228d5ce51bc4e2aee132787a0b1c243f7110bb5870c749774d7fd2a68741",
+    "native_old_sha256": "97b5ec71e54efa02f01d4e87ad1f13aaf3224cde2346eab102f89e78e608db46"
+  }
+}

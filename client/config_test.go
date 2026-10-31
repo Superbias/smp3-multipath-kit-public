@@ -54,6 +54,37 @@ func TestLoadConfigDefaultsAndStrictValidation(t *testing.T) {
 	}
 }
 
+func TestLoadConfigTransportFallbackRequiresExplicitOptIn(t *testing.T) {
+	config := `{
+  "listen": "127.0.0.1:18080",
+  "upstream_socks": {"address": "127.0.0.1:7898"},
+  "smp3": {
+    "password": "test-password",
+    "routes": {"leg0": "127.0.0.1:24441", "leg1": "127.0.0.1:24442"},
+    "stream": {
+      "experimental_path_aware": true,
+      "allow_v7_legacy_fallback": true,
+      "allow_path_rtt_v4_fallback": true,
+      "allow_path_rtt_v4_fallback_on_transport_error": true
+    }
+  }
+}`
+	cfg, err := LoadConfig(strings.NewReader(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SMP3.Stream.ExperimentalPathAware || !cfg.SMP3.Stream.AllowV7LegacyFallback || !cfg.SMP3.Stream.AllowPathRTTV4Fallback || !cfg.SMP3.Stream.AllowPathRTTV4FallbackOnTransportError {
+		t.Fatalf("explicit V6 transport fallback policy was not loaded: %+v", cfg.SMP3.Stream)
+	}
+	defaults := DefaultConfig()
+	if defaults.SMP3.Stream.AllowV7LegacyFallback {
+		t.Fatalf("V7-to-legacy transport fallback must default off: %+v", defaults.SMP3.Stream)
+	}
+	if defaults.SMP3.Stream.AllowPathRTTV4Fallback || defaults.SMP3.Stream.AllowPathRTTV4FallbackOnTransportError {
+		t.Fatalf("V4 transport fallback must default off: %+v", defaults.SMP3.Stream)
+	}
+}
+
 func TestEqualRouteTargetsRemainIndependentAndValid(t *testing.T) {
 	const sameTarget = "127.0.0.1:24445"
 
@@ -91,6 +122,31 @@ func TestEqualRouteTargetsRemainIndependentAndValid(t *testing.T) {
 	distinct := RouteOptions{Leg0: "127.0.0.1:24445", Leg1: "127.0.0.1:24446", Leg1Fallback: "127.0.0.1:24447"}
 	if err := validateRoutes(distinct); err != nil {
 		t.Fatalf("distinct route regression failed: %v", err)
+	}
+}
+
+func TestSameNLegLandingTargetRequiresDistinctUpstreamCarriers(t *testing.T) {
+	const endpoint = "127.0.0.1:24445"
+	makeConfig := func() Config {
+		cfg := DefaultConfig()
+		cfg.SMP3.Password = "test-password"
+		cfg.SMP3.Routes = RouteOptions{Legs: []RouteLegOptions{
+			{ID: 0, Name: "path-a", Address: endpoint},
+			{ID: 1, Name: "path-b", Address: endpoint},
+		}}
+		return cfg
+	}
+	sameUpstream := makeConfig()
+	if err := sameUpstream.NormalizeAndValidate(); err == nil {
+		t.Fatal("same N-leg target on the same upstream carrier was accepted")
+	}
+	cfg := makeConfig()
+	cfg.UpstreamSocks.Legs = []UpstreamSocksOverride{
+		{Address: "127.0.0.1:17898"},
+		{Address: "127.0.0.1:17899"},
+	}
+	if err := cfg.NormalizeAndValidate(); err != nil {
+		t.Fatalf("same Landing listener over distinct upstream carriers: %v", err)
 	}
 }
 

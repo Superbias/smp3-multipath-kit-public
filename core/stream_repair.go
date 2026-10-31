@@ -5,11 +5,12 @@ import (
 	"time"
 )
 
-// StreamLegAvailability is the current fixed two-leg live mask. It contains
-// no carrier object and deliberately does not generalize the wire to N legs.
-type StreamLegAvailability [2]bool
+// StreamLegAvailability is a protocol-ID-indexed live mask. LegID remains a
+// byte on the wire, while each StreamEngine independently caps the number of
+// IDs accepted for a session.
+type StreamLegAvailability [MaxStreamLegIDCount]bool
 
-func (a StreamLegAvailability) Has(id LegID) bool { return id < 2 && a[id] }
+func (a StreamLegAvailability) Has(id LegID) bool { return int(id) < len(a) && a[id] }
 func (a StreamLegAvailability) Count() int {
 	n := 0
 	for _, live := range a {
@@ -32,7 +33,7 @@ func (l *StreamTXLedger) PlanRetries(live StreamLegAvailability) []StreamTXRetry
 	states := l.retrySnapshot()
 	candidates := make([]StreamTXRetryCandidate, 0, len(states))
 	for _, state := range states {
-		if state.InTransit || state.RescueInTransit {
+		if state.LocalEnqueue || state.InTransit || state.RescueInTransit {
 			continue
 		}
 		if state.LastSentLeg < 0 {
@@ -97,4 +98,49 @@ func DecideStreamTXFrontierRepair(candidate StreamTXFrontierCandidate, live Stre
 		return StreamTXFrontierPlan{}
 	}
 	return StreamTXFrontierPlan{Action: StreamTXFrontierRescue, Record: candidate.record, Avoid: candidate.owner}
+}
+
+// RestrictedFrontierBatch is a bounded old-owner prefix, not a second retry
+// ledger. Only a proven overdue frontier starts it. Snapshot candidates are
+// revalidated by MarkRestrictedRescueTransit before queueing.
+func (l *StreamTXLedger) RestrictedFrontierBatch(frontier *StreamTXRecord, owner int16, now, cutoff time.Time, cooldown time.Duration, byteBudget int) []*StreamTXRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if frontier == nil || l.outstanding[l.ackedNext] != frontier || frontier.ordinaryOwner != owner {
+		return nil
+	}
+	var prefix [8]*StreamTXRecord
+	n := 0
+	for _, record := range l.outstanding {
+		if record.ordinaryOwner != owner || record.createdAt.After(cutoff) || record.rescueInTransit || (!record.lastRescueAt.IsZero() && now.Sub(record.lastRescueAt) < cooldown) {
+			continue
+		}
+		position := 0
+		for position < n && prefix[position].sequence < record.sequence {
+			position++
+		}
+		if position >= len(prefix) {
+			continue
+		}
+		if n < len(prefix) {
+			n++
+		}
+		for i := n - 1; i > position; i-- {
+			prefix[i] = prefix[i-1]
+		}
+		prefix[position] = record
+	}
+	bytes := 0
+	count := 0
+	for count < n {
+		size := len(prefix[count].payload)
+		if count > 0 && bytes+size > byteBudget {
+			break
+		}
+		bytes += size
+		count++
+	}
+	result := make([]*StreamTXRecord, count)
+	copy(result, prefix[:count])
+	return result
 }

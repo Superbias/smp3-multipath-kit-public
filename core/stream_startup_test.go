@@ -342,6 +342,7 @@ func TestStreamStartupPreferredHintFallsBackWhenLegDisappears(t *testing.T) {
 
 func TestStreamStartupConfigurationIsBounded(t *testing.T) {
 	cfg := testStreamConfig()
+	cfg.MaxActiveLegs = 2 // Preserve this test's legacy two-leg preferred-ID boundary.
 	cfg.StartupPolicy = StreamStartupPreferred
 	cfg.StartupPreferredLeg = 9
 	cfg.StartupGrace = MaxStreamStartupGrace + time.Second

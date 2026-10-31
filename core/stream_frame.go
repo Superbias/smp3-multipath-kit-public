@@ -22,6 +22,8 @@ const (
 	StreamFrameActivate StreamFrameType = 2
 	StreamFrameACK      StreamFrameType = 3
 	StreamFrameClose    StreamFrameType = 4
+	StreamFramePathRTT  StreamFrameType = 5
+	StreamFrameDrain    StreamFrameType = 6
 )
 
 // StreamFrameHeader is the wire-visible portion of one stream frame. DATA uses
@@ -47,6 +49,14 @@ func validateStreamFrameHeader(header StreamFrameHeader) error {
 		}
 	case StreamFrameActivate, StreamFrameACK, StreamFrameClose:
 		if header.Length != 0 {
+			return errInvalidControlFrameSize
+		}
+	case StreamFramePathRTT:
+		if header.Value != 0 || header.Length != StreamRTTMessageSize {
+			return errInvalidControlFrameSize
+		}
+	case StreamFrameDrain:
+		if header.Value != 0 || header.Length != StreamDrainControlMessageSize {
 			return errInvalidControlFrameSize
 		}
 	default:

@@ -1,0 +1,95 @@
+{
+  "listen": "127.0.0.1:10880",
+  "log_level": "info",
+  "upstream_socks": {
+    "address": "127.0.0.1:7890",
+    "connect_timeout": "10s",
+    "legs": [
+      {
+        "address": "127.0.0.1:7890",
+        "connect_timeout": "10s"
+      },
+      {
+        "address": "127.0.0.1:7891",
+        "connect_timeout": "10s"
+      },
+      {
+        "address": "127.0.0.1:7892",
+        "connect_timeout": "10s"
+      },
+      {
+        "address": "127.0.0.1:7893",
+        "connect_timeout": "10s"
+      }
+    ]
+  },
+  "smp3": {
+    "password": "REPLACE_WITH_LANDING_PASSWORD",
+    "carrier_mode": "legacy_socks",
+    "carrier_tls": {
+      "enabled": true,
+      "server_name": "landing.example.net"
+    },
+    "routes": {
+      "legs": [
+        {
+          "id": 0,
+          "name": "direct",
+          "address": "landing.example.net:8443"
+        },
+        {
+          "id": 1,
+          "name": "realm-1",
+          "address": "realm-1.example.net:8443"
+        },
+        {
+          "id": 2,
+          "name": "realm-2",
+          "address": "realm-2.example.net:8443"
+        },
+        {
+          "id": 3,
+          "name": "realm-3",
+          "address": "realm-3.example.net:8443"
+        }
+      ]
+    },
+    "carrier_ready_timeout": "5s",
+    "stream": {
+      "scheduler_mode": "aggregation",
+      "capacity_mode": "dynamic",
+      "activation_mode": "dynamic",
+      "experimental_path_aware": false,
+      "startup_policy": "first-ready",
+      "startup_preferred_leg": 0,
+      "startup_grace": "500ms",
+      "activation_threshold_mbps": 80,
+      "activation_window": "1s",
+      "chunk_size": 65536,
+      "queue_frames": 256,
+      "bandwidth_mbps": [
+        100,
+        50,
+        20,
+        10
+      ],
+      "max_active_legs": 4,
+      "max_reorder_frames": 4096,
+      "max_inflight_frames": 1024,
+      "ack_interval": "20ms",
+      "retransmit_timeout": "1500ms",
+      "recovery_timeout": "15s",
+      "redial_interval": "1s"
+    },
+    "udp": {
+      "enabled": false,
+      "mode": "adaptive",
+      "queue_frames": 256,
+      "max_datagram_size": 16384,
+      "dedup_window": 4096,
+      "idle_timeout": "2m",
+      "adaptive_queue_delay": "120ms",
+      "adaptive_duplicate_threshold": 0
+    }
+  }
+}

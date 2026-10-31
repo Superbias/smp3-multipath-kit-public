@@ -1,16 +1,26 @@
 package smp3core
 
 import (
+	"net"
 	"testing"
 )
 
 func TestBenchmarkPendingAssignmentRollback(t *testing.T) {
-	c := &StreamEngine{
-		cfg:  StreamConfig{SchedulerMode: StreamSchedulerStatic, ChunkSize: 32 * 1024, BandwidthMbps: []uint32{50, 200}},
-		legs: make(map[uint8]*streamLeg),
+	c, app := NewStreamEngine(StreamConfig{SchedulerMode: StreamSchedulerStatic, MaxActiveLegs: 2, ChunkSize: 32 * 1024, BandwidthMbps: []uint32{50, 200}})
+	t.Cleanup(func() { _ = app.Close(); _ = c.Close() })
+	peers := make([]net.Conn, 0, 2)
+	t.Cleanup(func() {
+		for _, peer := range peers {
+			_ = peer.Close()
+		}
+	})
+	for id := uint8(0); id < 2; id++ {
+		carrier, peer := net.Pipe()
+		peers = append(peers, peer)
+		if err := c.AttachLeg(LegID(id), carrier, nil); err != nil {
+			t.Fatalf("attach leg %d: %v", id, err)
+		}
 	}
-	c.legs[0] = &streamLeg{id: 0, send: make(chan txSendAttempt, 1), done: make(chan struct{})}
-	c.legs[1] = &streamLeg{id: 1, send: make(chan txSendAttempt, 1), done: make(chan struct{})}
 	r := &StreamTXRecord{payload: make([]byte, 32*1024)}
 	a := &benchmarkAssignment{}
 	if got := c.assignBenchmark(r, a); got == nil {

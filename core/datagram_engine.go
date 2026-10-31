@@ -767,6 +767,16 @@ func (c *DatagramEngine) InjectDatagramForTest(address string, payload []byte) {
 // HasLeg reports whether a concrete datagram leg is attached.
 func (c *DatagramEngine) HasLeg(id LegID) bool { return c.hasLeg(uint8(id)) }
 
+// LegCount reports attached datagram carriers. Datagram telemetry and wire
+// accounting currently expose two leg slots, so callers use this only for the
+// existing two-leg admission bound.
+func (c *DatagramEngine) LegCount() int {
+	c.legsMu.RLock()
+	count := len(c.legs)
+	c.legsMu.RUnlock()
+	return count
+}
+
 // HandleLegFailureForTest routes a synthetic failure through normal leg
 // retirement and recovery handling.
 func (c *DatagramEngine) HandleLegFailureForTest(id LegID, err error) bool {

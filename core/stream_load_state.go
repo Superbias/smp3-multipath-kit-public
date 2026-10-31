@@ -6,22 +6,47 @@ import (
 )
 
 type streamLoadProbe struct {
-	inServiceScore                bool
-	mu                            sync.Mutex
-	queued                        [2]int64
-	inService                     [2]int64
-	assigned                      [2]uint64
-	counts                        [2]uint64
-	samples                       uint64
-	divergence                    uint64
-	lowWhenHole, lowWhenClear     uint64
-	lowHoleTimeNs, highHoleTimeNs int64
-	holeSince                     [2]time.Time
+	inServiceScore            bool
+	mu                        sync.Mutex
+	queued                    []int64
+	inService                 []int64
+	assigned                  []uint64
+	counts                    []uint64
+	samples                   uint64
+	divergence                uint64
+	lowWhenHole, lowWhenClear uint64
+	holeTimeNs                []int64
+	holeSince                 []time.Time
+}
+
+func (p *streamLoadProbe) ensureLegCapacityLocked(size int) {
+	if size <= len(p.queued) {
+		return
+	}
+	queued := make([]int64, size)
+	copy(queued, p.queued)
+	p.queued = queued
+	inService := make([]int64, size)
+	copy(inService, p.inService)
+	p.inService = inService
+	assigned := make([]uint64, size)
+	copy(assigned, p.assigned)
+	p.assigned = assigned
+	counts := make([]uint64, size)
+	copy(counts, p.counts)
+	p.counts = counts
+	holeTimeNs := make([]int64, size)
+	copy(holeTimeNs, p.holeTimeNs)
+	p.holeTimeNs = holeTimeNs
+	holeSince := make([]time.Time, size)
+	copy(holeSince, p.holeSince)
+	p.holeSince = holeSince
 }
 
 func (p *streamLoadProbe) assignedRecord(id uint8, bytes int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.ensureLegCapacityLocked(int(id) + 1)
 	p.queued[id] += int64(bytes)
 	p.assigned[id] += uint64(bytes)
 	p.counts[id]++
@@ -30,6 +55,7 @@ func (p *streamLoadProbe) assignedRecord(id uint8, bytes int) {
 func (p *streamLoadProbe) dequeue(id uint8, bytes int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.ensureLegCapacityLocked(int(id) + 1)
 	p.queued[id] -= int64(bytes)
 	p.inService[id] += int64(bytes)
 	if p.inService[id] > 0 && p.holeSince[id].IsZero() {
@@ -39,15 +65,12 @@ func (p *streamLoadProbe) dequeue(id uint8, bytes int) {
 func (p *streamLoadProbe) complete(id uint8, bytes int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.ensureLegCapacityLocked(int(id) + 1)
 	p.inService[id] -= int64(bytes)
 	if p.inService[id] <= 0 {
 		if !p.holeSince[id].IsZero() {
 			d := time.Since(p.holeSince[id])
-			if id == 0 {
-				p.lowHoleTimeNs += d.Nanoseconds()
-			} else {
-				p.highHoleTimeNs += d.Nanoseconds()
-			}
+			p.holeTimeNs[id] += d.Nanoseconds()
 		}
 		p.holeSince[id] = time.Time{}
 	}
@@ -57,6 +80,7 @@ func (p *streamLoadProbe) choose(c *StreamEngine, payload int) *streamLeg {
 	legs := c.availableLegs()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.ensureLegCapacityLocked(c.maxActiveLegs)
 	var best, counter *streamLeg
 	bestScore, counterScore := 1e300, 1e300
 	for _, leg := range legs {
@@ -95,8 +119,26 @@ func (p *streamLoadProbe) choose(c *StreamEngine, payload int) *streamLeg {
 	return best
 }
 
-func (p *streamLoadProbe) snapshot() (samples, divergence, lowHole, lowClear uint64, lowNs, highNs int64, assigned [2]uint64, counts [2]uint64) {
+func (p *streamLoadProbe) snapshotByLeg() (samples, divergence, lowHole, lowClear uint64, holeTimeNs []int64, assigned, counts []uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.samples, p.divergence, p.lowWhenHole, p.lowWhenClear, p.lowHoleTimeNs, p.highHoleTimeNs, p.assigned, p.counts
+	return p.samples, p.divergence, p.lowWhenHole, p.lowWhenClear,
+		append([]int64(nil), p.holeTimeNs...), append([]uint64(nil), p.assigned...), append([]uint64(nil), p.counts...)
+}
+
+// snapshot preserves the historic two-leg benchmark fields as a compatibility
+// view. New N-leg diagnostics should use snapshotByLeg.
+func (p *streamLoadProbe) snapshot() (samples, divergence, lowHole, lowClear uint64, lowNs, highNs int64, assigned [2]uint64, counts [2]uint64) {
+	samples, divergence, lowHole, lowClear, holeTimeNs, assignedByLeg, countsByLeg := p.snapshotByLeg()
+	if len(holeTimeNs) > 0 {
+		lowNs = holeTimeNs[0]
+	}
+	for id, value := range holeTimeNs {
+		if id > 0 {
+			highNs += value
+		}
+	}
+	copy(assigned[:], assignedByLeg)
+	copy(counts[:], countsByLeg)
+	return samples, divergence, lowHole, lowClear, lowNs, highNs, assigned, counts
 }

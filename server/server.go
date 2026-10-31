@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -18,15 +19,17 @@ var (
 	errSessionRetired     = errors.New("multipath session id is retired")
 	errSessionMode        = errors.New("multipath session mode mismatch")
 	errSessionDestination = errors.New("multipath session destination mismatch")
+	errSessionLimit       = errors.New("maximum active SMP3 session limit reached")
 )
 
 const helloReplayTTL = 180 * time.Second
 
 type Server struct {
-	cfg    Config
-	logger *slog.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
+	cfg       Config
+	tlsConfig *tls.Config
+	logger    *slog.Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	access             sync.Mutex
 	closed             bool
@@ -40,23 +43,29 @@ type Server struct {
 	nonceMu sync.Mutex
 	nonces  map[[16]byte]time.Time
 
-	acceptWG      sync.WaitGroup
-	handlerWG     sync.WaitGroup
-	pendingMu     sync.Mutex
-	pending       map[net.Conn]struct{}
-	closeOnce     sync.Once
-	closeDone     chan struct{}
-	telemetry     *TelemetryRegistry
-	telemetryHTTP *telemetryHTTPServer
+	acceptWG        sync.WaitGroup
+	handlerWG       sync.WaitGroup
+	pendingMu       sync.Mutex
+	pending         map[net.Conn]struct{}
+	closeOnce       sync.Once
+	closeDone       chan struct{}
+	telemetry       *TelemetryRegistry
+	telemetryHTTP   *telemetryHTTPServer
+	connectionSlots chan struct{}
 }
 
 func New(cfg Config, logger *slog.Logger) (*Server, error) {
 	if err := cfg.NormalizeAndValidate(); err != nil {
 		return nil, err
 	}
+	tlsConfig, err := newCarrierTLSConfig(cfg.CarrierTLS)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		cfg:              cfg,
+		tlsConfig:        tlsConfig,
 		logger:           loggerOrDefault(logger),
 		ctx:              ctx,
 		cancel:           cancel,
@@ -66,7 +75,8 @@ func New(cfg Config, logger *slog.Logger) (*Server, error) {
 		sidecarListeners: make(map[net.Listener]struct{}),
 		pending:          make(map[net.Conn]struct{}),
 		closeDone:        make(chan struct{}),
-		telemetry:        NewTelemetryRegistry(cfg.Telemetry.registryConfig()),
+		telemetry:        NewTelemetryRegistry(cfg.Telemetry.registryConfig(cfg.Stream.MaxActiveLegs)),
+		connectionSlots:  make(chan struct{}, cfg.MaxConnections),
 	}, nil
 }
 
@@ -102,12 +112,16 @@ func (s *Server) Start() error {
 	listeners := make([]net.Listener, 0, len(addresses))
 	sidecarListeners := make(map[net.Listener]struct{})
 	for _, configured := range addresses {
-		listener, err := net.Listen("tcp", configured.address)
+		baseListener, err := net.Listen("tcp", configured.address)
 		if err != nil {
 			for _, opened := range listeners {
 				_ = opened.Close()
 			}
 			return fmt.Errorf("listen %s: %w", configured.address, err)
+		}
+		listener := net.Listener(&connectionLimitListener{Listener: baseListener, slots: s.connectionSlots, logger: s.logger})
+		if s.tlsConfig != nil {
+			listener = tls.NewListener(listener, s.tlsConfig.Clone())
 		}
 		listeners = append(listeners, listener)
 		if configured.sidecar {
@@ -127,7 +141,7 @@ func (s *Server) Start() error {
 	s.sidecarListeners = sidecarListeners
 	s.access.Unlock()
 	if s.telemetry.Enabled() {
-		httpServer, err := newTelemetryHTTPServerWithConfig(s.telemetry, time.Now(), s.cfg.Telemetry.registryConfig())
+		httpServer, err := newTelemetryHTTPServerWithConfig(s.telemetry, time.Now(), s.cfg.Telemetry.registryConfig(s.cfg.Stream.MaxActiveLegs))
 		if err != nil {
 			for _, listener := range listeners {
 				_ = listener.Close()
@@ -247,6 +261,9 @@ func (s *Server) isClosed() bool {
 func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bool) {
 	releasePending := s.trackPending(rawConn)
 	defer releasePending()
+	if s.cfg.IdleTimeout.Time() > 0 {
+		rawConn = &activityTimeoutConn{Conn: rawConn, timeout: s.cfg.IdleTimeout.Time()}
+	}
 	conn, wireCounters := newCountedConn(rawConn)
 	if err := conn.SetReadDeadline(time.Now().Add(s.cfg.HelloReadTimeout.Time())); err != nil {
 		s.logger.Debug("failed to set HELLO read deadline", "error", err)
@@ -270,9 +287,63 @@ func (s *Server) handleCarrier(ctx context.Context, rawConn net.Conn, sidecar bo
 		s.rejectCarrier(conn, "destination", err)
 		return
 	}
+	if s.cfg.ApplicationTarget != "" && destination != s.cfg.ApplicationTarget {
+		s.rejectCarrier(conn, "application_target", errors.New("destination is not allowed by application_target"))
+		return
+	}
 	var session *serverSession
 	var created bool
-	if sidecar {
+	if hello.Version == smp3core.Version6 || hello.Version == smp3core.Version7 {
+		// Version6/7 require an authenticated READY before either endpoint starts
+		// sending stream frames. Reserve the leg first so the server never
+		// acknowledges an admission that cannot be attached.
+		session, created, err = s.admitSession(hello, destination)
+		if err != nil {
+			s.rejectCarrier(conn, "session", err)
+			return
+		}
+		if err := session.reserveLeg(hello.LegID); err != nil {
+			s.rejectCarrier(conn, "session", err)
+			if created {
+				session.close()
+			}
+			return
+		}
+		defer session.releaseLeg(hello.LegID)
+		selected := uint32(0)
+		if hello.Version == smp3core.Version7 {
+			selected = smp3core.StreamCapabilityCoordinatedDrain
+			if hello.Mode == smp3core.ModeStream && s.cfg.Stream.ExperimentalPathAware &&
+				hello.Capabilities&smp3core.StreamCapabilityPathRTT != 0 {
+				selected |= smp3core.StreamCapabilityPathRTT
+			}
+		} else if hello.Mode == smp3core.ModeStream && s.cfg.Stream.ExperimentalPathAware {
+			selected = smp3core.StreamCapabilityPathRTT
+		}
+		if err := conn.SetDeadline(time.Now().Add(s.cfg.HelloReadTimeout.Time())); err != nil {
+			s.logger.Debug("failed to set Version6 READY deadline", "error", err)
+		}
+		auth, readyErr := smp3core.WriteStreamReadyV2(conn, hello, selected, []byte(s.cfg.Password))
+		_ = conn.SetDeadline(time.Time{})
+		if readyErr != nil {
+			s.rejectCarrier(conn, "ready", readyErr)
+			if created {
+				session.close()
+			}
+			return
+		}
+		var pathAuth *smp3core.StreamPathAuth
+		if auth.PathRTTEnabled() || auth.CoordinatedDrainEnabled() {
+			pathAuth = &auth
+		}
+		if err := s.attachSessionLegWithPathAuth(session, hello, conn, pathAuth); err != nil {
+			s.rejectCarrier(conn, "session", err)
+			if created {
+				session.close()
+			}
+			return
+		}
+	} else if sidecar {
 		session, created, err = s.admitSession(hello, destination)
 		if err != nil {
 			s.rejectCarrier(conn, "session", err)
@@ -376,6 +447,13 @@ func (s *Server) createOrJoinSession(hello smp3core.Hello, destination string, c
 	if err != nil {
 		return nil, false, err
 	}
+	if err := session.reserveLeg(hello.LegID); err != nil {
+		if created {
+			session.close()
+		}
+		return session, created, err
+	}
+	defer session.releaseLeg(hello.LegID)
 	if err := s.attachSessionLeg(session, hello, conn); err != nil {
 		if created {
 			session.close()
@@ -406,6 +484,10 @@ func (s *Server) admitSession(hello smp3core.Hello, destination string) (*server
 		}
 		return existing, false, nil
 	}
+	if len(s.sessions) >= s.cfg.MaxSessions {
+		s.access.Unlock()
+		return nil, false, errSessionLimit
+	}
 
 	session := s.newSession(hello, destination)
 	s.sessions[hello.SessionID] = session
@@ -415,16 +497,20 @@ func (s *Server) admitSession(hello smp3core.Hello, destination string) (*server
 }
 
 func (s *Server) attachSessionLeg(session *serverSession, hello smp3core.Hello, conn net.Conn) error {
+	return s.attachSessionLegWithPathAuth(session, hello, conn, nil)
+}
+
+func (s *Server) attachSessionLegWithPathAuth(session *serverSession, hello smp3core.Hello, conn net.Conn, auth *smp3core.StreamPathAuth) error {
 	onClose := func(error) {
 		if s.telemetry.Enabled() {
 			s.telemetry.DetachLeg(hello.SessionID, uint8(hello.LegID), time.Now())
 		}
 	}
-	return session.attachLeg(hello.LegID, conn, onClose)
+	return session.attachLegWithPathAuth(hello.LegID, conn, onClose, auth)
 }
 
 func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSession {
-	session := &serverSession{id: hello.SessionID, mode: hello.Mode, destination: destination}
+	session := &serverSession{id: hello.SessionID, mode: hello.Mode, destination: destination, maxActiveLegs: s.cfg.Stream.MaxActiveLegs}
 	if hello.Mode == smp3core.ModeDatagram {
 		cfg := smp3core.DatagramConfig{
 			Mode:                       datagramMode(s.cfg.UDP.Mode),
@@ -443,22 +529,48 @@ func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSes
 		return session
 	}
 	cfg := smp3core.StreamConfig{
-		SchedulerMode:        streamSchedulerMode(s.cfg.Stream.SchedulerMode),
-		CapacityMode:         streamCapacityMode(s.cfg.Stream.CapacityMode),
-		ActivationMode:       streamActivationMode(s.cfg.Stream.ActivationMode),
-		HOLMode:              streamHOLMode(s.cfg.Stream.HOLMode),
-		ChunkSize:            s.cfg.Stream.ChunkSize,
-		QueueFrames:          s.cfg.Stream.QueueFrames,
-		ThresholdBytesPS:     uint64(s.cfg.Stream.ActivationThresholdMbps) * 125000,
-		ActivationWindow:     s.cfg.Stream.ActivationWindow.Time(),
-		BandwidthMbps:        append([]uint32(nil), s.cfg.Stream.BandwidthMbps...),
-		MaxReorderFrames:     s.cfg.Stream.MaxReorderFrames,
-		MaxInflightFrames:    s.cfg.Stream.MaxInflightFrames,
-		AckInterval:          s.cfg.Stream.AckInterval.Time(),
-		RetransmitTimeout:    s.cfg.Stream.RetransmitTimeout.Time(),
-		RecoveryTimeout:      s.cfg.RecoveryTimeout.Time(),
-		NotifyPeerOnActivate: true,
-		OnActivate:           func() { s.logger.Info("multipath stream activated", "session", sessionLogID(hello.SessionID)) },
+		SchedulerMode:         streamSchedulerMode(s.cfg.Stream.SchedulerMode),
+		CapacityMode:          streamCapacityMode(s.cfg.Stream.CapacityMode),
+		ActivationMode:        streamActivationMode(s.cfg.Stream.ActivationMode),
+		HOLMode:               streamHOLMode(s.cfg.Stream.HOLMode),
+		ExperimentalPathAware: s.cfg.Stream.ExperimentalPathAware,
+		PathRole:              smp3core.StreamPathRoleServer,
+		ChunkSize:             s.cfg.Stream.ChunkSize,
+		QueueFrames:           s.cfg.Stream.QueueFrames,
+		ThresholdBytesPS:      uint64(s.cfg.Stream.ActivationThresholdMbps) * 125000,
+		ActivationWindow:      s.cfg.Stream.ActivationWindow.Time(),
+		BandwidthMbps:         append([]uint32(nil), s.cfg.Stream.BandwidthMbps...),
+		MaxActiveLegs:         s.cfg.Stream.MaxActiveLegs,
+		MaxReorderFrames:      s.cfg.Stream.MaxReorderFrames,
+		MaxInflightFrames:     s.cfg.Stream.MaxInflightFrames,
+		AckInterval:           s.cfg.Stream.AckInterval.Time(),
+		RetransmitTimeout:     s.cfg.Stream.RetransmitTimeout.Time(),
+		RecoveryTimeout:       s.cfg.RecoveryTimeout.Time(),
+		NotifyPeerOnActivate:  true,
+		DrainEventObserver: func(event smp3core.StreamDrainEvent) {
+			if s.cfg.drainEventObserver != nil {
+				s.cfg.drainEventObserver(event)
+			}
+			s.logger.Info("multipath coordinated drain event",
+				"stage", event.Stage, "session", event.SessionID, "direction", event.Direction,
+				"role", event.Role, "leg", event.LegID, "generation", event.Generation,
+				"operation", event.DrainOperationID, "counter", event.Counter,
+				"local_ack_frontier", event.LocalAckFrontier, "peer_ack_frontier", event.PeerAckFrontier,
+				"local_tx_outstanding_frames", event.LocalTXOutstandingFrames,
+				"local_tx_outstanding_bytes", event.LocalTXOutstandingBytes,
+				"peer_tx_outstanding_frames", event.PeerTXOutstandingFrames,
+				"peer_tx_outstanding_bytes", event.PeerTXOutstandingBytes,
+				"rx_pending_frames", event.RXPendingFrames, "rx_pending_bytes", event.RXPendingBytes,
+				"local_quiesce_started", event.LocalQuiesceStarted,
+				"local_quiesce_completed", event.LocalQuiesceCompleted,
+				"peer_quiesce_confirmed", event.PeerQuiesceConfirmed,
+				"local_ready", event.LocalReady, "peer_ready", event.PeerReady,
+				"commit_sent", event.CommitSent, "commit_requested", event.CommitRequested,
+				"commit_ack", event.CommitAck, "target_closed", event.TargetClosed,
+				"target_active_binding", event.TargetActiveBinding,
+				"retry_written_bytes", event.RetryWrittenBytes, "terminal", event.Terminal)
+		},
+		OnActivate: func() { s.logger.Info("multipath stream activated", "session", sessionLogID(hello.SessionID)) },
 		OnLegDown: func(id uint8, err error) {
 			s.logger.Warn("multipath stream leg down", "session", sessionLogID(hello.SessionID), "leg", id, "error", err)
 		},
@@ -468,6 +580,9 @@ func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSes
 	}
 	if s.telemetry.Enabled() {
 		cfg.Telemetry = &smp3core.StreamTelemetry{}
+		if s.cfg.Telemetry.DataSequenceEvents {
+			cfg.Telemetry.EnableDataRXSequenceEvents()
+		}
 	}
 	session.stream, session.streamApp = smp3core.NewStreamEngine(cfg)
 	return session

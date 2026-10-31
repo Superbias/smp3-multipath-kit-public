@@ -172,10 +172,10 @@ func TestTelemetryHTTPAPIsShareOneAuthoritativeSnapshot(t *testing.T) {
 	}
 	legsRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(legsRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/legs", nil))
-	if legsRecorder.Code != http.StatusOK || json.Unmarshal(legsRecorder.Body.Bytes(), &legs) != nil || len(legs.Items) != len(expected.Legs) {
+	if legsRecorder.Code != http.StatusOK || json.Unmarshal(legsRecorder.Body.Bytes(), &legs) != nil || len(legs.Items) != len(expected.NLegs) {
 		t.Fatalf("legs response=%d %q", legsRecorder.Code, legsRecorder.Body.String())
 	}
-	for index, expectedLeg := range expected.Legs {
+	for index, expectedLeg := range expected.NLegs {
 		got := legs.Items[index]
 		if got.LegID != index || got.IngressRole != legIngressRole(expected, index) || got.DataSentBytes != expectedLeg.DataSentBytes || got.UsefulBytes != expectedLeg.LogicalTxAckedBytes {
 			t.Fatalf("leg[%d] drift: got=%+v expected=%+v", index, got, expectedLeg)

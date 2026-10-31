@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
@@ -39,6 +41,7 @@ type SMP3Option struct {
 	Port                int             `proxy:"port"`
 	Password            string          `proxy:"password,omitempty"`
 	Legs                []SMP3LegOption `proxy:"legs"`
+	MaxActiveLegs       int             `proxy:"max-active-legs,omitempty"`
 	Leg1Fallback        string          `proxy:"leg1-fallback,omitempty"`
 	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
 	CapacityMode        string          `proxy:"capacity-mode,omitempty"`
@@ -59,6 +62,12 @@ type SMP3Option struct {
 	RetransmitTimeout       string   `proxy:"retransmit-timeout,omitempty"`
 	RecoveryTimeout         string   `proxy:"recovery-timeout,omitempty"`
 	RedialInterval          string   `proxy:"redial-interval,omitempty"`
+	ExperimentalPathAware   bool     `proxy:"experimental-path-aware,omitempty"`
+	// AllowPathRTTV4Fallback is the master opt-in for V4 fallback.
+	AllowPathRTTV4Fallback bool `proxy:"allow-path-rtt-v4-fallback,omitempty"`
+	// Transport errors are ambiguous: they do not authenticate a peer's V6 refusal.
+	// Both fallback options must be enabled before retrying V4 after such an error.
+	AllowPathRTTV4FallbackOnTransportError bool `proxy:"allow-path-rtt-v4-fallback-on-transport-error,omitempty"`
 
 	UDP SMP3UDPOption `proxy:"udp,omitempty"`
 }
@@ -84,8 +93,9 @@ type smp3Session struct {
 	sessionID   smp3core.SessionID
 	destination string
 
-	mu      sync.Mutex
-	joining [2]bool
+	mu         sync.Mutex
+	joining    []bool
+	v6Accepted []*atomic.Bool
 }
 
 func NewSMP3(option SMP3Option) (*SMP3, error) {
@@ -98,22 +108,38 @@ func NewSMP3(option SMP3Option) (*SMP3, error) {
 	if option.Password == "" {
 		return nil, fmt.Errorf("smp3: missing password")
 	}
-	if len(option.Legs) != 2 {
-		return nil, fmt.Errorf("smp3: exactly two legs are required")
+	if len(option.Legs) < 1 || len(option.Legs) > smp3core.MaxStreamLegIDCount {
+		return nil, fmt.Errorf("smp3: legs must contain between 1 and %d entries", smp3core.MaxStreamLegIDCount)
 	}
-	if option.Legs[0].Proxy == "" || option.Legs[1].Proxy == "" {
-		return nil, fmt.Errorf("smp3: both leg proxy names are required")
+	if option.UDP.Enabled && len(option.Legs) > 2 {
+		return nil, fmt.Errorf("smp3: UDP currently supports at most two configured legs")
 	}
-	if option.Legs[0].Proxy == option.Legs[1].Proxy {
-		return nil, fmt.Errorf("smp3: leg proxy names must be different")
-	}
+	seenLegs := make(map[string]struct{}, len(option.Legs))
 	for _, leg := range option.Legs {
+		if strings.TrimSpace(leg.Proxy) == "" {
+			return nil, fmt.Errorf("smp3: leg proxy names are required")
+		}
+		if _, exists := seenLegs[leg.Proxy]; exists {
+			return nil, fmt.Errorf("smp3: leg proxy names must be unique")
+		}
+		seenLegs[leg.Proxy] = struct{}{}
 		if leg.Proxy == option.Name {
 			return nil, fmt.Errorf("smp3: recursive child reference %q is unsupported", leg.Proxy)
 		}
 	}
-	if option.Leg1Fallback == option.Name || option.Leg1Fallback == option.Legs[0].Proxy || option.Leg1Fallback == option.Legs[1].Proxy {
+	_, fallbackIsConfiguredLeg := seenLegs[option.Leg1Fallback]
+	if option.Leg1Fallback == option.Name || (option.Leg1Fallback != "" && fallbackIsConfiguredLeg) {
 		return nil, fmt.Errorf("smp3: leg1 fallback must be a separate child proxy")
+	}
+	maxActive := option.MaxActiveLegs
+	if maxActive == 0 {
+		maxActive = smp3core.DefaultMaxActiveStreamLegs
+	}
+	if maxActive < 1 || maxActive > smp3core.MaxStreamLegIDCount || len(option.Legs) > maxActive {
+		return nil, fmt.Errorf("smp3: configured legs must not exceed max-active-legs (1..%d)", smp3core.MaxStreamLegIDCount)
+	}
+	if int(option.StartupPreferredLeg) >= len(option.Legs) {
+		return nil, fmt.Errorf("smp3: startup-preferred-leg must reference a configured leg")
 	}
 
 	streamConfig, err := makeStreamConfig(option)
@@ -152,11 +178,16 @@ func (s *SMP3) capacityProvider() smp3core.StreamCapacityProvider {
 	if s.capacity == nil || s.streamConfig.CapacityMode != smp3core.StreamCapacityDynamic || s.streamConfig.SchedulerMode != smp3core.StreamSchedulerAggregation {
 		return nil
 	}
-	keys := [2]string{
-		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[0].Proxy,
-		"mihomo|outbound|" + s.option.Name + "|" + s.option.Legs[1].Proxy,
+	keys := make([]string, len(s.option.Legs))
+	for id, leg := range s.option.Legs {
+		keys[id] = "mihomo|outbound|" + s.option.Name + "|" + leg.Proxy
 	}
-	return s.capacity.Provider(keys, s.streamConfig.BandwidthMbps, s.streamConfig.ChunkSize)
+	// This slot may dial a different physical child after fallback. Without a
+	// per-attempt identity remap, keep its estimate private to this session.
+	if s.option.Leg1Fallback != "" {
+		keys[1] = ""
+	}
+	return s.capacity.ProviderForLegs(keys, s.streamConfig.BandwidthMbps, s.streamConfig.ChunkSize, len(keys))
 }
 
 func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
@@ -176,6 +207,10 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 		cancel:      cancel,
 		sessionID:   sessionID,
 		destination: destination,
+		joining:     make([]bool, len(s.option.Legs)), v6Accepted: make([]*atomic.Bool, len(s.option.Legs)),
+	}
+	for i := range session.v6Accepted {
+		session.v6Accepted[i] = new(atomic.Bool)
 	}
 	s.sessions.Store(session, struct{}{})
 	defer func() {
@@ -188,14 +223,14 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 		return session.dialPreferred(ctx)
 	}
 
-	leg0, carrierName, err := session.dialCarrier(ctx, 0)
+	leg0, carrierName, pathAuth, err := session.dialCarrier(ctx, 0)
 	if err != nil {
 		return nil, fmt.Errorf("smp3: leg0 bootstrap: %w", err)
 	}
 
 	config := s.streamConfig
 	config.CapacityProvider = s.capacityProvider()
-	config.OnActivate = func() { session.ensureLeg(1) }
+	config.OnActivate = func() { session.ensureCompanionLegs() }
 	config.OnLegDown = func(id uint8, legErr error) { session.scheduleLeg(id, legErr) }
 	engine, appConn := smp3core.NewStreamEngine(config)
 	session.engine = engine
@@ -204,14 +239,14 @@ func (s *SMP3) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, e
 		cancel()
 		s.sessions.Delete(session)
 	}()
-	if err := engine.AttachLeg(0, leg0, nil); err != nil {
+	if err := attachMihomoStreamLeg(engine, 0, leg0, pathAuth); err != nil {
 		_ = leg0.Close()
 		_ = engine.Close()
 		return nil, fmt.Errorf("smp3: attach leg0: %w", err)
 	}
 	log.Infoln("[SMP3] %s session bootstrapped via leg 0 / %s to %s", s.Name(), carrierName, destination)
 	if engine.Active() {
-		session.ensureLeg(1)
+		session.ensureCompanionLegs()
 	}
 	return NewConn(appConn, s), nil
 }
@@ -220,13 +255,14 @@ type smp3BootstrapResult struct {
 	id          uint8
 	conn        C.Conn
 	carrierName string
+	pathAuth    *smp3core.StreamPathAuth
 	err         error
 }
 
 func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
 	config := ss.owner.streamConfig
 	config.CapacityProvider = ss.owner.capacityProvider()
-	config.OnActivate = func() { ss.ensureLeg(1) }
+	config.OnActivate = func() { ss.ensureCompanionLegs() }
 	config.OnLegDown = func(id uint8, legErr error) { ss.scheduleLeg(id, legErr) }
 	engine, appConn := smp3core.NewStreamEngine(config)
 	ss.engine = engine
@@ -236,27 +272,29 @@ func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
 		ss.owner.sessions.Delete(ss)
 	}()
 
+	legCount := len(ss.owner.option.Legs)
 	ss.mu.Lock()
-	ss.joining[0] = true
-	ss.joining[1] = true
+	for id := range ss.joining {
+		ss.joining[id] = true
+	}
 	ss.mu.Unlock()
-	results := make(chan smp3BootstrapResult, 2)
-	for id := uint8(0); id < 2; id++ {
+	results := make(chan smp3BootstrapResult, legCount)
+	for id := 0; id < legCount; id++ {
 		go func(id uint8) {
-			conn, carrierName, err := ss.dialCarrier(ss.ctx, id)
-			results <- smp3BootstrapResult{id: id, conn: conn, carrierName: carrierName, err: err}
-		}(id)
+			conn, carrierName, pathAuth, err := ss.dialCarrier(ss.ctx, id)
+			results <- smp3BootstrapResult{id: id, conn: conn, carrierName: carrierName, pathAuth: pathAuth, err: err}
+		}(uint8(id))
 	}
 
 	var first *smp3BootstrapResult
 	var causes []error
 	completed := 0
-	for first == nil && completed < 2 {
+	for first == nil && completed < legCount {
 		select {
 		case <-ctx.Done():
 			ss.cancel()
 			_ = engine.Close()
-			for completed < 2 {
+			for completed < legCount {
 				result := <-results
 				completed++
 				if result.conn != nil {
@@ -275,7 +313,7 @@ func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
 				}
 				continue
 			}
-			if err := engine.AttachLeg(smp3core.LegID(result.id), result.conn, nil); err != nil {
+			if err := attachMihomoStreamLeg(engine, smp3core.LegID(result.id), result.conn, result.pathAuth); err != nil {
 				_ = result.conn.Close()
 				causes = append(causes, fmt.Errorf("attach leg%d: %w", result.id, err))
 				continue
@@ -290,36 +328,78 @@ func (ss *smp3Session) dialPreferred(ctx context.Context) (C.Conn, error) {
 		return nil, errors.Join(causes...)
 	}
 
-	go ss.finishPreferredCompanion(results, completed, engine)
+	go ss.finishPreferredCompanions(results, legCount-completed, engine)
 	log.Infoln("[SMP3] %s preferred session bootstrapped via leg %d / %s to %s", ss.owner.Name(), first.id, first.carrierName, ss.destination)
 	return NewConn(appConn, ss.owner), nil
 }
 
-func (ss *smp3Session) finishPreferredCompanion(results <-chan smp3BootstrapResult, completed int, engine *smp3core.StreamEngine) {
-	if completed >= 2 {
-		return
-	}
-	result := <-results
-	ss.finishJoining(result.id)
-	if result.err != nil {
-		if result.id == uint8(ss.owner.streamConfig.StartupPreferredLeg) {
-			engine.MarkStartupLegTerminalUnavailable(smp3core.LegID(result.id))
+func (ss *smp3Session) finishPreferredCompanions(results <-chan smp3BootstrapResult, remaining int, engine *smp3core.StreamEngine) {
+	for i := 0; i < remaining; i++ {
+		result := <-results
+		ss.finishJoining(result.id)
+		if result.err != nil {
+			if result.id == uint8(ss.owner.streamConfig.StartupPreferredLeg) {
+				engine.MarkStartupLegTerminalUnavailable(smp3core.LegID(result.id))
+			}
+			continue
 		}
-		return
-	}
-	if ss.engine == nil || engine.Finalizing() || engine.HasLeg(smp3core.LegID(result.id)) {
-		_ = result.conn.Close()
-		return
-	}
-	if err := engine.AttachLeg(smp3core.LegID(result.id), result.conn, nil); err != nil {
-		_ = result.conn.Close()
+		if ss.engine == nil || engine.Finalizing() || engine.HasLeg(smp3core.LegID(result.id)) {
+			_ = result.conn.Close()
+			continue
+		}
+		if err := attachMihomoStreamLeg(engine, smp3core.LegID(result.id), result.conn, result.pathAuth); err != nil {
+			_ = result.conn.Close()
+		}
 	}
 }
 
 func (ss *smp3Session) finishJoining(id uint8) {
 	ss.mu.Lock()
-	ss.joining[id] = false
+	if int(id) < len(ss.joining) {
+		ss.joining[id] = false
+	}
 	ss.mu.Unlock()
+}
+
+func (ss *smp3Session) ensureLegState() {
+	count := len(ss.owner.option.Legs)
+	ss.mu.Lock()
+	if len(ss.joining) < count {
+		ss.joining = append(ss.joining, make([]bool, count-len(ss.joining))...)
+	}
+	if len(ss.v6Accepted) < count {
+		old := ss.v6Accepted
+		ss.v6Accepted = make([]*atomic.Bool, count)
+		copy(ss.v6Accepted, old)
+	}
+	for i := range ss.v6Accepted {
+		if ss.v6Accepted[i] == nil {
+			ss.v6Accepted[i] = new(atomic.Bool)
+		}
+	}
+	ss.mu.Unlock()
+}
+
+func (ss *smp3Session) markV6Accepted(id uint8) {
+	ss.ensureLegState()
+	ss.mu.Lock()
+	if int(id) < len(ss.v6Accepted) {
+		ss.v6Accepted[id].Store(true)
+	}
+	ss.mu.Unlock()
+}
+
+func (ss *smp3Session) v6WasAccepted(id uint8) bool {
+	ss.ensureLegState()
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return int(id) < len(ss.v6Accepted) && ss.v6Accepted[id].Load()
+}
+
+func (ss *smp3Session) ensureCompanionLegs() {
+	for id := 1; id < len(ss.owner.option.Legs); id++ {
+		ss.ensureLeg(uint8(id))
+	}
 }
 
 // ListenPacketContext delegates the production UDP lifecycle to the dual-leg
@@ -371,9 +451,9 @@ func (s *SMP3) endpointMetadata() (*C.Metadata, error) {
 	return metadata, nil
 }
 
-func (ss *smp3Session) dialCarrier(ctx context.Context, id uint8) (C.Conn, string, error) {
-	if id > 1 {
-		return nil, "", fmt.Errorf("invalid leg id %d", id)
+func (ss *smp3Session) dialCarrier(ctx context.Context, id uint8) (C.Conn, string, *smp3core.StreamPathAuth, error) {
+	if int(id) >= len(ss.owner.option.Legs) {
+		return nil, "", nil, fmt.Errorf("invalid leg id %d", id)
 	}
 	names := []string{ss.owner.option.Legs[id].Proxy}
 	if id == 1 && ss.owner.option.Leg1Fallback != "" {
@@ -381,7 +461,7 @@ func (ss *smp3Session) dialCarrier(ctx context.Context, id uint8) (C.Conn, strin
 	}
 	endpoint, err := ss.owner.endpointMetadata()
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	var causes []error
 	for _, name := range names {
@@ -395,20 +475,92 @@ func (ss *smp3Session) dialCarrier(ctx context.Context, id uint8) (C.Conn, strin
 			causes = append(causes, fmt.Errorf("%s: %w", name, dialErr))
 			continue
 		}
-		if helloErr := writeSMP3Hello(conn, ss.sessionID, smp3core.LegID(id), ss.destination, ss.owner.option.Password); helloErr != nil {
+		pathAuth, v6Accepted, handshakeErr := ss.negotiateStreamCarrier(conn, id)
+		if v6Accepted {
+			ss.markV6Accepted(id)
+		}
+		if handshakeErr != nil && ss.owner.option.ExperimentalPathAware && ss.owner.option.AllowPathRTTV4Fallback && ss.owner.option.AllowPathRTTV4FallbackOnTransportError && !ss.v6WasAccepted(id) && isMihomoStreamV6TransportFailure(handshakeErr) {
+			log.Warnln("[SMP3] V6 handshake transport failed for leg %d on %s; retrying V4 on a fresh carrier (peer rejection was not authenticated): %v", id, name, handshakeErr)
 			_ = conn.Close()
-			causes = append(causes, fmt.Errorf("%s HELLO: %w", name, helloErr))
+			conn, dialErr = child.DialContext(ctx, endpoint)
+			if dialErr == nil {
+				_, handshakeErr = writeSMP3HelloVersion(conn, ss.sessionID, smp3core.LegID(id), ss.destination, ss.owner.option.Password, false)
+			} else {
+				handshakeErr = dialErr
+			}
+		}
+		if handshakeErr != nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			causes = append(causes, fmt.Errorf("%s stream HELLO/READY: %w", name, handshakeErr))
 			continue
 		}
-		return conn, name, nil
+		return conn, name, pathAuth, nil
 	}
-	return nil, "", errors.Join(causes...)
+	return nil, "", nil, errors.Join(causes...)
+}
+
+func (ss *smp3Session) negotiateStreamCarrier(conn C.Conn, id uint8) (*smp3core.StreamPathAuth, bool, error) {
+	pathAware := ss.owner.option.ExperimentalPathAware
+	var handshakeStarted time.Time
+	if pathAware {
+		handshakeStarted = time.Now()
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			return nil, false, err
+		}
+		defer conn.SetDeadline(time.Time{})
+	}
+	hello, err := writeSMP3HelloVersion(conn, ss.sessionID, smp3core.LegID(id), ss.destination, ss.owner.option.Password, pathAware)
+	if err != nil {
+		return nil, false, err
+	}
+	if !pathAware {
+		return nil, false, nil
+	}
+	_, auth, err := smp3core.ReadStreamReadyV2(conn, hello, []byte(ss.owner.option.Password))
+	if err != nil {
+		var opErr *net.OpError
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &opErr) {
+			return nil, false, mihomoStreamV6TransportError{err: err}
+		}
+		return nil, false, err
+	}
+	if auth.PathRTTEnabled() {
+		if measured, measureErr := auth.WithCarrierHandshakeRTT(time.Since(handshakeStarted)); measureErr == nil {
+			auth = measured
+		}
+		return &auth, true, nil
+	}
+	return nil, true, nil
+}
+
+type mihomoStreamV6TransportError struct{ err error }
+
+func (e mihomoStreamV6TransportError) Error() string { return e.err.Error() }
+func (e mihomoStreamV6TransportError) Unwrap() error { return e.err }
+
+func isMihomoStreamV6TransportFailure(err error) bool {
+	var transportErr mihomoStreamV6TransportError
+	if errors.As(err, &transportErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	var timeout net.Error
+	return errors.As(err, &timeout) && timeout.Timeout()
+}
+
+func attachMihomoStreamLeg(engine *smp3core.StreamEngine, id smp3core.LegID, conn C.Conn, auth *smp3core.StreamPathAuth) error {
+	if auth != nil {
+		return engine.AttachLegWithPathAuth(id, conn, nil, *auth)
+	}
+	return engine.AttachLeg(id, conn, nil)
 }
 
 func (ss *smp3Session) ensureLeg(id uint8) {
-	if id > 1 {
+	if int(id) >= len(ss.owner.option.Legs) {
 		return
 	}
+	ss.ensureLegState()
 	ss.mu.Lock()
 	if ss.engine == nil || ss.engine.HasLeg(smp3core.LegID(id)) || ss.joining[id] {
 		ss.mu.Unlock()
@@ -431,9 +583,9 @@ func (ss *smp3Session) ensureLeg(id uint8) {
 			if ss.engine.HasLeg(smp3core.LegID(id)) {
 				return
 			}
-			conn, carrierName, err := ss.dialCarrier(ss.ctx, id)
+			conn, carrierName, pathAuth, err := ss.dialCarrier(ss.ctx, id)
 			if err == nil {
-				if err = ss.engine.AttachLeg(smp3core.LegID(id), conn, nil); err == nil {
+				if err = attachMihomoStreamLeg(ss.engine, smp3core.LegID(id), conn, pathAuth); err == nil {
 					log.Infoln("[SMP3] %s leg %d ready/rejoined via %s to %s", ss.owner.Name(), id, carrierName, ss.destination)
 					return
 				}
@@ -451,7 +603,7 @@ func (ss *smp3Session) ensureLeg(id uint8) {
 }
 
 func (ss *smp3Session) scheduleLeg(id uint8, legErr error) {
-	if id > 1 {
+	if int(id) >= len(ss.owner.option.Legs) {
 		return
 	}
 	log.Warnln("[SMP3] %s leg %d down for %s: %v", ss.owner.Name(), id, ss.destination, legErr)
@@ -459,25 +611,44 @@ func (ss *smp3Session) scheduleLeg(id uint8, legErr error) {
 }
 
 func writeSMP3Hello(conn net.Conn, sessionID smp3core.SessionID, legID smp3core.LegID, destination string, password string) error {
+	_, err := writeSMP3HelloVersion(conn, sessionID, legID, destination, password, false)
+	return err
+}
+
+func writeSMP3HelloVersion(conn net.Conn, sessionID smp3core.SessionID, legID smp3core.LegID, destination string, password string, pathAware bool) (smp3core.Hello, error) {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return err
+		return smp3core.Hello{}, err
 	}
-	header, dest, mac, err := smp3core.EncodeHelloParts(smp3core.Hello{
-		Version:     smp3core.Version4,
-		SessionID:   sessionID,
-		LegID:       legID,
-		Mode:        smp3core.ModeStream,
-		Timestamp:   time.Now().Unix(),
-		Nonce:       nonce,
-		Destination: destination,
-	}, []byte(password))
+	version := smp3core.Version4
+	var capabilities uint32
+	if pathAware {
+		version = smp3core.Version6
+		capabilities = smp3core.StreamCapabilityPathRTT
+	}
+	hello := smp3core.Hello{
+		Version:      version,
+		Capabilities: capabilities,
+		SessionID:    sessionID,
+		LegID:        legID,
+		Mode:         smp3core.ModeStream,
+		Timestamp:    time.Now().Unix(),
+		Nonce:        nonce,
+		Destination:  destination,
+	}
+	header, dest, mac, err := smp3core.EncodeHelloParts(hello, []byte(password))
 	if err != nil {
-		return err
+		return smp3core.Hello{}, err
 	}
 	buffers := net.Buffers{header, dest, mac}
 	_, err = buffers.WriteTo(conn)
-	return err
+	if err != nil {
+		if pathAware {
+			return smp3core.Hello{}, mihomoStreamV6TransportError{err: err}
+		}
+		return smp3core.Hello{}, err
+	}
+	return hello, nil
 }
 
 func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
@@ -505,8 +676,15 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: startup-policy must be first-ready or preferred")
 	}
-	if option.StartupPreferredLeg > 1 {
-		return smp3core.StreamConfig{}, fmt.Errorf("smp3: startup-preferred-leg must be 0 or 1")
+	maxActiveLegs := option.MaxActiveLegs
+	if maxActiveLegs == 0 {
+		maxActiveLegs = smp3core.DefaultMaxActiveStreamLegs
+	}
+	if maxActiveLegs < 1 || maxActiveLegs > smp3core.MaxStreamLegIDCount {
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: max-active-legs must be between 1 and %d", smp3core.MaxStreamLegIDCount)
+	}
+	if int(option.StartupPreferredLeg) >= maxActiveLegs {
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: startup-preferred-leg must be less than max-active-legs")
 	}
 	startupGrace, err := parseSMP3StartupGrace(option.StartupGrace)
 	if err != nil {
@@ -560,23 +738,26 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 		threshold = 80
 	}
 	return smp3core.StreamConfig{
-		SchedulerMode:       mode,
-		CapacityMode:        capacityMode,
-		ActivationMode:      activationMode,
-		HOLMode:             holMode,
-		ChunkSize:           option.ChunkSize,
-		QueueFrames:         option.QueueFrames,
-		ThresholdBytesPS:    threshold * 1000 * 1000 / 8,
-		ActivationWindow:    activationWindow,
-		BandwidthMbps:       append([]uint32(nil), option.BandwidthMbps...),
-		MaxReorderFrames:    option.MaxReorderFrames,
-		MaxInflightFrames:   option.MaxInflightFrames,
-		AckInterval:         ackInterval,
-		RetransmitTimeout:   retransmitTimeout,
-		RecoveryTimeout:     recoveryTimeout,
-		StartupPolicy:       startupPolicy,
-		StartupPreferredLeg: smp3core.LegID(option.StartupPreferredLeg),
-		StartupGrace:        startupGrace,
+		SchedulerMode:         mode,
+		CapacityMode:          capacityMode,
+		ActivationMode:        activationMode,
+		HOLMode:               holMode,
+		ChunkSize:             option.ChunkSize,
+		QueueFrames:           option.QueueFrames,
+		ThresholdBytesPS:      threshold * 1000 * 1000 / 8,
+		ActivationWindow:      activationWindow,
+		BandwidthMbps:         append([]uint32(nil), option.BandwidthMbps...),
+		MaxActiveLegs:         maxActiveLegs,
+		MaxReorderFrames:      option.MaxReorderFrames,
+		MaxInflightFrames:     option.MaxInflightFrames,
+		AckInterval:           ackInterval,
+		RetransmitTimeout:     retransmitTimeout,
+		RecoveryTimeout:       recoveryTimeout,
+		ExperimentalPathAware: option.ExperimentalPathAware,
+		PathRole:              smp3core.StreamPathRoleClient,
+		StartupPolicy:         startupPolicy,
+		StartupPreferredLeg:   smp3core.LegID(option.StartupPreferredLeg),
+		StartupGrace:          startupGrace,
 	}, nil
 }
 
@@ -634,16 +815,34 @@ func ValidateSMP3Config(mapping map[string]any, available map[string]struct{}) e
 	if err != nil {
 		return err
 	}
-	if len(names) != 2 {
-		return fmt.Errorf("smp3 %s: exactly two legs are required", name)
+	if len(names) < 1 || len(names) > smp3core.MaxStreamLegIDCount {
+		return fmt.Errorf("smp3 %s: legs must contain between 1 and %d entries", name, smp3core.MaxStreamLegIDCount)
 	}
-	if names[0] == "" || names[1] == "" {
-		return fmt.Errorf("smp3 %s: both leg proxy names are required", name)
+	maxActive := smp3core.DefaultMaxActiveStreamLegs
+	if raw, exists := mapping["max-active-legs"]; exists {
+		value, ok := mappingInteger(raw)
+		if !ok || value < 1 || value > smp3core.MaxStreamLegIDCount {
+			return fmt.Errorf("smp3 %s: max-active-legs must be between 1 and %d", name, smp3core.MaxStreamLegIDCount)
+		}
+		maxActive = value
 	}
-	if names[0] == names[1] {
-		return fmt.Errorf("smp3 %s: leg proxy names must be different", name)
+	if len(names) > maxActive {
+		return fmt.Errorf("smp3 %s: configured legs exceed max-active-legs %d", name, maxActive)
 	}
+	if udp, ok := mapping["udp"].(map[string]any); ok {
+		if enabled, _ := udp["enabled"].(bool); enabled && len(names) > 2 {
+			return fmt.Errorf("smp3 %s: UDP currently supports at most two configured legs", name)
+		}
+	}
+	seenNames := make(map[string]struct{}, len(names))
 	for _, child := range names {
+		if strings.TrimSpace(child) == "" {
+			return fmt.Errorf("smp3 %s: leg proxy names are required", name)
+		}
+		if _, exists := seenNames[child]; exists {
+			return fmt.Errorf("smp3 %s: leg proxy names must be unique", name)
+		}
+		seenNames[child] = struct{}{}
 		if child == name {
 			return fmt.Errorf("smp3 %s: recursive child reference %q is unsupported", name, child)
 		}
@@ -652,7 +851,7 @@ func ValidateSMP3Config(mapping map[string]any, available map[string]struct{}) e
 		}
 	}
 	if fallback, _ := mapping["leg1-fallback"].(string); fallback != "" {
-		if fallback == name || fallback == names[0] || fallback == names[1] {
+		if _, exists := seenNames[fallback]; fallback == name || exists {
 			return fmt.Errorf("smp3 %s: leg1 fallback must be a separate child proxy", name)
 		}
 		if _, ok := available[fallback]; !ok {
@@ -660,6 +859,22 @@ func ValidateSMP3Config(mapping map[string]any, available map[string]struct{}) e
 		}
 	}
 	return nil
+}
+
+func mappingInteger(value any) (int, bool) {
+	switch number := value.(type) {
+	case int:
+		return number, true
+	case int64:
+		return int(number), int64(int(number)) == number
+	case uint64:
+		return int(number), uint64(int(number)) == number
+	case float64:
+		converted := int(number)
+		return converted, float64(converted) == number
+	default:
+		return 0, false
+	}
 }
 
 func smp3LegNames(value any) ([]string, error) {

@@ -187,6 +187,8 @@ func streamRoundTrip(t *testing.T, app net.Conn, payload []byte) {
 func TestConfigValidationAndDurationParsing(t *testing.T) {
 	valid := testConfig()
 	valid.Listen = ":0"
+	valid.ApplicationTarget = "127.0.0.1:80"
+	valid.CarrierTLS = CarrierTLSOptions{CertFile: "server.crt", KeyFile: "server.key"}
 	if err := valid.NormalizeAndValidate(); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +201,10 @@ func TestConfigValidationAndDurationParsing(t *testing.T) {
 		{"bad-scheduler", func(c *Config) { c.Stream.SchedulerMode = "bad" }},
 		{"bad-queue", func(c *Config) { c.Stream.QueueFrames = 7 }},
 		{"bad-max-datagram", func(c *Config) { c.UDP.MaxDatagramSize = 16385 }},
-		{"bad-bandwidth", func(c *Config) { c.Stream.BandwidthMbps = []uint32{1} }},
+		{"bandwidth-exceeds-leg-cap", func(c *Config) {
+			c.Stream.MaxActiveLegs = 1
+			c.Stream.BandwidthMbps = []uint32{1, 2}
+		}},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
@@ -443,6 +448,57 @@ func TestConcurrentEitherLegFirstCreatesOneSession(t *testing.T) {
 		t.Fatalf("sessions did not converge: created=%v/%v session=%p/%p", first.created, second.created, first.session, second.session)
 	}
 	first.session.close()
+}
+
+func TestServerSessionAdmissionPromotesAttachedLegReservations(t *testing.T) {
+	cfg := testConfig()
+	cfg.Stream.MaxActiveLegs = 3
+	cfg.Stream.BandwidthMbps = []uint32{100, 100, 100}
+	instance, err := New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close() })
+
+	var id smp3core.SessionID
+	id[0] = 0x60
+	session, created, err := instance.admitSession(
+		smp3core.Hello{SessionID: id, Mode: smp3core.ModeStream},
+		"example.com:443",
+	)
+	if err != nil || !created {
+		t.Fatalf("admit session: created=%v err=%v", created, err)
+	}
+	t.Cleanup(session.close)
+
+	peers := make([]net.Conn, 0, 3)
+	t.Cleanup(func() {
+		for _, peer := range peers {
+			_ = peer.Close()
+		}
+	})
+	for leg := smp3core.LegID(0); leg < 3; leg++ {
+		if err := session.reserveLeg(leg); err != nil {
+			t.Fatalf("reserve leg %d: %v", leg, err)
+		}
+		carrier, peer := net.Pipe()
+		peers = append(peers, peer)
+		if err := session.attachLeg(leg, carrier, nil); err != nil {
+			t.Fatalf("attach leg %d: %v", leg, err)
+		}
+		session.legMu.Lock()
+		_, stillReserved := session.reserved[uint8(leg)]
+		session.legMu.Unlock()
+		if stillReserved {
+			t.Fatalf("leg %d remained in the pending reservation set after Core attachment", leg)
+		}
+		if got := session.stream.LegCount(); got != int(leg)+1 {
+			t.Fatalf("active legs after attach %d = %d, want %d", leg, got, int(leg)+1)
+		}
+	}
+	if err := session.reserveLeg(3); err == nil {
+		t.Fatal("leg ID equal to configured cap was admitted")
+	}
 }
 
 func TestRegistryRejectsModeDestinationAndDuplicateLeg(t *testing.T) {
@@ -719,7 +775,17 @@ func TestDatagramBoundaryAndBothLegRejoin(t *testing.T) {
 			datagramRoundTrip(t, client, target, []byte("valid-after-oversize"))
 		}
 		_ = legs[failedLeg].Close()
-		waitFor(t, 2*time.Second, func() bool { return !client.Snapshot().LegUp[failedLeg] && instance.SessionCount() == 1 })
+		waitFor(t, 2*time.Second, func() bool {
+			if client.Snapshot().LegUp[failedLeg] {
+				return false
+			}
+			instance.access.Lock()
+			session := instance.sessions[id]
+			instance.access.Unlock()
+			// A closed local socket does not prove the peer has retired its
+			// old generation. Rejoin begins after both actual Core legs retire.
+			return session != nil && session.dgram != nil && !session.dgram.Snapshot().LegUp[failedLeg]
+		})
 		replacement := connectLeg(t, instance, password, id, failedLeg, smp3core.ModeDatagram, target, byte(70+failedLeg))
 		if err := client.AttachLeg(smp3core.LegID(failedLeg), replacement, nil); err != nil {
 			t.Fatal(err)

@@ -283,6 +283,7 @@ func (h *telemetryHTTPServer) handleStatus(w http.ResponseWriter, head bool) {
 		"wire_rx_rate_bps":         snapshot.CurrentWireRxRate,
 		"telemetry_dropped_events": snapshot.TelemetryDroppedEvents,
 		"role_stats":               roleStatsJSON(snapshot),
+		"n_legs":                   snapshot.NLegs,
 	}
 	if h.accounting != nil {
 		value["traffic"] = h.trafficReport("today", snapshot)
@@ -292,9 +293,8 @@ func (h *telemetryHTTPServer) handleStatus(w http.ResponseWriter, head bool) {
 
 func (h *telemetryHTTPServer) handleLegs(w http.ResponseWriter, head bool) {
 	snapshot := h.captureSnapshot()
-	items := make([]map[string]any, 2)
-	for leg := range snapshot.Legs {
-		a := snapshot.Legs[leg]
+	items := make([]map[string]any, len(snapshot.NLegs))
+	for leg, a := range snapshot.NLegs {
 		items[leg] = map[string]any{
 			"leg_id":                     leg,
 			"ingress_role":               legIngressRole(snapshot, leg),
@@ -445,7 +445,8 @@ func parseTelemetryLimit(raw string) (int, *telemetryErrorBody) {
 func firstDataCount(snapshot TelemetrySnapshot, leg int) int {
 	count := 0
 	for _, row := range snapshot.Sessions {
-		if !row.Legs[leg].FirstDataAt.IsZero() {
+		legs := sessionTelemetryLegs(row)
+		if leg < len(legs) && !legs[leg].FirstDataAt.IsZero() {
 			count++
 		}
 	}
@@ -467,41 +468,49 @@ func nullableTimeString(value time.Time) any {
 }
 
 func sessionCompactJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[string]any {
+	legs := sessionTelemetryLegs(row)
 	result := map[string]any{
-		"display_session_id":    row.DisplaySessionID,
-		"ingress_role":          row.IngressRole,
-		"mode":                  row.Mode,
-		"created_at":            nullableTimeString(row.CreatedAt),
-		"closed_at":             nullableTimeString(row.ClosedAt),
-		"duration_ms":           durationAt(row.CreatedAt, row.ClosedAt, snapshotAt),
-		"leg0_state":            row.Legs[0].State,
-		"leg1_state":            row.Legs[1].State,
-		"leg0_attach_at":        nullableTimeString(row.Legs[0].AttachAt),
-		"leg1_attach_at":        nullableTimeString(row.Legs[1].AttachAt),
-		"leg0_wire_tx_bytes":    row.Legs[0].WireTxBytes,
-		"leg0_wire_rx_bytes":    row.Legs[0].WireRxBytes,
-		"leg0_ingress_role":     row.Legs[0].IngressRole,
-		"leg0_generation":       row.Legs[0].Generation,
-		"leg0_data_sent_bytes":  row.Legs[0].DataSentBytes,
-		"leg1_wire_tx_bytes":    row.Legs[1].WireTxBytes,
-		"leg1_wire_rx_bytes":    row.Legs[1].WireRxBytes,
-		"leg1_ingress_role":     row.Legs[1].IngressRole,
-		"leg1_generation":       row.Legs[1].Generation,
-		"leg1_data_sent_bytes":  row.Legs[1].DataSentBytes,
-		"leg0_logical_tx_bytes": row.Legs[0].LogicalTxAckedBytes,
-		"leg0_logical_rx_bytes": row.Legs[0].LogicalRxUniqueBytes,
-		"leg1_logical_tx_bytes": row.Legs[1].LogicalTxAckedBytes,
-		"leg1_logical_rx_bytes": row.Legs[1].LogicalRxUniqueBytes,
-		"leg0_wire_share":       shareValue(sessionWireShare(row, 0)),
-		"leg1_wire_share":       shareValue(sessionWireShare(row, 1)),
-		"leg0_logical_tx_share": shareValue(sessionLogicalShare(row, 0, true)),
-		"leg1_logical_tx_share": shareValue(sessionLogicalShare(row, 1, true)),
-		"first_leg_ready_at":    nullableTimeString(row.FirstLegReadyAt),
-		"first_data_seen_at":    nullableTimeString(row.FirstDataSeenAt),
-		"leg0_first_data_at":    nullableTimeString(row.Legs[0].FirstDataAt),
-		"leg1_first_data_at":    nullableTimeString(row.Legs[1].FirstDataAt),
-		"startup_released_at":   nullableTimeString(row.StartupReleasedAt),
-		"startup_result":        nullableString(row.StartupResult),
+		"display_session_id":  row.DisplaySessionID,
+		"ingress_role":        row.IngressRole,
+		"mode":                row.Mode,
+		"created_at":          nullableTimeString(row.CreatedAt),
+		"closed_at":           nullableTimeString(row.ClosedAt),
+		"duration_ms":         durationAt(row.CreatedAt, row.ClosedAt, snapshotAt),
+		"n_legs":              legs,
+		"first_leg_ready_at":  nullableTimeString(row.FirstLegReadyAt),
+		"first_data_seen_at":  nullableTimeString(row.FirstDataSeenAt),
+		"startup_released_at": nullableTimeString(row.StartupReleasedAt),
+		"startup_result":      nullableString(row.StartupResult),
+	}
+	if len(legs) > 0 {
+		result["leg0_state"] = legs[0].State
+		result["leg0_attach_at"] = nullableTimeString(legs[0].AttachAt)
+		result["leg0_wire_tx_bytes"] = legs[0].WireTxBytes
+		result["leg0_wire_rx_bytes"] = legs[0].WireRxBytes
+		result["leg0_ingress_role"] = legs[0].IngressRole
+		result["leg0_carrier_id"] = legs[0].CarrierID
+		result["leg0_generation"] = legs[0].Generation
+		result["leg0_data_sent_bytes"] = legs[0].DataSentBytes
+		result["leg0_logical_tx_bytes"] = legs[0].LogicalTxAckedBytes
+		result["leg0_logical_rx_bytes"] = legs[0].LogicalRxUniqueBytes
+		result["leg0_wire_share"] = shareValue(sessionWireShare(row, 0))
+		result["leg0_logical_tx_share"] = shareValue(sessionLogicalShare(row, 0, true))
+		result["leg0_first_data_at"] = nullableTimeString(legs[0].FirstDataAt)
+	}
+	if len(legs) > 1 {
+		result["leg1_state"] = legs[1].State
+		result["leg1_attach_at"] = nullableTimeString(legs[1].AttachAt)
+		result["leg1_wire_tx_bytes"] = legs[1].WireTxBytes
+		result["leg1_wire_rx_bytes"] = legs[1].WireRxBytes
+		result["leg1_ingress_role"] = legs[1].IngressRole
+		result["leg1_carrier_id"] = legs[1].CarrierID
+		result["leg1_generation"] = legs[1].Generation
+		result["leg1_data_sent_bytes"] = legs[1].DataSentBytes
+		result["leg1_logical_tx_bytes"] = legs[1].LogicalTxAckedBytes
+		result["leg1_logical_rx_bytes"] = legs[1].LogicalRxUniqueBytes
+		result["leg1_wire_share"] = shareValue(sessionWireShare(row, 1))
+		result["leg1_logical_tx_share"] = shareValue(sessionLogicalShare(row, 1, true))
+		result["leg1_first_data_at"] = nullableTimeString(legs[1].FirstDataAt)
 	}
 	return result
 }
@@ -509,6 +518,7 @@ func sessionCompactJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[
 func sessionDetailJSON(row TelemetrySessionSnapshot, snapshotAt time.Time) map[string]any {
 	result := sessionCompactJSON(row, snapshotAt)
 	result["startup"] = startupJSON(row.Startup)
+	result["stream_transport"] = row.Transport
 	return result
 }
 
@@ -523,7 +533,7 @@ func startupJSON(startup *TelemetryStartupSnapshot) any {
 		preferredLeg = int(startup.PreferredLeg)
 		grace = startup.Grace.Milliseconds()
 	}
-	if startup.FirstDataLeg >= 0 && startup.FirstDataLeg <= 1 {
+	if startup.FirstDataLeg >= 0 && int(startup.FirstDataLeg) < smp3core.MaxStreamLegIDCount {
 		firstDataLeg = int(startup.FirstDataLeg)
 	}
 	policy := "first-ready"
@@ -565,21 +575,29 @@ func durationAt(created, closed, snapshot time.Time) int64 {
 
 func sessionWireShare(row TelemetrySessionSnapshot, leg int) TelemetryShare {
 	total := uint64(0)
-	for _, item := range row.Legs {
+	legs := sessionTelemetryLegs(row)
+	for _, item := range legs {
 		total += item.WireTxBytes + item.WireRxBytes
 	}
-	value := row.Legs[leg].WireTxBytes + row.Legs[leg].WireRxBytes
+	if leg < 0 || leg >= len(legs) {
+		return TelemetryShare{}
+	}
+	value := legs[leg].WireTxBytes + legs[leg].WireRxBytes
 	return calculateTelemetryShare(value, total)
 }
 
 func sessionLogicalShare(row TelemetrySessionSnapshot, leg int, tx bool) TelemetryShare {
 	var total, value uint64
-	for index, item := range row.Legs {
+	legs := sessionTelemetryLegs(row)
+	if leg < 0 || leg >= len(legs) {
+		return TelemetryShare{}
+	}
+	for index, item := range legs {
 		if tx {
-			value = row.Legs[leg].LogicalTxAckedBytes
+			value = legs[leg].LogicalTxAckedBytes
 			total += item.LogicalTxAckedBytes
 		} else {
-			value = row.Legs[leg].LogicalRxUniqueBytes
+			value = legs[leg].LogicalRxUniqueBytes
 			total += item.LogicalRxUniqueBytes
 		}
 		if index == leg && !tx {
@@ -599,9 +617,9 @@ func nullableString(value string) any {
 func roleStatsJSON(snapshot TelemetrySnapshot) []map[string]any {
 	items := make([]map[string]any, 0, len(snapshot.Roles))
 	for _, role := range snapshot.Roles {
-		legs := make([]map[string]any, 2)
-		for leg := range role.Legs {
-			value := role.Legs[leg]
+		roleLegs := roleTelemetryLegs(role)
+		legs := make([]map[string]any, len(roleLegs))
+		for leg, value := range roleLegs {
 			legs[leg] = map[string]any{
 				"leg_id":                  leg,
 				"data_sent_bytes":         value.DataSentBytes,
@@ -625,10 +643,11 @@ func roleStatsJSON(snapshot TelemetrySnapshot) []map[string]any {
 func legIngressRole(snapshot TelemetrySnapshot, leg int) string {
 	roles := make(map[string]struct{}, 2)
 	for _, row := range snapshot.Sessions {
-		if leg < 0 || leg >= len(row.Legs) {
+		legs := sessionTelemetryLegs(row)
+		if leg < 0 || leg >= len(legs) {
 			continue
 		}
-		role := row.Legs[leg].IngressRole
+		role := legs[leg].IngressRole
 		if role != "" && role != TelemetryIngressUnknown {
 			roles[role] = struct{}{}
 		}
@@ -642,4 +661,18 @@ func legIngressRole(snapshot TelemetrySnapshot, leg int) string {
 		return TelemetryIngressMixed
 	}
 	return TelemetryIngressUnknown
+}
+
+func sessionTelemetryLegs(row TelemetrySessionSnapshot) []TelemetryLegSnapshot {
+	if len(row.NLegs) > 0 {
+		return row.NLegs
+	}
+	return row.Legs[:]
+}
+
+func roleTelemetryLegs(role TelemetryRoleAggregate) []TelemetryRoleLegAggregate {
+	if len(role.NLegs) > 0 {
+		return role.NLegs
+	}
+	return role.Legs[:]
 }

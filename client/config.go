@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
@@ -16,7 +17,7 @@ import (
 
 // Version is the public SMP3 Standalone client release version. Official builds
 // inject the same value from the repository VERSION file with -ldflags.
-var Version = "2.4.0"
+var Version = "2.7.0"
 
 type Duration time.Duration
 
@@ -59,17 +60,19 @@ func (d Duration) Time() time.Duration          { return time.Duration(d) }
 
 type Config struct {
 	Listen        string               `json:"listen"`
+	LogLevel      string               `json:"log_level,omitempty"`
 	UpstreamSocks UpstreamSocksOptions `json:"upstream_socks"`
 	SMP3          SMP3Options          `json:"smp3"`
 }
 
 type UpstreamSocksOptions struct {
-	Address        string                 `json:"address"`
-	Username       string                 `json:"username,omitempty"`
-	Password       string                 `json:"password,omitempty"`
-	ConnectTimeout Duration               `json:"connect_timeout"`
-	Leg0           *UpstreamSocksOverride `json:"leg0,omitempty"`
-	Leg1           *UpstreamSocksOverride `json:"leg1,omitempty"`
+	Address        string                  `json:"address"`
+	Username       string                  `json:"username,omitempty"`
+	Password       string                  `json:"password,omitempty"`
+	ConnectTimeout Duration                `json:"connect_timeout"`
+	Leg0           *UpstreamSocksOverride  `json:"leg0,omitempty"`
+	Leg1           *UpstreamSocksOverride  `json:"leg1,omitempty"`
+	Legs           []UpstreamSocksOverride `json:"legs,omitempty"`
 }
 
 // LegUpstreamAddresses returns only the safe endpoint identities used by each
@@ -81,6 +84,18 @@ func (c Config) LegUpstreamAddresses() [2]string {
 		c.effectiveUpstream(0).Address,
 		c.effectiveUpstream(1).Address,
 	}
+}
+
+// LegUpstreamAddressesN returns the upstream carrier address for every
+// configured stream route. The legacy fixed-size accessor above remains a
+// compatibility view for existing callers.
+func (c Config) LegUpstreamAddressesN() []string {
+	routes := c.SMP3.Routes.entries()
+	addresses := make([]string, len(routes))
+	for id := range routes {
+		addresses[id] = c.effectiveUpstream(uint8(id)).Address
+	}
+	return addresses
 }
 
 // UpstreamSocksOverride selects a carrier SOCKS5 endpoint for one logical
@@ -96,6 +111,7 @@ type UpstreamSocksOverride struct {
 type SMP3Options struct {
 	Password            string             `json:"password"`
 	CarrierMode         string             `json:"carrier_mode,omitempty"`
+	CarrierTLS          CarrierTLSOptions  `json:"carrier_tls,omitempty"`
 	HostCarrier         HostCarrierOptions `json:"host_carrier,omitempty"`
 	Routes              RouteOptions       `json:"routes"`
 	CarrierReadyTimeout Duration           `json:"carrier_ready_timeout"`
@@ -103,40 +119,86 @@ type SMP3Options struct {
 	UDP                 UDPOptions         `json:"udp"`
 }
 
+// CarrierTLSOptions enables end-to-end TLS from the standalone client to the
+// SMP3 server over the selected TCP carrier. TLS is disabled by default.
+// Host-bridge carriers own their transport security and cannot be wrapped here.
+type CarrierTLSOptions struct {
+	Enabled    bool   `json:"enabled,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	RootCAFile string `json:"root_ca_file,omitempty"`
+}
+
 type HostCarrierOptions struct {
 	ControlAddress string   `json:"control_address,omitempty"`
 	CarrierHandle  string   `json:"carrier_handle,omitempty"`
 	Leg0Handle     string   `json:"leg0_handle,omitempty"`
 	Leg1Handle     string   `json:"leg1_handle,omitempty"`
+	LegHandles     []string `json:"leg_handles,omitempty"`
 	TargetHandle   string   `json:"target_handle,omitempty"`
 	ConnectTimeout Duration `json:"connect_timeout,omitempty"`
 }
 
 type StreamOptions struct {
-	SchedulerMode           string              `json:"scheduler_mode"`
-	CapacityMode            string              `json:"capacity_mode,omitempty"`
-	ActivationMode          string              `json:"activation_mode,omitempty"`
-	HOLMode                 string              `json:"hol_mode,omitempty"`
-	StartupPolicy           string              `json:"startup_policy,omitempty"`
-	StartupPreferredLeg     uint8               `json:"startup_preferred_leg,omitempty"`
-	StartupGrace            NonNegativeDuration `json:"startup_grace,omitempty"`
-	ActivationThresholdMbps uint32              `json:"activation_threshold_mbps"`
-	ActivationWindow        Duration            `json:"activation_window"`
-	ChunkSize               int                 `json:"chunk_size"`
-	QueueFrames             int                 `json:"queue_frames"`
-	BandwidthMbps           []uint32            `json:"bandwidth_mbps"`
-	MaxReorderFrames        int                 `json:"max_reorder_frames"`
-	MaxInflightFrames       int                 `json:"max_inflight_frames"`
-	AckInterval             Duration            `json:"ack_interval"`
-	RetransmitTimeout       Duration            `json:"retransmit_timeout"`
-	RecoveryTimeout         Duration            `json:"recovery_timeout"`
-	RedialInterval          Duration            `json:"redial_interval"`
+	SchedulerMode         string `json:"scheduler_mode"`
+	CapacityMode          string `json:"capacity_mode,omitempty"`
+	ActivationMode        string `json:"activation_mode,omitempty"`
+	HOLMode               string `json:"hol_mode,omitempty"`
+	ExperimentalPathAware bool   `json:"experimental_path_aware,omitempty"`
+	// AllowV7LegacyFallback permits retrying an older HELLO version on a new
+	// Carrier after an ambiguous V7 transport failure. It is disabled by
+	// default because an unauthenticated timeout/reset is not proof that a peer
+	// lacks V7 support.
+	AllowV7LegacyFallback bool `json:"allow_v7_legacy_fallback,omitempty"`
+	// AllowPathRTTV4Fallback is the master opt-in for V4 fallback.
+	AllowPathRTTV4Fallback bool `json:"allow_path_rtt_v4_fallback,omitempty"`
+	// AllowPathRTTV4FallbackOnTransportError permits a fresh V4 connection
+	// after an ambiguous V6 handshake transport failure. It does not mean the
+	// peer explicitly rejected V6. Both fallback options must be enabled.
+	AllowPathRTTV4FallbackOnTransportError bool                `json:"allow_path_rtt_v4_fallback_on_transport_error,omitempty"`
+	StartupPolicy                          string              `json:"startup_policy,omitempty"`
+	StartupPreferredLeg                    uint8               `json:"startup_preferred_leg,omitempty"`
+	StartupGrace                           NonNegativeDuration `json:"startup_grace,omitempty"`
+	ActivationThresholdMbps                uint32              `json:"activation_threshold_mbps"`
+	ActivationWindow                       Duration            `json:"activation_window"`
+	ChunkSize                              int                 `json:"chunk_size"`
+	QueueFrames                            int                 `json:"queue_frames"`
+	BandwidthMbps                          []uint32            `json:"bandwidth_mbps"`
+	MaxActiveLegs                          int                 `json:"max_active_legs,omitempty"`
+	MaxReorderFrames                       int                 `json:"max_reorder_frames"`
+	MaxInflightFrames                      int                 `json:"max_inflight_frames"`
+	AckInterval                            Duration            `json:"ack_interval"`
+	RetransmitTimeout                      Duration            `json:"retransmit_timeout"`
+	RecoveryTimeout                        Duration            `json:"recovery_timeout"`
+	RedialInterval                         Duration            `json:"redial_interval"`
 }
 
 type RouteOptions struct {
-	Leg0         string `json:"leg0"`
-	Leg1         string `json:"leg1"`
-	Leg1Fallback string `json:"leg1_fallback,omitempty"`
+	Leg0         string            `json:"leg0"`
+	Leg1         string            `json:"leg1"`
+	Leg1Fallback string            `json:"leg1_fallback,omitempty"`
+	Legs         []RouteLegOptions `json:"legs,omitempty"`
+}
+
+type RouteLegOptions struct {
+	ID       uint8  `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Address  string `json:"address"`
+	Fallback string `json:"fallback,omitempty"`
+}
+
+func (r RouteOptions) entries() []RouteLegOptions {
+	if len(r.Legs) > 0 {
+		return append([]RouteLegOptions(nil), r.Legs...)
+	}
+	return []RouteLegOptions{{ID: 0, Name: "leg0", Address: r.Leg0}, {ID: 1, Name: "leg1", Address: r.Leg1, Fallback: r.Leg1Fallback}}
+}
+
+func (r RouteOptions) leg(id uint8) (RouteLegOptions, bool) {
+	entries := r.entries()
+	if int(id) >= len(entries) || entries[id].ID != id {
+		return RouteLegOptions{}, false
+	}
+	return entries[id], true
 }
 
 type UDPOptions struct {
@@ -164,6 +226,7 @@ func DefaultConfig() Config {
 				ChunkSize:               64 * 1024,
 				QueueFrames:             256,
 				BandwidthMbps:           []uint32{128, 500},
+				MaxActiveLegs:           smp3core.DefaultMaxActiveStreamLegs,
 				MaxReorderFrames:        4096,
 				MaxInflightFrames:       1024,
 				AckInterval:             Duration(20 * time.Millisecond),
@@ -216,6 +279,13 @@ func LoadConfig(reader io.Reader) (Config, error) {
 }
 
 func (c *Config) NormalizeAndValidate() error {
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
+	c.LogLevel = strings.ToLower(c.LogLevel)
+	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
+		return fmt.Errorf("invalid log_level %q", c.LogLevel)
+	}
 	if err := validateLoopbackListen(c.Listen); err != nil {
 		return err
 	}
@@ -246,9 +316,24 @@ func (c *Config) NormalizeAndValidate() error {
 	if c.SMP3.CarrierMode != "legacy_socks" && c.SMP3.CarrierMode != "host_bridge" {
 		return fmt.Errorf("invalid smp3.carrier_mode %q", c.SMP3.CarrierMode)
 	}
+	if c.SMP3.CarrierTLS.Enabled {
+		if c.SMP3.CarrierMode != "legacy_socks" {
+			return errors.New("smp3.carrier_tls is only supported with legacy_socks; host_bridge owns its transport security")
+		}
+		if strings.TrimSpace(c.SMP3.CarrierTLS.ServerName) == "" {
+			return errors.New("smp3.carrier_tls.server_name is required when carrier TLS is enabled")
+		}
+	}
+	if !c.SMP3.CarrierTLS.Enabled && (c.SMP3.CarrierTLS.ServerName != "" || c.SMP3.CarrierTLS.RootCAFile != "") {
+		return errors.New("smp3.carrier_tls server_name/root_ca_file require enabled=true")
+	}
 	if c.SMP3.CarrierMode == "host_bridge" {
 		if err := validateLoopbackListen(c.SMP3.HostCarrier.ControlAddress); err != nil {
 			return fmt.Errorf("invalid smp3.host_carrier.control_address: %w", err)
+		}
+		routes := c.SMP3.Routes.entries()
+		if len(c.SMP3.HostCarrier.LegHandles) > len(routes) {
+			return errors.New("smp3.host_carrier.leg_handles cannot exceed configured route count")
 		}
 		if c.SMP3.HostCarrier.Leg0Handle == "" {
 			c.SMP3.HostCarrier.Leg0Handle = c.SMP3.HostCarrier.CarrierHandle
@@ -256,8 +341,27 @@ func (c *Config) NormalizeAndValidate() error {
 		if c.SMP3.HostCarrier.Leg1Handle == "" {
 			c.SMP3.HostCarrier.Leg1Handle = c.SMP3.HostCarrier.CarrierHandle
 		}
-		if c.SMP3.HostCarrier.Leg0Handle == "" || c.SMP3.HostCarrier.Leg1Handle == "" || c.SMP3.HostCarrier.TargetHandle == "" {
-			return errors.New("smp3.host_carrier handles are required")
+		if len(c.SMP3.HostCarrier.LegHandles) == 0 {
+			c.SMP3.HostCarrier.LegHandles = make([]string, len(routes))
+		}
+		for id := range routes {
+			if c.SMP3.HostCarrier.LegHandles[id] != "" {
+				continue
+			}
+			switch id {
+			case 0:
+				c.SMP3.HostCarrier.LegHandles[id] = c.SMP3.HostCarrier.Leg0Handle
+			case 1:
+				c.SMP3.HostCarrier.LegHandles[id] = c.SMP3.HostCarrier.Leg1Handle
+			default:
+				c.SMP3.HostCarrier.LegHandles[id] = c.SMP3.HostCarrier.CarrierHandle
+			}
+			if c.SMP3.HostCarrier.LegHandles[id] == "" {
+				return fmt.Errorf("smp3.host_carrier.leg_handles[%d] is required", id)
+			}
+		}
+		if c.SMP3.HostCarrier.TargetHandle == "" {
+			return errors.New("smp3.host_carrier.target_handle is required")
 		}
 		if c.SMP3.HostCarrier.ConnectTimeout.Time() <= 0 {
 			c.SMP3.HostCarrier.ConnectTimeout = Duration(5 * time.Second)
@@ -269,11 +373,30 @@ func (c *Config) NormalizeAndValidate() error {
 	if c.SMP3.CarrierReadyTimeout.Time() > time.Minute {
 		return errors.New("invalid smp3.carrier_ready_timeout: must be at most 1m")
 	}
-	if err := validateRoutes(c.SMP3.Routes); err != nil {
+	if err := validateRoutesWithUpstreams(c.SMP3.Routes, c.effectiveUpstream); err != nil {
 		return err
+	}
+	routeCount := len(c.SMP3.Routes.entries())
+	if len(c.UpstreamSocks.Legs) > routeCount {
+		return errors.New("upstream_socks.legs cannot exceed configured smp3.routes.legs")
+	}
+	for id := range c.UpstreamSocks.Legs {
+		override := &c.UpstreamSocks.Legs[id]
+		if err := validateUpstreamOverride(override, fmt.Sprintf("upstream_socks.legs[%d]", id)); err != nil {
+			return err
+		}
 	}
 	if err := validateStream(&c.SMP3.Stream); err != nil {
 		return err
+	}
+	if routeCount > c.SMP3.Stream.MaxActiveLegs {
+		return fmt.Errorf("smp3.routes.legs has %d entries, exceeding stream.max_active_legs %d", routeCount, c.SMP3.Stream.MaxActiveLegs)
+	}
+	if int(c.SMP3.Stream.StartupPreferredLeg) >= routeCount {
+		return fmt.Errorf("invalid smp3.stream.startup_preferred_leg: must reference a configured leg in [0,%d)", routeCount)
+	}
+	if c.SMP3.UDP.Enabled && routeCount > 2 {
+		return errors.New("smp3.udp currently supports at most two configured legs; disable UDP or configure at most two legs")
 	}
 	return validateUDP(&c.SMP3.UDP)
 }
@@ -299,6 +422,10 @@ func validateUpstreamOverride(override *UpstreamSocksOverride, field string) err
 // upstream_socks behavior. It intentionally does not inspect the other leg,
 // so one leg can never silently fall back to the other leg's carrier.
 func (c Config) effectiveUpstream(leg uint8) UpstreamSocksOptions {
+	if int(leg) < len(c.UpstreamSocks.Legs) {
+		override := c.UpstreamSocks.Legs[leg]
+		return UpstreamSocksOptions{Address: override.Address, Username: override.Username, Password: override.Password, ConnectTimeout: override.ConnectTimeout}
+	}
 	override := c.UpstreamSocks.Leg0
 	if leg == 1 {
 		override = c.UpstreamSocks.Leg1
@@ -342,6 +469,50 @@ func validateEndpoint(address, field string, allowZero bool) error {
 }
 
 func validateRoutes(routes RouteOptions) error {
+	return validateRoutesWithUpstreams(routes, nil)
+}
+
+func validateRoutesWithUpstreams(routes RouteOptions, upstreamForLeg func(uint8) UpstreamSocksOptions) error {
+	if len(routes.Legs) > 0 {
+		if routes.Leg0 != "" || routes.Leg1 != "" || routes.Leg1Fallback != "" {
+			return errors.New("smp3.routes must use either legacy leg0/leg1 fields or legs, not both")
+		}
+		if len(routes.Legs) > smp3core.MaxStreamLegIDCount {
+			return fmt.Errorf("smp3.routes.legs exceeds protocol maximum %d", smp3core.MaxStreamLegIDCount)
+		}
+		type binding struct{ upstream UpstreamSocksOptions }
+		seen := make(map[string][]binding, len(routes.Legs)*2)
+		for index, leg := range routes.Legs {
+			if int(leg.ID) != index {
+				return fmt.Errorf("smp3.routes.legs[%d].id must equal its contiguous protocol leg ID %d", index, index)
+			}
+			if err := validateEndpoint(leg.Address, fmt.Sprintf("smp3.routes.legs[%d].address", index), false); err != nil {
+				return err
+			}
+			upstream := UpstreamSocksOptions{}
+			if upstreamForLeg != nil {
+				upstream = upstreamForLeg(uint8(index))
+			}
+			for _, prior := range seen[leg.Address] {
+				if upstreamForLeg == nil || sameUpstreamCarrier(prior.upstream, upstream) {
+					return fmt.Errorf("duplicate SMP3 route target %q on the same upstream carrier", leg.Address)
+				}
+			}
+			seen[leg.Address] = append(seen[leg.Address], binding{upstream: upstream})
+			if leg.Fallback != "" {
+				if err := validateEndpoint(leg.Fallback, fmt.Sprintf("smp3.routes.legs[%d].fallback", index), false); err != nil {
+					return err
+				}
+				for _, prior := range seen[leg.Fallback] {
+					if upstreamForLeg == nil || sameUpstreamCarrier(prior.upstream, upstream) {
+						return fmt.Errorf("duplicate SMP3 fallback target %q on the same upstream carrier", leg.Fallback)
+					}
+				}
+				seen[leg.Fallback] = append(seen[leg.Fallback], binding{upstream: upstream})
+			}
+		}
+		return nil
+	}
 	if routes.Leg0 == "" || routes.Leg1 == "" {
 		return errors.New("smp3.routes.leg0 and smp3.routes.leg1 are required")
 	}
@@ -362,7 +533,17 @@ func validateRoutes(routes RouteOptions) error {
 	return nil
 }
 
+func sameUpstreamCarrier(left, right UpstreamSocksOptions) bool {
+	return left.Address == right.Address && left.Username == right.Username && left.Password == right.Password
+}
+
 func validateStream(c *StreamOptions) error {
+	if c.MaxActiveLegs == 0 {
+		c.MaxActiveLegs = smp3core.DefaultMaxActiveStreamLegs
+	}
+	if c.MaxActiveLegs < 1 || c.MaxActiveLegs > smp3core.MaxStreamLegIDCount {
+		return fmt.Errorf("invalid smp3.stream.max_active_legs: must be between 1 and %d", smp3core.MaxStreamLegIDCount)
+	}
 	if c.SchedulerMode == "" {
 		c.SchedulerMode = "adaptive"
 	}
@@ -402,8 +583,8 @@ func validateStream(c *StreamOptions) error {
 	if c.StartupPolicy != "first-ready" && c.StartupPolicy != "preferred" {
 		return fmt.Errorf("invalid smp3.startup_policy %q", c.StartupPolicy)
 	}
-	if c.StartupPreferredLeg > 1 {
-		return errors.New("invalid smp3.startup_preferred_leg: must be 0 or 1")
+	if int(c.StartupPreferredLeg) >= c.MaxActiveLegs {
+		return fmt.Errorf("invalid smp3.startup_preferred_leg: must be less than max_active_legs (%d)", c.MaxActiveLegs)
 	}
 	if c.StartupGrace.Time() < 0 || c.StartupGrace.Time() > smp3core.MaxStreamStartupGrace {
 		return fmt.Errorf("invalid smp3.startup_grace: must be between 0 and %s", smp3core.MaxStreamStartupGrace)
@@ -426,8 +607,8 @@ func validateStream(c *StreamOptions) error {
 	if c.QueueFrames < 8 || c.QueueFrames > 4096 {
 		return errors.New("invalid smp3.queue_frames")
 	}
-	if len(c.BandwidthMbps) != 0 && len(c.BandwidthMbps) != 2 {
-		return errors.New("invalid smp3.bandwidth_mbps: expected zero or two entries")
+	if len(c.BandwidthMbps) > c.MaxActiveLegs {
+		return fmt.Errorf("invalid smp3.bandwidth_mbps: cannot exceed max_active_legs (%d)", c.MaxActiveLegs)
 	}
 	for _, value := range c.BandwidthMbps {
 		if value == 0 {
@@ -504,25 +685,28 @@ func (c SMP3Options) streamConfig(onActivate func(), onLegDown func(uint8, error
 		startupPolicy = smp3core.StreamStartupPreferred
 	}
 	return smp3core.StreamConfig{
-		SchedulerMode:       streamSchedulerMode(c.Stream.SchedulerMode),
-		CapacityMode:        streamCapacityMode(c.Stream.CapacityMode),
-		ActivationMode:      streamActivationMode(c.Stream.ActivationMode),
-		HOLMode:             streamHOLMode(c.Stream.HOLMode),
-		ChunkSize:           c.Stream.ChunkSize,
-		QueueFrames:         c.Stream.QueueFrames,
-		ThresholdBytesPS:    uint64(c.Stream.ActivationThresholdMbps) * 1000 * 1000 / 8,
-		ActivationWindow:    c.Stream.ActivationWindow.Time(),
-		BandwidthMbps:       append([]uint32(nil), c.Stream.BandwidthMbps...),
-		MaxReorderFrames:    c.Stream.MaxReorderFrames,
-		MaxInflightFrames:   c.Stream.MaxInflightFrames,
-		AckInterval:         c.Stream.AckInterval.Time(),
-		RetransmitTimeout:   c.Stream.RetransmitTimeout.Time(),
-		RecoveryTimeout:     c.Stream.RecoveryTimeout.Time(),
-		OnActivate:          onActivate,
-		OnLegDown:           onLegDown,
-		StartupPolicy:       startupPolicy,
-		StartupPreferredLeg: smp3core.LegID(c.Stream.StartupPreferredLeg),
-		StartupGrace:        c.Stream.StartupGrace.Time(),
+		SchedulerMode:         streamSchedulerMode(c.Stream.SchedulerMode),
+		CapacityMode:          streamCapacityMode(c.Stream.CapacityMode),
+		ActivationMode:        streamActivationMode(c.Stream.ActivationMode),
+		HOLMode:               streamHOLMode(c.Stream.HOLMode),
+		ExperimentalPathAware: c.Stream.ExperimentalPathAware,
+		PathRole:              smp3core.StreamPathRoleClient,
+		ChunkSize:             c.Stream.ChunkSize,
+		QueueFrames:           c.Stream.QueueFrames,
+		ThresholdBytesPS:      uint64(c.Stream.ActivationThresholdMbps) * 1000 * 1000 / 8,
+		ActivationWindow:      c.Stream.ActivationWindow.Time(),
+		BandwidthMbps:         append([]uint32(nil), c.Stream.BandwidthMbps...),
+		MaxReorderFrames:      c.Stream.MaxReorderFrames,
+		MaxInflightFrames:     c.Stream.MaxInflightFrames,
+		AckInterval:           c.Stream.AckInterval.Time(),
+		RetransmitTimeout:     c.Stream.RetransmitTimeout.Time(),
+		RecoveryTimeout:       c.Stream.RecoveryTimeout.Time(),
+		OnActivate:            onActivate,
+		OnLegDown:             onLegDown,
+		StartupPolicy:         startupPolicy,
+		StartupPreferredLeg:   smp3core.LegID(c.Stream.StartupPreferredLeg),
+		MaxActiveLegs:         c.Stream.MaxActiveLegs,
+		StartupGrace:          c.Stream.StartupGrace.Time(),
 	}
 }
 

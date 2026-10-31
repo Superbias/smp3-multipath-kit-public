@@ -32,9 +32,9 @@ type benchmarkAssignmentStats struct {
 	rollback      atomic.Uint64
 	reassigned    atomic.Uint64
 	reassignments atomic.Uint64
-	admitted      [2]atomic.Uint64
-	feederHeld    [2]atomic.Int64
-	feedersDone   [2]chan struct{}
+	admitted      []atomic.Uint64
+	feederHeld    []atomic.Int64
+	feedersDone   []chan struct{}
 }
 
 const (
@@ -157,36 +157,82 @@ func (c *StreamEngine) wakeDecoupled() {
 // assignBenchmark commits ownership and accounting together. A vanished or
 // closed owner is a hard failure; a full physical queue is never considered here.
 func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment) *streamLeg {
+	// Read feedback before taking weightedMu. Key it by the concrete leg pointer
+	// so a concurrent replacement cannot transfer an old generation's RTT to a
+	// new Carrier with the same leg ID.
+	feedbackLegs := make([]*streamLeg, c.maxActiveLegs)
+	pathPenalty := make([]float64, c.maxActiveLegs)
+	for index := 0; index < len(feedbackLegs); index++ {
+		id := uint8(index)
+		leg := c.getLeg(id)
+		feedbackLegs[id] = leg
+		if leg != nil {
+			pathPenalty[id] = c.pathRTTScorePenalty(leg)
+		}
+	}
 	c.weightedMu.Lock()
 	defer c.weightedMu.Unlock()
-	if a.owner != nil && !a.owner.closed.Load() {
+	counts := make([]int, c.maxActiveLegs)
+	if c.slowLegProtection() {
+		copy(counts, c.txLedger.OrdinaryFramesByLeg())
+	}
+	now := time.Now()
+	if a.owner != nil && !a.owner.closed.Load() && (a.admitted.Load() || c.ordinaryOwnerAllowed(a.owner.id) || c.pendingRecoveryProbeOwner(a.owner.id, r.Sequence())) {
 		return a.owner
 	}
 	var best *streamLeg
 	score := math.MaxFloat64
 	legs := c.availableLegs()
-	var weights [2]float64
+	selectable := make([]bool, c.maxActiveLegs)
+	for i := range selectable {
+		selectable[i] = true
+	}
+	if c.slowLegProtection() {
+		for _, leg := range legs {
+			count := counts[leg.id]
+			if a.owner == leg {
+				count--
+			}
+			selectable[leg.id] = c.ordinaryEligible(leg.id, count, now)
+		}
+	}
+	weights := make([]float64, c.maxActiveLegs)
 	for _, leg := range legs {
 		weights[leg.id] = c.effectiveSchedulerWeight(leg)
 	}
 	if c.cfg.benchmarkEpochRebase {
-		var mask uint8
+		membershipChanged := false
 		for _, leg := range legs {
-			if !leg.closed.Load() {
-				mask |= 1 << leg.id
+			// Temporary budget fullness is readiness, not a membership epoch.
+			// Rebase only a true restriction/rejoin, never every queue/ACK turn.
+			if !leg.closed.Load() && (c.ordinaryOwnerAllowed(leg.id) || selectable[leg.id]) {
+				if !c.assignedEpochReady[leg.id] {
+					membershipChanged = true
+				}
+			} else if c.assignedEpochReady[leg.id] {
+				membershipChanged = true
 			}
 		}
-		if mask != c.assignedEpochMask {
+		if membershipChanged {
 			for _, leg := range legs {
 				if weight := weights[leg.id]; weight > 0 {
 					c.assignedEpochOrigin[leg.id] = float64(c.assignedService[leg.id]) / weight
 					c.assignedEpochWeight[leg.id] = weight
 				}
 			}
+			for _, leg := range legs {
+				c.assignedEpochReady[leg.id] = !leg.closed.Load() && (c.ordinaryOwnerAllowed(leg.id) || selectable[leg.id])
+			}
+			var mask uint8
+			for id := 0; id < 2 && id < len(c.assignedEpochReady); id++ {
+				if c.assignedEpochReady[id] {
+					mask |= 1 << id
+				}
+			}
 			c.assignedEpochMask = mask
 		}
 	}
-	if c.capacity != nil {
+	if c.capacity != nil || c.capacityProvider != nil {
 		// Changing capacity changes future entitlement, not historical service.
 		// Preserve each leg's normalized finish across a weight update so a
 		// long-lived stream does not acquire a catch-up burst or stall.
@@ -201,7 +247,7 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 		}
 	}
 	for _, leg := range legs {
-		if leg.closed.Load() {
+		if leg.closed.Load() || !selectable[leg.id] {
 			continue
 		}
 		weight := weights[leg.id]
@@ -209,6 +255,9 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 			continue
 		}
 		next := float64(c.assignedService[leg.id]+uint64(len(r.Payload())))/weight - c.assignedEpochOrigin[leg.id]
+		if int(leg.id) < len(feedbackLegs) && feedbackLegs[leg.id] == leg {
+			next += pathPenalty[leg.id]
+		}
 		if best == nil || next < score || (next == score && leg.id < best.id) {
 			best, score = leg, next
 		}
@@ -220,11 +269,35 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 	// correction out of the hot path for the bulk of records while still
 	// giving each advancing frontier a nearby candidate.
 	if c.cfg.HOLMode == StreamHOLCompletion && r.Sequence()%holCandidateStride == 0 {
-		best = c.holCorrection(r, best, legs)
+		eligible := make([]*streamLeg, 0, 2)
+		for _, leg := range legs {
+			if selectable[leg.id] {
+				eligible = append(eligible, leg)
+			}
+		}
+		best = c.holCorrection(r, best, eligible)
 	}
 	n := uint64(len(r.Payload()))
 	if a.admitted.Load() {
 		a.owner = best
+		return best
+	}
+	if c.slowLegProtection() && !c.txLedger.assignOrdinary(r, best.id, now) {
+		return nil
+	}
+	if a.owner != nil && a.owner != best {
+		c.cancelPendingRecoveryProbe(a.owner.id, r.Sequence(), now)
+	}
+	c.ordinaryAssignedRecord(best.id, r, now, len(r.Payload()))
+	if c.slowLegProtection() {
+		c.admission.mu.Lock()
+		epoch := c.admission.legs[best.id].since
+		c.admission.mu.Unlock()
+		c.txLedger.setOrigin(r, c.legGeneration[best.id].Load(), epoch)
+	}
+	// An expired cooldown can reselect the same pending owner. Starting its
+	// bounded probe is valid, but no ownership or virtual service moved.
+	if a.owner == best {
 		return best
 	}
 	if a.owner != nil {
@@ -235,19 +308,23 @@ func (c *StreamEngine) assignBenchmark(r *StreamTXRecord, a *benchmarkAssignment
 		c.decoupledStats.reassignments.Add(1)
 	} else {
 		c.decoupledStats.initial.Add(n)
+		c.ordinaryAssignedBytes[best.id].Add(n)
 	}
 	a.owner = best
 	c.assignedService[best.id] += n
 	c.assignedRecords[best.id]++
 	if trace := c.cfg.assignmentTrace; trace != nil && trace.armed && len(trace.samples) < 1024 {
-		trace.samples = append(trace.samples, benchmarkAssignedSample{Leg: best.id, Bytes: c.assignedService,
-			Debt: float64(c.assignedService[0])/float64(c.cfg.BandwidthMbps[0]) - float64(c.assignedService[1])/float64(c.cfg.BandwidthMbps[1])})
+		var legacyBytes [2]uint64
+		copy(legacyBytes[:], c.assignedService)
+		weight0, weight1 := float64(c.weightFor(0)), float64(c.weightFor(1))
+		trace.samples = append(trace.samples, benchmarkAssignedSample{Leg: best.id, Bytes: legacyBytes,
+			Debt: float64(c.assignedService[0])/weight0 - float64(c.assignedService[1])/weight1})
 	}
 	return best
 }
 
 func (c *StreamEngine) reassignFailedPending(id uint8) {
-	if !c.assignedDecoupledEnabled() || id >= 2 {
+	if !c.assignedDecoupledEnabled() || int(id) >= len(c.pending) {
 		return
 	}
 	for {
@@ -283,12 +360,17 @@ func (c *StreamEngine) reassignFailedPending(id uint8) {
 }
 
 func (c *StreamEngine) enqueueAssignedDecoupled(r *StreamTXRecord, avoid int16) error {
+	defer c.inputBlocked.Store(false)
 	a := &benchmarkAssignment{}
 	r.benchmarkAssignment.Store(a)
 	var leg *streamLeg
 	for leg == nil {
+		if !c.isOutstanding(r) {
+			return nil
+		}
 		leg = c.assignBenchmark(r, a)
 		if leg == nil {
+			c.inputBlocked.Store(true)
 			select {
 			case <-c.done:
 				return ErrStreamClosed
@@ -298,19 +380,30 @@ func (c *StreamEngine) enqueueAssignedDecoupled(r *StreamTXRecord, avoid int16) 
 	}
 	// A hard failure while the planner is waiting for this bounded queue is
 	// handled by its feeder. No second queue push or second initial assignment.
-	select {
-	case c.pending[leg.id] <- r:
-	default:
+	for {
+		if !c.isOutstanding(r) {
+			return nil
+		}
+		select {
+		case c.pending[leg.id] <- r:
+			goto queued
+		default:
+		}
+		c.inputBlocked.Store(true)
 		started := time.Now()
 		select {
 		case <-c.done:
 			return ErrStreamClosed
-		case c.pending[leg.id] <- r:
+		case <-c.decoupledWake[2]:
 		}
 		wait := uint64(time.Since(started))
 		c.pendingFullWaitNs[leg.id].Add(wait)
 		c.plannerPendingWaitNs.Add(wait)
+		if next := c.assignBenchmark(r, a); next != nil {
+			leg = next
+		}
 	}
+queued:
 	depth := int64(len(c.pending[leg.id]))
 	c.pendingDepth[leg.id].Store(depth)
 	for {
@@ -329,6 +422,7 @@ func (c *StreamEngine) pendingFeeder(id uint8) {
 		case <-c.done:
 			return
 		case r := <-c.pending[id]:
+			c.wakeDecoupled()
 			c.pendingDepth[id].Store(int64(len(c.pending[id])))
 			c.decoupledStats.feederHeld[id].Store(1)
 			for c.isOutstanding(r) {

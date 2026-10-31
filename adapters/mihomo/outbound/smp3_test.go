@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,6 +84,42 @@ func TestSMP3AggregationSchedulerMapsToCore(t *testing.T) {
 	}
 	if adapter.streamConfig.SchedulerMode != smp3core.StreamSchedulerAggregation {
 		t.Fatalf("scheduler mode=%v, want aggregation", adapter.streamConfig.SchedulerMode)
+	}
+}
+
+func TestSMP3DynamicCapacityEnablesCoreAdmissionProtection(t *testing.T) {
+	for _, mode := range []string{"fixed", "dynamic"} {
+		cfg, err := makeStreamConfig(SMP3Option{SchedulerMode: "aggregation", CapacityMode: mode, BandwidthMbps: []uint32{100, 100}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, _ := smp3core.NewStreamEngine(cfg)
+		stats := engine.Snapshot()
+		engine.Close()
+		if mode == "dynamic" && stats.OrdinaryAdmissionState != [2]string{"normal", "normal"} {
+			t.Fatalf("Native dynamic did not enable canonical Core protection: %v", stats.OrdinaryAdmissionState)
+		}
+		if mode == "fixed" && stats.OrdinaryAdmissionState != [2]string{} {
+			t.Fatal("fixed mode changed admission semantics")
+		}
+	}
+}
+
+func TestSMP3FallbackCapacityRemainsSessionPrivate(t *testing.T) {
+	adapter, err := NewSMP3(SMP3Option{Name: "mp", Server: "127.0.0.1", Port: 24444, Password: "local", Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, Leg1Fallback: "fallback", SchedulerMode: "aggregation", CapacityMode: "dynamic", BandwidthMbps: []uint32{100, 200}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1, p2 := adapter.capacityProvider(), adapter.capacityProvider()
+	defer p1.(interface{ Close() }).Close()
+	defer p2.(interface{ Close() }).Close()
+	now := time.Unix(100, 0)
+	p1.Admit(1, 256<<10, true, now)
+	p1.Ack(1, 256<<10, now.Add(2*time.Second))
+	_, e1, _, v1, _, _ := p1.Telemetry()
+	_, e2, _, v2, _, _ := p2.Telemetry()
+	if !v1[1] || v2[1] || e1[1] == e2[1] {
+		t.Fatal("fallback-capable slot shared physical capacity across sessions")
 	}
 }
 
@@ -247,7 +284,7 @@ func TestSMP3Leg1PrimaryFailureUsesFallback(t *testing.T) {
 		}
 	}
 	session := &smp3Session{owner: adapter, ctx: context.Background(), cancel: func() {}, destination: "example.com:443"}
-	conn, tag, err := session.dialCarrier(context.Background(), 1)
+	conn, tag, _, err := session.dialCarrier(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,8 +305,39 @@ type smp3TestServerSession struct {
 	sid    smp3core.SessionID
 }
 
+type smp3PathFrameCountingConn struct {
+	C.Conn
+	reads *atomic.Uint32
+}
+
+func (c smp3PathFrameCountingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n == smp3core.StreamFrameHeaderSize && smp3core.StreamFrameType(p[0]) == smp3core.StreamFramePathRTT {
+		c.reads.Add(1)
+	}
+	return n, err
+}
+
+type smp3PathFrameCountingNetConn struct {
+	net.Conn
+	reads *atomic.Uint32
+}
+
+func (c smp3PathFrameCountingNetConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n == smp3core.StreamFrameHeaderSize && smp3core.StreamFrameType(p[0]) == smp3core.StreamFramePathRTT {
+		c.reads.Add(1)
+	}
+	return n, err
+}
+
 type smp3TestBackend struct {
-	password string
+	password           string
+	pathAware          bool
+	closeV6BeforeReady bool
+	invalidV6          bool
+	readyDelay         time.Duration
+	pathReads          atomic.Uint32
 
 	mu         sync.Mutex
 	targets    []string
@@ -302,17 +370,63 @@ func (b *smp3TestBackend) accept(conn net.Conn) {
 			_ = conn.Close()
 			return
 		}
-		b.helloReady <- hello
+		var pathAuth *smp3core.StreamPathAuth
+		if hello.Version == smp3core.Version6 {
+			b.helloReady <- hello
+			b.mu.Lock()
+			closeV6BeforeReady, pathAware, invalidV6, readyDelay := b.closeV6BeforeReady, b.pathAware, b.invalidV6, b.readyDelay
+			b.mu.Unlock()
+			if closeV6BeforeReady {
+				_ = conn.Close()
+				return
+			}
+			selected := uint32(0)
+			if pathAware {
+				selected = smp3core.StreamCapabilityPathRTT
+			}
+			if readyDelay > 0 {
+				time.Sleep(readyDelay)
+			}
+			var auth smp3core.StreamPathAuth
+			if invalidV6 {
+				ready, encodeErr := smp3core.EncodeStreamReadyV2(hello, selected, [16]byte{0x44}, []byte(b.password))
+				if encodeErr != nil {
+					_ = conn.Close()
+					return
+				}
+				ready[len(ready)-1] ^= 1
+				if writeSMP3TestAll(conn, ready) != nil {
+					_ = conn.Close()
+					return
+				}
+				return
+			}
+			auth, err = smp3core.WriteStreamReadyV2(conn, hello, selected, []byte(b.password))
+			if err != nil {
+				_ = conn.Close()
+				return
+			}
+			if auth.PathRTTEnabled() {
+				pathAuth = &auth
+			}
+		} else {
+			b.helloReady <- hello
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.accepts++
 		if b.session == nil {
-			engine, app := smp3core.NewStreamEngine(smp3core.StreamConfig{
+			streamCfg := smp3core.StreamConfig{
 				ThresholdBytesPS:  0,
 				QueueFrames:       64,
 				MaxInflightFrames: 64,
 				RecoveryTimeout:   time.Second,
-			})
+			}
+			if pathAuth != nil {
+				streamCfg.ExperimentalPathAware = true
+				streamCfg.PathRole = smp3core.StreamPathRoleServer
+			}
+			engine, app := smp3core.NewStreamEngine(streamCfg)
 			b.session = &smp3TestServerSession{engine: engine, app: app, legs: make(map[uint8]net.Conn), sid: hello.SessionID}
 			b.appReady <- app
 		}
@@ -320,13 +434,34 @@ func (b *smp3TestBackend) accept(conn net.Conn) {
 			_ = conn.Close()
 			return
 		}
-		if err := b.session.engine.AttachLeg(hello.LegID, conn, nil); err != nil {
+		var attachErr error
+		if pathAuth != nil {
+			attachConn := smp3PathFrameCountingNetConn{Conn: conn, reads: &b.pathReads}
+			attachErr = b.session.engine.AttachLegWithPathAuth(hello.LegID, attachConn, nil, *pathAuth)
+		} else {
+			attachErr = b.session.engine.AttachLeg(hello.LegID, conn, nil)
+		}
+		if attachErr != nil {
 			_ = conn.Close()
 			return
 		}
 		b.session.legs[uint8(hello.LegID)] = conn
 		b.legReady <- struct{}{}
 	}()
+}
+
+func writeSMP3TestAll(conn net.Conn, value []byte) error {
+	for len(value) > 0 {
+		n, err := conn.Write(value)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		value = value[n:]
+	}
+	return nil
 }
 
 func (b *smp3TestBackend) closeLeg(id uint8) {
@@ -394,7 +529,7 @@ func TestSMP3DialCarrierUsesAggregateAndCanonicalHello(t *testing.T) {
 		destination: "example.com:443",
 	}
 	session.sessionID[0] = 0x42
-	conn, tag, err := session.dialCarrier(context.Background(), 0)
+	conn, tag, _, err := session.dialCarrier(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,6 +550,237 @@ func TestSMP3DialCarrierUsesAggregateAndCanonicalHello(t *testing.T) {
 	}
 	if hello.Destination != "example.com:443" || hello.SessionID != session.sessionID || hello.LegID != 0 {
 		t.Fatalf("unexpected HELLO: destination=%q session=%x leg=%d", hello.Destination, hello.SessionID, hello.LegID)
+	}
+}
+
+func TestSMP3PathAwareHandshakeAttachesAuthenticatedCoreAndKeepsCarrierAlive(t *testing.T) {
+	const password = "native-path-aware-test-password"
+	backend := newSMP3TestBackend(password)
+	backend.pathAware = true
+	backend.readyDelay = 2 * time.Millisecond
+	defer backend.close()
+	proxy := &smp3TestProxy{name: "line-path", backend: backend}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs:                  []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "other-path"}},
+		ExperimentalPathAware: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adapter.streamConfig.ExperimentalPathAware || adapter.streamConfig.PathRole != smp3core.StreamPathRoleClient {
+		t.Fatalf("Native adapter did not map opt-in to canonical client Core: %+v", adapter.streamConfig)
+	}
+	adapter.lookup = func(name string) (C.Proxy, bool) {
+		if name == "line-path" {
+			return proxy, true
+		}
+		return nil, false
+	}
+	session := &smp3Session{owner: adapter, ctx: context.Background(), cancel: func() {}, destination: "example.com:443"}
+	session.sessionID[0] = 0x6d
+	conn, carrierName, auth, err := session.dialCarrier(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if carrierName != "line-path" || auth == nil || !auth.PathRTTEnabled() {
+		t.Fatalf("V6 result carrier=%q auth=%v", carrierName, auth != nil && auth.PathRTTEnabled())
+	}
+	clientEngine, clientApp := smp3core.NewStreamEngine(adapter.streamConfig)
+	defer clientEngine.Close()
+	defer clientApp.Close()
+	var clientPathFrames atomic.Uint32
+	if err := attachMihomoStreamLeg(clientEngine, 0, smp3PathFrameCountingConn{Conn: conn, reads: &clientPathFrames}, auth); err != nil {
+		t.Fatal(err)
+	}
+	if feedback, ok := clientEngine.PathFeedback(0); !ok || feedback.RTT <= 0 || feedback.Samples == 0 || feedback.Identity.Direction != smp3core.StreamRTTClientToServer {
+		t.Fatalf("Native same-Carrier handshake RTT did not seed shared Core: feedback=%+v ok=%v", feedback, ok)
+	}
+	serverApp := <-backend.appReady
+	go func() {
+		buffer := make([]byte, 4096)
+		for {
+			n, err := serverApp.Read(buffer)
+			if n > 0 && writeSMP3TestAll(serverApp, buffer[:n]) != nil {
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	deadline := time.Now().Add(350 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		backend.mu.Lock()
+		serverEngine := backend.session.engine
+		backend.mu.Unlock()
+		if !clientEngine.HasLeg(0) || serverEngine == nil || !serverEngine.HasLeg(0) {
+			t.Fatal("same-Carrier RTT probe retired an authenticated Native/peer Core leg")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if clientPathFrames.Load() == 0 || backend.pathReads.Load() == 0 {
+		t.Fatalf("no same-Carrier probe/echo observed: client=%d peer=%d", clientPathFrames.Load(), backend.pathReads.Load())
+	}
+	payload := []byte("native adapter uses the shared Core for v6 RTT and stream data")
+	_ = clientApp.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := writeSMP3TestAll(clientApp, payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(clientApp, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("Native v6 payload changed in shared Core")
+	}
+}
+
+func TestSMP3V6TransportFailureUsesFreshV4ConnectionOnlyWithExplicitPolicy(t *testing.T) {
+	const password = "native-v6-fallback-test-password"
+	backend := newSMP3TestBackend(password)
+	backend.closeV6BeforeReady = true
+	defer backend.close()
+	proxy := &smp3TestProxy{name: "line-path", backend: backend}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs:                  []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "other-path"}},
+		ExperimentalPathAware: true, AllowPathRTTV4Fallback: true, AllowPathRTTV4FallbackOnTransportError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.lookup = func(name string) (C.Proxy, bool) {
+		if name == "line-path" {
+			return proxy, true
+		}
+		return nil, false
+	}
+	session := &smp3Session{owner: adapter, ctx: context.Background(), cancel: func() {}, destination: "example.com:443"}
+	conn, _, auth, err := session.dialCarrier(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if auth != nil {
+		t.Fatal("V4 fallback unexpectedly retained V6 path authentication")
+	}
+	first, second := <-backend.helloReady, <-backend.helloReady
+	if first.Version != smp3core.Version6 || second.Version != smp3core.Version4 {
+		t.Fatalf("protocol fallback did not open a fresh V4 connection: %v then %v", first.Version, second.Version)
+	}
+	backend.mu.Lock()
+	opens := len(backend.targets)
+	backend.mu.Unlock()
+	if opens != 2 {
+		t.Fatalf("fallback opened %d carrier connections, want separate V6 and V4 connections", opens)
+	}
+}
+
+func TestSMP3V6AuthenticationFailureDoesNotDowngrade(t *testing.T) {
+	const password = "native-v6-auth-failure-test-password"
+	backend := newSMP3TestBackend(password)
+	backend.invalidV6 = true
+	defer backend.close()
+	proxy := &smp3TestProxy{name: "line-path", backend: backend}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs:                  []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "other-path"}},
+		ExperimentalPathAware: true, AllowPathRTTV4Fallback: true, AllowPathRTTV4FallbackOnTransportError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.lookup = func(name string) (C.Proxy, bool) {
+		if name == "line-path" {
+			return proxy, true
+		}
+		return nil, false
+	}
+	session := &smp3Session{owner: adapter, ctx: context.Background(), cancel: func() {}, destination: "example.com:443"}
+	if conn, _, _, err := session.dialCarrier(context.Background(), 0); err == nil {
+		_ = conn.Close()
+		t.Fatal("invalid V6 READY was accepted")
+	}
+	<-backend.helloReady
+	backend.mu.Lock()
+	opens := len(backend.targets)
+	backend.mu.Unlock()
+	if opens != 1 {
+		t.Fatalf("authentication failure caused V4 downgrade on a new connection: opens=%d", opens)
+	}
+}
+
+func TestSMP3TransportFailureDoesNotDowngradeWithoutSeparateOptIn(t *testing.T) {
+	const password = "native-v6-transport-fallback-test-password"
+	backend := newSMP3TestBackend(password)
+	backend.closeV6BeforeReady = true
+	defer backend.close()
+	proxy := &smp3TestProxy{name: "line-path", backend: backend}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs:                  []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "other-path"}},
+		ExperimentalPathAware: true, AllowPathRTTV4Fallback: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.lookup = func(name string) (C.Proxy, bool) { return proxy, name == "line-path" }
+	session := &smp3Session{owner: adapter, ctx: context.Background(), cancel: func() {}, destination: "example.com:443"}
+	if conn, _, _, err := session.dialCarrier(context.Background(), 0); err == nil {
+		_ = conn.Close()
+		t.Fatal("ambiguous V6 transport failure downgraded without transport-error opt-in")
+	}
+	<-backend.helloReady
+	backend.mu.Lock()
+	opens := len(backend.targets)
+	backend.mu.Unlock()
+	if opens != 1 {
+		t.Fatalf("transport fallback without second opt-in opened %d carriers, want one V6 attempt", opens)
+	}
+}
+
+func TestSMP3PreviouslyAcceptedV6CannotLaterDowngrade(t *testing.T) {
+	const password = "native-v6-sticky-version-test-password"
+	backend := newSMP3TestBackend(password)
+	defer backend.close()
+	proxy := &smp3TestProxy{name: "line-path", backend: backend}
+	adapter, err := NewSMP3(SMP3Option{
+		Name: "mp-jp", Server: "10.66.66.1", Port: 24444, Password: password,
+		Legs:                  []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "other-path"}},
+		ExperimentalPathAware: true, AllowPathRTTV4Fallback: true, AllowPathRTTV4FallbackOnTransportError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.lookup = func(name string) (C.Proxy, bool) { return proxy, name == "line-path" }
+	session := &smp3Session{owner: adapter, ctx: context.Background(), cancel: func() {}, destination: "example.com:443"}
+	conn, _, auth, err := session.dialCarrier(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth != nil {
+		t.Fatal("V6 READY selecting no RTT capability returned path auth")
+	}
+	<-backend.helloReady
+	if !session.v6Accepted[0].Load() {
+		t.Fatal("authenticated V6 READY without RTT capability was not remembered")
+	}
+	backend.mu.Lock()
+	backend.closeV6BeforeReady = true
+	backend.mu.Unlock()
+	_ = conn.Close()
+	if conn, _, _, err := session.dialCarrier(context.Background(), 0); err == nil {
+		_ = conn.Close()
+		t.Fatal("a leg that previously accepted V6 silently downgraded after transport failure")
+	}
+	<-backend.helloReady
+	backend.mu.Lock()
+	opens := len(backend.targets)
+	backend.mu.Unlock()
+	if opens != 2 {
+		t.Fatalf("sticky V6 policy opened %d carriers, want one initial and one V6 rejoin", opens)
 	}
 }
 
