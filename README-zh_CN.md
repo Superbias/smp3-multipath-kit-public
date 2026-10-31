@@ -33,14 +33,16 @@ VLESS、Reality、Hysteria2、Snell 等外层协议，也不知道节点密码�
 
 ## 当前发布版本
 
-- Release：`v2.6.2`（聚合调度器显式 opt-in；数据面兼容性保持）
-- Native：Mihomo `v2.6.2`（基于固定的上游 `v1.19.28`）+ SMP3 adapter
-- Standalone：`smp3-client`、`smp3-server`
-- Android Standalone：`smp3-android-standalone-2.6.2-debug.apk`（`arm64-v8a`）
-- 兼容产物：固定版本的 `smp3-proxy`，支持 Linux/amd64 与 Windows/amd64
-- 监控：集成在 `smp3-server` 中，独立 `smp3-panel` 已退役
-- 官方下载：[GitHub Releases v2.6.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.6.2)
-- 下载后先用 `SHA256SUMS` 校验文件，不要直接使用示例配置中的占位密码。
+- Release：`v2.7.0`，基于统一 N-Leg Core，包含 V7 Coordinated Drain。
+- Standalone 客户端／服务端：Linux amd64/arm64、Windows amd64。
+- Standalone Front：Linux amd64 和 Windows amd64。
+- Native：固定 Mihomo `v1.19.28` + SMP3 adapter，提供 Linux amd64 和 Windows amd64。
+- 兼容代理：固定 sing-box `v1.14.0-beta.14` + SMP3 multipath，提供 Linux amd64 和 Windows amd64。
+- Android Standalone：ARM64 debug APK，以及对应的 Android/arm64 SMP3 client runtime。
+- Dashboard 集成在 `smp3-server`，不再单独发布 panel。
+- 官方下载：[GitHub Releases v2.7.0](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.7.0)
+- 运行前使用 Release 中的 `SHA256SUMS` 校验二进制。
+- 验收范围和已知限制见[发行说明](RELEASE_NOTES_2.7.0.md)。
 
 ## 当前资格化拓扑
 
@@ -96,7 +98,7 @@ Windows 使用同名 `.exe`。应用代理设置为 `socks5://127.0.0.1:18080`�
 
 ### Android Standalone
 
-在 ARM64 Android 设备安装 `smp3-android-standalone-2.6.2-debug.apk`。先让
+在 ARM64 Android 设备安装 `smp3-android-standalone-2.7.0-debug.apk`。先让
 外部代理核心提供 Carrier-A、Carrier-B 两个本机 SOCKS5 监听，再在 App 中
 填写 SMP3 server 地址、相同密码和两个监听端口。App 自身的本地 SOCKS5
 入口是 `127.0.0.1:18080`。详细步骤见 [Android 使用说明](docs/android/README.md)。

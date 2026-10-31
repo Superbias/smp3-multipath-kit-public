@@ -16,7 +16,7 @@ import (
 	smp3core "github.com/Superbias/smp3-multipath-kit-public/smp3core"
 )
 
-var Version = "2.7.0-selfuse.4"
+var Version = "2.7.0"
 
 type Duration time.Duration
 

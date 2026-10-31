@@ -8,6 +8,12 @@ dist/ARTIFACTS_SHA256
 dist/release-*/
 dist/*-dynamic
 dist/*-dynamic.exe
+dist/smp3-client-*
+dist/smp3-server-*
+dist/smp3-front-*
+dist/smp3-proxy-*
+dist/mihomo-smp3-*
+dist/smp3-panel*
 # Local fault-test binaries and Mihomo cache; retain source/config/log evidence.
 artifacts/slow-leg/native/
 artifacts/slow-leg/smp3-server

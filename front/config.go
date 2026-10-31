@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var Version = "2.7.0-selfuse.1"
+var Version = "2.7.0"
 
 type Duration time.Duration
 

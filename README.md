@@ -33,14 +33,16 @@ legs through the Carrier SOCKS5 endpoints.
 
 ## Release
 
-- Version: `v2.6.2` (opt-in aggregation scheduler; data-plane compatibility preserved)
-- Native artifact: Mihomo `v2.6.2` built from pinned upstream `v1.19.28` with the SMP3 adapter
-- Standalone artifacts: `smp3-client` and `smp3-server`
-- Android Standalone: `smp3-android-standalone-2.6.2-debug.apk` for `arm64-v8a`
-- Compatibility artifact: pinned `smp3-proxy` for Linux/amd64 and Windows/amd64
-- Observability: integrated into `smp3-server`; standalone `smp3-panel` is retired
-- [Download v2.6.2](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.6.2)
-- Verify every download with `SHA256SUMS` before running it.
+- Version: `v2.7.0` — N-Leg shared Core and coordinated V7 drain support.
+- Standalone client/server: Linux amd64/arm64 and Windows amd64 binaries.
+- Standalone Front: Linux amd64 and Windows amd64 binaries.
+- Native: pinned Mihomo `v1.19.28` with the SMP3 adapter for Linux amd64 and Windows amd64.
+- Compatibility proxy: pinned sing-box `v1.14.0-beta.14` with SMP3 multipath for Linux amd64 and Windows amd64.
+- Android Standalone: ARM64 debug APK plus its Android/arm64 SMP3 client runtime.
+- Dashboard remains integrated in `smp3-server`; no separate panel binary.
+- [Download v2.7.0](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.7.0)
+- Verify every binary with the release `SHA256SUMS` before running it.
+- Validation scope and known limitations are listed in [Release Notes](RELEASE_NOTES_2.7.0.md).
 
 ## Qualified deployment shape
 
@@ -91,7 +93,7 @@ Point applications to `socks5://127.0.0.1:18080`.
 
 ### Android Standalone
 
-Download `smp3-android-standalone-2.6.2-debug.apk` for an ARM64 Android
+Download `smp3-android-standalone-2.7.0-debug.apk` for an ARM64 Android
 device. Install it, ensure the external proxy core exposes Carrier-A and
 Carrier-B as local SOCKS5 listeners, then enter the SMP3 server endpoint,
 matching password, and listener ports in the app. The app provides its own
