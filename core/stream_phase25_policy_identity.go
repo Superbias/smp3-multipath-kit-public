@@ -30,29 +30,35 @@ type StreamRuntimePolicyIdentity struct {
 
 var errStreamPolicyCandidate = errors.New("invalid SMP3 stream policy candidate/configuration")
 
-// NewStreamEngineForCandidate is the fail-closed constructor for B0/B1
-// experiments. Ordinary production callers should continue to use
-// NewStreamEngine with a nil ExperimentalBoundedRescue field; that preserves
-// the pre-existing default behavior. B1 experiments must use this constructor
-// and verify RuntimePolicyIdentity before accepting samples.
+// NewStreamEngineForCandidate is the fail-closed constructor for explicit B0/B1
+// policy tests. Production callers may configure BoundedRescue through their
+// host configuration and should verify RuntimePolicyIdentity during startup.
 func NewStreamEngineForCandidate(cfg StreamConfig, candidate StreamPolicyCandidate) (*StreamEngine, net.Conn, error) {
+	rescueConfig, rescueConfigError := cfg.boundedRescueConfiguration()
+	if rescueConfigError != "" {
+		return nil, nil, fmt.Errorf("%w: %s", errStreamPolicyCandidate, rescueConfigError)
+	}
 	switch candidate {
 	case StreamPolicyB0:
-		if cfg.ExperimentalBoundedRescue != nil {
+		if rescueConfig != nil {
 			return nil, nil, fmt.Errorf("%w: B0 requires a nil bounded-rescue config", errStreamPolicyCandidate)
 		}
 	case StreamPolicyB1:
-		if cfg.ExperimentalBoundedRescue == nil || !cfg.ExperimentalBoundedRescue.Enabled {
+		if rescueConfig == nil || !rescueConfig.Enabled {
 			return nil, nil, fmt.Errorf("%w: B1 requires explicit Enabled=true", errStreamPolicyCandidate)
 		}
 		chunkSize := cfg.ChunkSize
 		if chunkSize <= 0 {
 			chunkSize = 64 * 1024
 		}
+		maxActiveLegs, maxLegsErr := normalizeMaxActiveStreamLegs(cfg.MaxActiveLegs)
+		if maxLegsErr != "" {
+			return nil, nil, fmt.Errorf("%w: %s", errStreamPolicyCandidate, maxLegsErr)
+		}
 		// Validate through the same constructor used by the engine, then discard
 		// the temporary manager. The live manager below is per-engine and gets a
 		// fresh session identity; no shared or process-global budget is involved.
-		validator, err := newStreamBoundedRescueBudget(*cfg.ExperimentalBoundedRescue, uint64(chunkSize), cfg.boundedRescueClock, nil)
+		validator, err := newStreamBoundedRescueBudget(*rescueConfig, uint64(chunkSize), maxActiveLegs, cfg.boundedRescueClock, nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", errStreamPolicyCandidate, err)
 		}
@@ -69,7 +75,7 @@ func NewStreamEngineForCandidate(cfg StreamConfig, candidate StreamPolicyCandida
 		return nil, nil, fmt.Errorf("%w: requested %s but instantiated %+v", errStreamPolicyCandidate, candidate, identity)
 	}
 	if candidate == StreamPolicyB1 {
-		requested := cfg.ExperimentalBoundedRescue
+		requested := rescueConfig
 		if identity.BudgetBasisPoints != requested.BudgetBasisPoints || identity.BurstBytes != requested.BurstBytes || identity.BudgetWindow != streamBoundedRescueWindow {
 			_ = engine.Close()
 			_ = app.Close()
@@ -87,7 +93,7 @@ func (c *StreamEngine) RuntimePolicyIdentity() StreamRuntimePolicyIdentity {
 		return StreamRuntimePolicyIdentity{ConfigError: "nil StreamEngine"}
 	}
 	if c.boundedRescue == nil {
-		if c.cfg.ExperimentalBoundedRescue != nil || c.boundedRescueConfigError != "" {
+		if c.cfg.BoundedRescue != nil || c.cfg.ExperimentalBoundedRescue != nil || c.boundedRescueConfigError != "" {
 			errText := c.boundedRescueConfigError
 			if errText == "" {
 				errText = "bounded-rescue config was supplied but no manager is active"

@@ -520,6 +520,12 @@ func validateReloadDelta(old, next Config) (added, removed []uint8, err error) {
 	oldFixed.UpstreamSocks.Leg1, nextFixed.UpstreamSocks.Leg1 = nil, nil
 	oldFixed.UpstreamSocks.Legs, nextFixed.UpstreamSocks.Legs = nil, nil
 	oldFixed.SMP3.HostCarrier.LegHandles, nextFixed.SMP3.HostCarrier.LegHandles = nil, nil
+	// These flags record whether JSON supplied an option so normalization can
+	// preserve legacy configs. They are parser metadata, not runtime behavior.
+	oldFixed.SMP3.Stream.schedulerModeExplicit, nextFixed.SMP3.Stream.schedulerModeExplicit = false, false
+	oldFixed.SMP3.Stream.capacityModeExplicit, nextFixed.SMP3.Stream.capacityModeExplicit = false, false
+	oldFixed.SMP3.Stream.activationModeExplicit, nextFixed.SMP3.Stream.activationModeExplicit = false, false
+	oldFixed.SMP3.Stream.holModeExplicit, nextFixed.SMP3.Stream.holModeExplicit = false, false
 	if !reflect.DeepEqual(oldFixed, nextFixed) {
 		return nil, nil, fmt.Errorf("%w: only route-count/name changes and per-Leg bandwidth prior changes are hot-applied", ErrReloadRequiresRestart)
 	}

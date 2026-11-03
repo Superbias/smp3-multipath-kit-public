@@ -225,6 +225,11 @@ func TestStreamSchedulerModes(t *testing.T) {
 	for _, mode := range []string{"adaptive", "static", "aggregation"} {
 		cfg := testConfig()
 		cfg.Stream.SchedulerMode = mode
+		if mode != "aggregation" {
+			cfg.Stream.CapacityMode = "fixed"
+			cfg.Stream.ActivationMode = "legacy"
+			cfg.Stream.HOLMode = "legacy"
+		}
 		if err := cfg.NormalizeAndValidate(); err != nil {
 			t.Fatalf("scheduler mode %q rejected: %v", mode, err)
 		}
@@ -236,6 +241,7 @@ func TestStreamSchedulerModes(t *testing.T) {
 		t.Fatalf("dynamic aggregation rejected: %v", err)
 	}
 	invalidCapacity := testConfig()
+	invalidCapacity.Stream.SchedulerMode = "adaptive"
 	invalidCapacity.Stream.CapacityMode = "dynamic"
 	if err := invalidCapacity.NormalizeAndValidate(); err == nil {
 		t.Fatal("dynamic capacity without aggregation was accepted")

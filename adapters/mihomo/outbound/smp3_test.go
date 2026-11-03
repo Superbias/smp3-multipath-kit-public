@@ -87,6 +87,30 @@ func TestSMP3AggregationSchedulerMapsToCore(t *testing.T) {
 	}
 }
 
+func TestSMP3DefaultsEnableLatestStreamFeaturesForNLeg(t *testing.T) {
+	cfg, err := makeStreamConfig(SMP3Option{
+		MaxActiveLegs: 4,
+		Legs:          []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}, {Proxy: "c"}, {Proxy: "d"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SchedulerMode != smp3core.StreamSchedulerAggregation || cfg.CapacityMode != smp3core.StreamCapacityDynamic ||
+		cfg.ActivationMode != smp3core.StreamActivationDynamic || cfg.HOLMode != smp3core.StreamHOLCompletion ||
+		!cfg.ExperimentalPathAware || cfg.BoundedRescue == nil || !cfg.BoundedRescue.Enabled ||
+		cfg.BoundedRescue.BudgetBasisPoints != 300 || cfg.BoundedRescue.BurstBytes != 0 {
+		t.Fatalf("Native defaults do not enable the latest N-Leg stream features: %+v", cfg)
+	}
+	if _, err := makeStreamConfig(SMP3Option{PathAwareMode: "disabled", BoundedRescueMode: "disabled"}); err != nil {
+		t.Fatal(err)
+	} else {
+		disabled, _ := makeStreamConfig(SMP3Option{PathAwareMode: "disabled", BoundedRescueMode: "disabled"})
+		if disabled.ExperimentalPathAware || disabled.BoundedRescue != nil {
+			t.Fatalf("explicit feature disable was ignored: %+v", disabled)
+		}
+	}
+}
+
 func TestSMP3DynamicCapacityEnablesCoreAdmissionProtection(t *testing.T) {
 	for _, mode := range []string{"fixed", "dynamic"} {
 		cfg, err := makeStreamConfig(SMP3Option{SchedulerMode: "aggregation", CapacityMode: mode, BandwidthMbps: []uint32{100, 100}})
@@ -137,7 +161,7 @@ func TestSMP3DynamicActivationMapsToCore(t *testing.T) {
 	}
 	if _, err := NewSMP3(SMP3Option{
 		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
-		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, ActivationMode: "dynamic",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, SchedulerMode: "adaptive", ActivationMode: "dynamic",
 	}); err == nil {
 		t.Fatal("dynamic activation without aggregation was accepted")
 	}
@@ -156,7 +180,7 @@ func TestSMP3HOLCompletionMapsToCore(t *testing.T) {
 	}
 	if _, err := NewSMP3(SMP3Option{
 		Name: "mp", Server: "10.66.66.1", Port: 24444, Password: "pw",
-		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, HOLMode: "completion",
+		Legs: []SMP3LegOption{{Proxy: "a"}, {Proxy: "b"}}, SchedulerMode: "adaptive", HOLMode: "completion",
 	}); err == nil {
 		t.Fatal("HOL completion without aggregation was accepted")
 	}

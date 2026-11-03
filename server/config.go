@@ -68,21 +68,46 @@ type CarrierTLSOptions struct {
 }
 
 type StreamOptions struct {
-	SchedulerMode           string   `json:"scheduler_mode"`
-	CapacityMode            string   `json:"capacity_mode,omitempty"`
-	ActivationMode          string   `json:"activation_mode,omitempty"`
-	HOLMode                 string   `json:"hol_mode,omitempty"`
-	ExperimentalPathAware   bool     `json:"experimental_path_aware,omitempty"`
-	ActivationThresholdMbps uint32   `json:"activation_threshold_mbps"`
-	ActivationWindow        Duration `json:"activation_window"`
-	ChunkSize               int      `json:"chunk_size"`
-	QueueFrames             int      `json:"queue_frames"`
-	BandwidthMbps           []uint32 `json:"bandwidth_mbps"`
-	MaxActiveLegs           int      `json:"max_active_legs,omitempty"`
-	MaxReorderFrames        int      `json:"max_reorder_frames"`
-	MaxInflightFrames       int      `json:"max_inflight_frames"`
-	AckInterval             Duration `json:"ack_interval"`
-	RetransmitTimeout       Duration `json:"retransmit_timeout"`
+	SchedulerMode                  string   `json:"scheduler_mode"`
+	CapacityMode                   string   `json:"capacity_mode,omitempty"`
+	ActivationMode                 string   `json:"activation_mode,omitempty"`
+	HOLMode                        string   `json:"hol_mode,omitempty"`
+	ExperimentalPathAware          bool     `json:"experimental_path_aware,omitempty"`
+	BoundedRescueMode              string   `json:"bounded_rescue_mode,omitempty"`
+	BoundedRescueBudgetBasisPoints uint16   `json:"bounded_rescue_budget_basis_points,omitempty"`
+	BoundedRescueBurstBytes        uint64   `json:"bounded_rescue_burst_bytes,omitempty"`
+	ActivationThresholdMbps        uint32   `json:"activation_threshold_mbps"`
+	ActivationWindow               Duration `json:"activation_window"`
+	ChunkSize                      int      `json:"chunk_size"`
+	QueueFrames                    int      `json:"queue_frames"`
+	BandwidthMbps                  []uint32 `json:"bandwidth_mbps"`
+	MaxActiveLegs                  int      `json:"max_active_legs,omitempty"`
+	MaxReorderFrames               int      `json:"max_reorder_frames"`
+	MaxInflightFrames              int      `json:"max_inflight_frames"`
+	AckInterval                    Duration `json:"ack_interval"`
+	RetransmitTimeout              Duration `json:"retransmit_timeout"`
+	schedulerModeExplicit          bool
+	capacityModeExplicit           bool
+	activationModeExplicit         bool
+	holModeExplicit                bool
+}
+
+func (c *StreamOptions) UnmarshalJSON(data []byte) error {
+	type streamOptionsAlias StreamOptions
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	decoded := streamOptionsAlias(*c)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = StreamOptions(decoded)
+	_, c.schedulerModeExplicit = fields["scheduler_mode"]
+	_, c.capacityModeExplicit = fields["capacity_mode"]
+	_, c.activationModeExplicit = fields["activation_mode"]
+	_, c.holModeExplicit = fields["hol_mode"]
+	return nil
 }
 
 type UDPOptions struct {
@@ -106,18 +131,23 @@ func DefaultConfig() Config {
 		HelloReadTimeout:        Duration(10 * time.Second),
 		RecoveryTimeout:         Duration(15 * time.Second),
 		Stream: StreamOptions{
-			SchedulerMode:           "adaptive",
-			CapacityMode:            "fixed",
-			ActivationThresholdMbps: 80,
-			ActivationWindow:        Duration(time.Second),
-			ChunkSize:               64 * 1024,
-			QueueFrames:             256,
-			BandwidthMbps:           []uint32{128, 500},
-			MaxActiveLegs:           smp3core.DefaultMaxActiveStreamLegs,
-			MaxReorderFrames:        4096,
-			MaxInflightFrames:       1024,
-			AckInterval:             Duration(20 * time.Millisecond),
-			RetransmitTimeout:       Duration(1500 * time.Millisecond),
+			SchedulerMode:                  "aggregation",
+			CapacityMode:                   "dynamic",
+			ActivationMode:                 "dynamic",
+			HOLMode:                        "completion",
+			ExperimentalPathAware:          true,
+			BoundedRescueMode:              "bounded",
+			BoundedRescueBudgetBasisPoints: 300,
+			ActivationThresholdMbps:        80,
+			ActivationWindow:               Duration(time.Second),
+			ChunkSize:                      64 * 1024,
+			QueueFrames:                    256,
+			BandwidthMbps:                  []uint32{128, 500},
+			MaxActiveLegs:                  smp3core.DefaultMaxActiveStreamLegs,
+			MaxReorderFrames:               4096,
+			MaxInflightFrames:              1024,
+			AckInterval:                    Duration(20 * time.Millisecond),
+			RetransmitTimeout:              Duration(1500 * time.Millisecond),
 		},
 		UDP: UDPOptions{
 			Mode:                       "adaptive",
@@ -309,12 +339,19 @@ func validateStream(c *StreamOptions) error {
 		return fmt.Errorf("invalid stream.max_active_legs: must be between 1 and %d", smp3core.MaxStreamLegIDCount)
 	}
 	if c.SchedulerMode == "" {
-		c.SchedulerMode = "adaptive"
+		c.SchedulerMode = "aggregation"
 	}
 	if c.SchedulerMode != "adaptive" && c.SchedulerMode != "static" && c.SchedulerMode != "aggregation" {
 		return fmt.Errorf("invalid scheduler_mode %q", c.SchedulerMode)
 	}
 	if c.CapacityMode == "" {
+		if c.SchedulerMode == "aggregation" {
+			c.CapacityMode = "dynamic"
+		} else {
+			c.CapacityMode = "fixed"
+		}
+	}
+	if c.schedulerModeExplicit && c.SchedulerMode != "aggregation" && !c.capacityModeExplicit && c.CapacityMode == "dynamic" {
 		c.CapacityMode = "fixed"
 	}
 	if c.CapacityMode != "fixed" && c.CapacityMode != "dynamic" {
@@ -324,6 +361,13 @@ func validateStream(c *StreamOptions) error {
 		return errors.New("stream.capacity_mode dynamic requires scheduler_mode aggregation")
 	}
 	if c.ActivationMode == "" {
+		if c.SchedulerMode == "aggregation" {
+			c.ActivationMode = "dynamic"
+		} else {
+			c.ActivationMode = "legacy"
+		}
+	}
+	if c.schedulerModeExplicit && c.SchedulerMode != "aggregation" && !c.activationModeExplicit && c.ActivationMode == "dynamic" {
 		c.ActivationMode = "legacy"
 	}
 	if c.ActivationMode != "legacy" && c.ActivationMode != "dynamic" {
@@ -333,6 +377,13 @@ func validateStream(c *StreamOptions) error {
 		return errors.New("stream.activation_mode dynamic requires scheduler_mode aggregation")
 	}
 	if c.HOLMode == "" {
+		if c.SchedulerMode == "aggregation" {
+			c.HOLMode = "completion"
+		} else {
+			c.HOLMode = "legacy"
+		}
+	}
+	if c.schedulerModeExplicit && c.SchedulerMode != "aggregation" && !c.holModeExplicit && c.HOLMode == "completion" {
 		c.HOLMode = "legacy"
 	}
 	if c.HOLMode != "legacy" && c.HOLMode != "disabled" && c.HOLMode != "completion" {
@@ -340,6 +391,15 @@ func validateStream(c *StreamOptions) error {
 	}
 	if c.HOLMode == "completion" && c.SchedulerMode != "aggregation" {
 		return errors.New("stream.hol_mode completion requires scheduler_mode aggregation")
+	}
+	if c.BoundedRescueMode == "" {
+		c.BoundedRescueMode = "bounded"
+	}
+	if c.BoundedRescueMode != "bounded" && c.BoundedRescueMode != "disabled" {
+		return fmt.Errorf("invalid stream.bounded_rescue_mode %q", c.BoundedRescueMode)
+	}
+	if c.BoundedRescueBudgetBasisPoints == 0 {
+		c.BoundedRescueBudgetBasisPoints = 300
 	}
 	if c.ActivationWindow.Time() <= 0 {
 		c.ActivationWindow = Duration(time.Second)
@@ -349,6 +409,14 @@ func validateStream(c *StreamOptions) error {
 	}
 	if c.ChunkSize < 1024 || c.ChunkSize > 1<<20 {
 		return errors.New("invalid chunk_size: must be between 1024 and 1048576")
+	}
+	if c.BoundedRescueMode == "bounded" {
+		if err := smp3core.ValidateStreamBoundedRescueConfig(smp3core.StreamBoundedRescueConfig{
+			Enabled: true, BudgetBasisPoints: c.BoundedRescueBudgetBasisPoints,
+			BurstBytes: c.BoundedRescueBurstBytes,
+		}, uint64(c.ChunkSize), c.MaxActiveLegs); err != nil {
+			return fmt.Errorf("invalid stream.bounded_rescue configuration: %w", err)
+		}
 	}
 	if c.QueueFrames == 0 {
 		c.QueueFrames = 256

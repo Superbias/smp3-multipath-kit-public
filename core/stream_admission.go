@@ -69,9 +69,12 @@ func (c *StreamEngine) admissionLegIDs() []uint8 {
 
 // alternateIDLocked selects the best currently usable companion from the
 // active Leg set. For two legs this is exactly the historical 1-id mapping;
-// for N legs it prefers a normal Leg and then the highest known session rate.
+// for N legs it prefers a normal Leg and then the highest known session rate,
+// falling back to the caller's precomputed configured weights. The fallback
+// weights must be read before admission.mu is acquired: weightFor takes
+// legsMu, while AttachLeg holds legsMu before entering the admission state.
 // admission.mu must be held.
-func (c *StreamEngine) alternateIDLocked(id uint8, active []uint8) (uint8, bool) {
+func (c *StreamEngine) alternateIDLocked(id uint8, active []uint8, fallbackWeights []uint32) (uint8, bool) {
 	var best uint8
 	bestHealthy := false
 	bestRate := -1.0
@@ -87,13 +90,30 @@ func (c *StreamEngine) alternateIDLocked(id uint8, active []uint8) (uint8, bool)
 			rate = state.openingRate
 		}
 		if rate <= 0 {
-			rate = float64(c.weightFor(candidate)) * 1e6 / 8
+			weight := uint32(1)
+			if int(candidate) < len(fallbackWeights) && fallbackWeights[candidate] > 0 {
+				weight = fallbackWeights[candidate]
+			}
+			rate = float64(weight) * 1e6 / 8
 		}
 		if !found || healthy && !bestHealthy || healthy == bestHealthy && rate > bestRate || healthy == bestHealthy && rate == bestRate && candidate < best {
 			best, bestHealthy, bestRate, found = candidate, healthy, rate, true
 		}
 	}
 	return best, found
+}
+
+// admissionFallbackWeights snapshots configured per-leg weights before the
+// caller takes admission.mu. This preserves deterministic alternate selection
+// without introducing the admission.mu -> legsMu lock order.
+func (c *StreamEngine) admissionFallbackWeights(active []uint8) []uint32 {
+	weights := make([]uint32, len(c.admission.legs))
+	for _, id := range active {
+		if int(id) < len(weights) {
+			weights[id] = c.weightFor(id)
+		}
+	}
+	return weights
 }
 
 func (c *StreamEngine) slowLegProtection() bool {
@@ -114,10 +134,11 @@ func (c *StreamEngine) ordinaryByteBudget(id uint8) uint64 {
 		weight = c.capacityProvider.Weight(id, weight)
 	}
 	active := c.admissionLegIDs()
+	fallbackWeights := c.admissionFallbackWeights(active)
 	c.admission.mu.Lock()
 	self := c.admission.legs[id]
 	var alternate streamAdmissionLeg
-	if peer, ok := c.alternateIDLocked(id, active); ok {
+	if peer, ok := c.alternateIDLocked(id, active, fallbackWeights); ok {
 		alternate = c.admission.legs[peer]
 	}
 	service := self.serviceRate
@@ -287,6 +308,7 @@ func (c *StreamEngine) ordinaryAssignedRecord(id uint8, record *StreamTXRecord, 
 	}
 	frontier := c.txLedger.ProgressSnapshot().AckedNext
 	active := c.admissionLegIDs()
+	fallbackWeights := c.admissionFallbackWeights(active)
 	seed := float64(c.weightFor(id))
 	for _, candidate := range active {
 		if candidate == id {
@@ -324,7 +346,7 @@ func (c *StreamEngine) ordinaryAssignedRecord(id uint8, record *StreamTXRecord, 
 		s.since, s.reason, s.proofAfter = now, "probe_pending_write", frontier
 		s.seedMbps = seed
 		s.openingRate = 0
-		if peerID, ok := c.alternateIDLocked(id, active); ok {
+		if peerID, ok := c.alternateIDLocked(id, active, fallbackWeights); ok {
 			s.openingRate = c.admission.legs[peerID].serviceRate
 		}
 		// Normal ACK service belongs to the retired admission phase. A stale
@@ -625,6 +647,7 @@ func (c *StreamEngine) admissionACK(result StreamTXACKResult) {
 		return
 	}
 	active := c.admissionLegIDs()
+	fallbackWeights := c.admissionFallbackWeights(active)
 	budgets := make([]uint64, len(c.admission.legs))
 	for id := range budgets {
 		budgets[id] = c.ordinaryByteBudget(uint8(id))
@@ -696,7 +719,7 @@ func (c *StreamEngine) admissionACK(result StreamTXACKResult) {
 			continue
 		}
 		s.proofAfter = result.AckedNext
-		peerID, hasPeer := c.alternateIDLocked(uint8(id), active)
+		peerID, hasPeer := c.alternateIDLocked(uint8(id), active, fallbackWeights)
 		if hasPeer && s.openingRate == 0 && c.admission.legs[peerID].serviceRate > 0 {
 			s.openingRate = c.admission.legs[peerID].serviceRate
 		}

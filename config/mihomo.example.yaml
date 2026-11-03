@@ -35,7 +35,15 @@ proxies:
       - proxy: line-path
       - proxy: public-hy2
     leg1-fallback: public-snell
-    scheduler-mode: adaptive
+    scheduler-mode: aggregation
+    capacity-mode: dynamic
+    activation-mode: dynamic
+    hol-mode: completion
+    max-active-legs: 16
+    path-aware-mode: enabled
+    bounded-rescue-mode: bounded
+    bounded-rescue-budget-basis-points: 300
+    bounded-rescue-burst-bytes: 0
     udp:
       enabled: true
       mode: adaptive

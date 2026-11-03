@@ -1,5 +1,5 @@
-// EXPERIMENTAL — NOT APPROVED FOR PRODUCTION.
-// Bounded HOL Rescue is an opt-in research policy; nil configuration preserves B0.
+// Bounded HOL Rescue remains a configurable Core policy. Host defaults may
+// enable the bounded mode; nil Core configuration preserves the baseline policy.
 package smp3core
 
 import (
@@ -171,9 +171,9 @@ func (m boundedRescueFactorMode) String() string {
 	}
 }
 
-// StreamBoundedRescueConfig is opt-in experiment configuration. No Native,
-// Standalone, or user-facing config parser maps to this field. Enabled must be
-// explicitly true. The byte window is fixed at 60 seconds in this experiment.
+// StreamBoundedRescueConfig controls the per-session bounded HOL Rescue
+// policy. Its rolling allowance is shared across every target leg; adding legs
+// does not multiply the session budget. The rolling window is fixed at 60s.
 type StreamBoundedRescueConfig struct {
 	Enabled           bool
 	BudgetBasisPoints uint16
@@ -221,8 +221,10 @@ type StreamBoundedRescueStats struct {
 	LifetimeMaxPerRecord       uint64
 	CrossEpochRecordCount      uint64
 	OutstandingReservations    int
-	AcceptedByTargetLeg        [2]uint64
-	AttemptedByTargetLeg       [2]uint64
+	AcceptedByTargetLeg        [2]uint64 // compatibility mirror for protocol legs 0 and 1
+	AttemptedByTargetLeg       [2]uint64 // compatibility mirror for protocol legs 0 and 1
+	AcceptedByTargetLegN       []uint64  `json:"accepted_by_target_leg_n,omitempty"`
+	AttemptedByTargetLegN      []uint64  `json:"attempted_by_target_leg_n,omitempty"`
 	RejectedReasons            map[string]uint64
 }
 
@@ -303,7 +305,9 @@ type streamBoundedRescueBudget struct {
 	acceptedEvents  rescueByteEventHeap
 	windowOriginal  uint64
 	windowAccepted  uint64
-	acceptedByLeg   [2]uint64
+	acceptedByLeg   []uint64
+	attemptedByLeg  []uint64
+	maxTargetLegs   int
 	baseReserved    uint64
 	burstReserved   uint64
 	burstCommitted  uint64 // lifetime token use; never rolls over
@@ -312,18 +316,30 @@ type streamBoundedRescueBudget struct {
 	stats           StreamBoundedRescueStats
 }
 
-func newStreamBoundedRescueBudget(cfg StreamBoundedRescueConfig, chunkBytes uint64, now func() time.Time, hook func(StreamRescueEvent)) (*streamBoundedRescueBudget, error) {
+// ValidateStreamBoundedRescueConfig checks the policy and its per-session
+// active-leg scope without creating runtime state.
+func ValidateStreamBoundedRescueConfig(cfg StreamBoundedRescueConfig, chunkBytes uint64, maxTargetLegs int) error {
+	if maxTargetLegs < 1 || maxTargetLegs > MaxStreamLegIDCount {
+		return fmt.Errorf("bounded rescue target-leg count must be between 1 and %d", MaxStreamLegIDCount)
+	}
 	if !cfg.Enabled {
-		return nil, errors.New("bounded rescue must be explicitly enabled")
+		return errors.New("bounded rescue must be explicitly enabled")
 	}
 	if !validBoundedRescueBasisPoints(cfg.BudgetBasisPoints) {
-		return nil, fmt.Errorf("unsupported bounded rescue ratio: %d basis points", cfg.BudgetBasisPoints)
+		return fmt.Errorf("unsupported bounded rescue ratio: %d basis points", cfg.BudgetBasisPoints)
 	}
 	if cfg.factorMode > boundedRescueFactorCR {
-		return nil, fmt.Errorf("unsupported bounded rescue factor mode: %d", cfg.factorMode)
+		return fmt.Errorf("unsupported bounded rescue factor mode: %d", cfg.factorMode)
 	}
 	if chunkBytes == 0 || cfg.BurstBytes > chunkBytes {
-		return nil, fmt.Errorf("bounded rescue burst %d exceeds one DATA chunk %d", cfg.BurstBytes, chunkBytes)
+		return fmt.Errorf("bounded rescue burst %d exceeds one DATA chunk %d", cfg.BurstBytes, chunkBytes)
+	}
+	return nil
+}
+
+func newStreamBoundedRescueBudget(cfg StreamBoundedRescueConfig, chunkBytes uint64, maxTargetLegs int, now func() time.Time, hook func(StreamRescueEvent)) (*streamBoundedRescueBudget, error) {
+	if err := ValidateStreamBoundedRescueConfig(cfg, chunkBytes, maxTargetLegs); err != nil {
+		return nil, err
 	}
 	if now == nil {
 		now = time.Now
@@ -334,9 +350,12 @@ func newStreamBoundedRescueBudget(cfg StreamBoundedRescueConfig, chunkBytes uint
 	}
 	b := &streamBoundedRescueBudget{
 		config: cfg, chunkBytes: chunkBytes, now: now, monotonicStart: time.Now(), eventHook: hook, sessionID: sessionID,
+		maxTargetLegs: maxTargetLegs, acceptedByLeg: make([]uint64, maxTargetLegs), attemptedByLeg: make([]uint64, maxTargetLegs),
 		reservations: make(map[uint64]*boundedRescueReservation),
 		records:      make(map[uint64]*boundedRescueRecordState),
 	}
+	b.stats.AcceptedByTargetLegN = make([]uint64, maxTargetLegs)
+	b.stats.AttemptedByTargetLegN = make([]uint64, maxTargetLegs)
 	heap.Init(&b.acceptedEvents)
 	b.stats.Enabled = true
 	b.stats.BudgetBasisPoints = cfg.BudgetBasisPoints
@@ -598,6 +617,13 @@ func (b *streamBoundedRescueBudget) Reserve(e StreamRescueEvidence, payloadBytes
 		emit()
 		return decision
 	}
+	if int(e.TargetLeg) >= b.maxTargetLegs {
+		decision.Reason = "target_leg_out_of_range"
+		b.rejectReasonLocked(decision.Reason)
+		finish("rescue_rejected", "rejected", decision.Reason)
+		emit()
+		return decision
+	}
 	b.stats.EligibleCount++
 	if e.Sequence < b.ackedNext {
 		b.stats.StaleOrAckedRejected++
@@ -783,8 +809,8 @@ func (b *streamBoundedRescueBudget) beginWriteDeferred(id uint64, at time.Time) 
 		b.stats.CrossEpochRecordCount++
 	}
 	b.stats.CarrierAttemptBytes += r.bytes
-	if r.target < 2 {
-		b.stats.AttemptedByTargetLeg[r.target] += r.bytes
+	if int(r.target) < len(b.attemptedByLeg) {
+		b.attemptedByLeg[r.target] += r.bytes
 	}
 	r.perRecordAttempt = record.lifetimeAttempt
 	event = &StreamRescueEvent{At: at, SessionID: b.sessionID, AttemptID: r.attemptID, PerRecordAttempt: r.perRecordAttempt, PreviousResult: r.previousResult, AckedAtAttempt: record.acked, Kind: "carrier_write_started", Evidence: r.evidence, Class: StreamRescueHealthyHOL, ReservationID: id, PayloadBytes: r.bytes}
@@ -897,7 +923,7 @@ func (b *streamBoundedRescueBudget) Settle(id uint64, acceptedBytes uint64, writ
 	if acceptedBytes > 0 {
 		heap.Push(&b.acceptedEvents, rescueByteEvent{at: at, bytes: acceptedBytes, target: r.target})
 		b.windowAccepted += acceptedBytes
-		if r.target < 2 {
+		if int(r.target) < len(b.acceptedByLeg) {
 			b.acceptedByLeg[r.target] += acceptedBytes
 		}
 		b.stats.CarrierAcceptedBytes += acceptedBytes
@@ -1060,6 +1086,7 @@ func (b *streamBoundedRescueBudget) Snapshot(at time.Time) StreamBoundedRescueSt
 	b.mu.Lock()
 	b.pruneLocked(at)
 	out := b.stats
+	out.AttemptedByTargetLegN = append([]uint64(nil), b.attemptedByLeg...)
 	out.Enabled = true
 	out.Closed = b.closed
 	out.Window = streamBoundedRescueWindow
@@ -1078,7 +1105,13 @@ func (b *streamBoundedRescueBudget) Snapshot(at time.Time) StreamBoundedRescueSt
 	out.BurstBytes = b.config.BurstBytes
 	out.BurstCommittedBytes = b.burstCommitted
 	out.OutstandingReservations = len(b.reservations)
-	out.AcceptedByTargetLeg = b.acceptedByLeg
+	for id := range out.AcceptedByTargetLeg {
+		if id < len(b.acceptedByLeg) {
+			out.AcceptedByTargetLeg[id] = b.acceptedByLeg[id]
+			out.AttemptedByTargetLeg[id] = b.attemptedByLeg[id]
+		}
+	}
+	out.AcceptedByTargetLegN = append([]uint64(nil), b.acceptedByLeg...)
 	out.RejectedReasons = make(map[string]uint64, len(b.stats.RejectedReasons))
 	for reason, count := range b.stats.RejectedReasons {
 		out.RejectedReasons[reason] = count
@@ -1117,7 +1150,7 @@ func (b *streamBoundedRescueBudget) pruneLocked(now time.Time) {
 		} else {
 			b.windowAccepted = 0
 		}
-		if event.target < 2 {
+		if int(event.target) < len(b.acceptedByLeg) {
 			if b.acceptedByLeg[event.target] >= event.bytes {
 				b.acceptedByLeg[event.target] -= event.bytes
 			} else {

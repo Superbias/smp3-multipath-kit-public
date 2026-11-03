@@ -28,7 +28,7 @@ func newBoundedRescueTestBudget(t *testing.T, bp uint16, burst uint64, hook func
 	clock := newBoundedRescueFakeClock()
 	budget, err := newStreamBoundedRescueBudget(StreamBoundedRescueConfig{
 		Enabled: true, BudgetBasisPoints: bp, BurstBytes: burst,
-	}, 64<<10, clock.Now, hook)
+	}, 64<<10, 2, clock.Now, hook)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func newBoundedRescueFactorTestBudget(t *testing.T, mode boundedRescueFactorMode
 	clock := newBoundedRescueFakeClock()
 	budget, err := newStreamBoundedRescueBudget(StreamBoundedRescueConfig{
 		Enabled: true, BudgetBasisPoints: bp, BurstBytes: 0, factorMode: mode,
-	}, 64<<10, clock.Now, hook)
+	}, 64<<10, 2, clock.Now, hook)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +112,88 @@ func TestPhase26CandidateIdentityEligibilityAndACKLink(t *testing.T) {
 		if i > 0 && event.MonotonicElapsedNS < events[i-1].MonotonicElapsedNS {
 			t.Fatalf("event %d monotonic timestamp moved backwards: prev=%d current=%d", i, events[i-1].MonotonicElapsedNS, event.MonotonicElapsedNS)
 		}
+	}
+}
+
+func TestBoundedRescueNLegTargetsShareSessionBudgetAndTrackAllLegs(t *testing.T) {
+	clock := newBoundedRescueFakeClock()
+	budget, err := newStreamBoundedRescueBudget(StreamBoundedRescueConfig{
+		Enabled: true, BudgetBasisPoints: 300,
+	}, 64<<10, 4, clock.Now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer budget.Close()
+	now := clock.Now()
+	if !budget.RecordOriginal(1, 1<<20, now) || !budget.RecordOriginal(2, 1<<20, now) {
+		t.Fatal("failed to seed the two original records")
+	}
+
+	first := budget.Reserve(boundedHealthyEvidence(1, 1, 2), 40_000, now)
+	if !first.Admitted {
+		t.Fatalf("leg 2 rescue should fit the shared session quota: %+v", first)
+	}
+	if !budget.BeginWrite(first.ReservationID, now) {
+		t.Fatal("leg 2 rescue did not reach Carrier Write")
+	}
+	if err := budget.Settle(first.ReservationID, 40_000, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	second := budget.Reserve(boundedHealthyEvidence(2, 1, 3), 40_000, now)
+	if second.Admitted || second.Reason != "rolling_budget_exhausted" {
+		t.Fatalf("leg 3 received a duplicate per-leg allowance instead of sharing the session budget: %+v", second)
+	}
+	stats := budget.Snapshot(now)
+	if len(stats.AcceptedByTargetLegN) != 4 || len(stats.AttemptedByTargetLegN) != 4 {
+		t.Fatalf("per-leg telemetry length must match configured N-Leg scope: accepted=%d attempted=%d", len(stats.AcceptedByTargetLegN), len(stats.AttemptedByTargetLegN))
+	}
+	if stats.AcceptedByTargetLegN[2] != 40_000 || stats.AcceptedByTargetLegN[3] != 0 ||
+		stats.AttemptedByTargetLegN[2] != 40_000 || stats.AttemptedByTargetLegN[3] != 0 {
+		t.Fatalf("target-leg accounting mismatch: accepted=%v attempted=%v", stats.AcceptedByTargetLegN, stats.AttemptedByTargetLegN)
+	}
+	stats.AcceptedByTargetLegN[2] = 1
+	stats.AttemptedByTargetLegN[2] = 1
+	if again := budget.Snapshot(now); again.AcceptedByTargetLegN[2] != 40_000 || again.AttemptedByTargetLegN[2] != 40_000 {
+		t.Fatalf("snapshot exposed mutable internal N-Leg counters: %+v", again)
+	}
+	if stats.AcceptedByTargetLeg[0] != 0 || stats.AttemptedByTargetLeg[0] != 0 {
+		t.Fatalf("legacy two-leg compatibility mirror changed unexpectedly: accepted=%v attempted=%v", stats.AcceptedByTargetLeg, stats.AttemptedByTargetLeg)
+	}
+}
+
+func TestBoundedRescueRejectsTargetOutsideConfiguredNLegScope(t *testing.T) {
+	clock := newBoundedRescueFakeClock()
+	budget, err := newStreamBoundedRescueBudget(StreamBoundedRescueConfig{
+		Enabled: true, BudgetBasisPoints: 300,
+	}, 64<<10, 3, clock.Now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer budget.Close()
+	if !budget.RecordOriginal(1, 1<<20, clock.Now()) {
+		t.Fatal("failed to seed original DATA")
+	}
+	decision := budget.Reserve(boundedHealthyEvidence(1, 1, 3), 512, clock.Now())
+	if decision.Admitted || decision.Reason != "target_leg_out_of_range" {
+		t.Fatalf("out-of-scope target leg must fail closed: %+v", decision)
+	}
+}
+
+func TestStreamEngineAcceptsBoundedRescueForNLegSessions(t *testing.T) {
+	engine, app := NewStreamEngine(StreamConfig{
+		MaxActiveLegs: 4,
+		BoundedRescue: &StreamBoundedRescueConfig{Enabled: true, BudgetBasisPoints: 300},
+	})
+	defer engine.Close()
+	defer app.Close()
+	identity := engine.RuntimePolicyIdentity()
+	if identity.ConfigError != "" || identity.Candidate != StreamPolicyB1 || !identity.B1Enabled {
+		t.Fatalf("four-leg B1 engine did not initialize: %+v", identity)
+	}
+	stats := engine.Snapshot().BoundedRescue
+	if len(stats.AcceptedByTargetLegN) != 4 || len(stats.AttemptedByTargetLegN) != 4 {
+		t.Fatalf("engine Bounded Rescue scope does not match MaxActiveLegs: %+v", stats)
 	}
 }
 
@@ -284,7 +366,7 @@ func TestPhase26ThreeHundredBPRollingBudgetSyntheticSchedulerPathDiagnostic(t *t
 	c.admission.legs[0].recoveryEpoch = 1
 	manager, err := newStreamBoundedRescueBudget(StreamBoundedRescueConfig{
 		Enabled: true, BudgetBasisPoints: 300, BurstBytes: 0,
-	}, 64<<10, clock.Now, c.cfg.rescueEventHook)
+	}, 64<<10, 2, clock.Now, c.cfg.rescueEventHook)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +864,7 @@ func newBoundedRescueEngineQueueTest(t *testing.T, cfg *StreamBoundedRescueConfi
 	c.admission.legs[0].restricted = true
 	c.admission.legs[0].recoveryEpoch = 1
 	if cfg != nil {
-		manager, err := newStreamBoundedRescueBudget(*cfg, 64<<10, clock.Now, nil)
+		manager, err := newStreamBoundedRescueBudget(*cfg, 64<<10, 2, clock.Now, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -881,7 +963,7 @@ func TestBoundedRescueC21LedgerACKAndWriteCommitLinearize(t *testing.T) {
 		}
 		budget, err := newStreamBoundedRescueBudget(StreamBoundedRescueConfig{
 			Enabled: true, BudgetBasisPoints: 100, BurstBytes: 0,
-		}, 64<<10, clock.Now, nil)
+		}, 64<<10, 2, clock.Now, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

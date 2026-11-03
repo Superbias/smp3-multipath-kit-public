@@ -534,19 +534,28 @@ func (s *Server) newSession(hello smp3core.Hello, destination string) *serverSes
 		ActivationMode:        streamActivationMode(s.cfg.Stream.ActivationMode),
 		HOLMode:               streamHOLMode(s.cfg.Stream.HOLMode),
 		ExperimentalPathAware: s.cfg.Stream.ExperimentalPathAware,
-		PathRole:              smp3core.StreamPathRoleServer,
-		ChunkSize:             s.cfg.Stream.ChunkSize,
-		QueueFrames:           s.cfg.Stream.QueueFrames,
-		ThresholdBytesPS:      uint64(s.cfg.Stream.ActivationThresholdMbps) * 125000,
-		ActivationWindow:      s.cfg.Stream.ActivationWindow.Time(),
-		BandwidthMbps:         append([]uint32(nil), s.cfg.Stream.BandwidthMbps...),
-		MaxActiveLegs:         s.cfg.Stream.MaxActiveLegs,
-		MaxReorderFrames:      s.cfg.Stream.MaxReorderFrames,
-		MaxInflightFrames:     s.cfg.Stream.MaxInflightFrames,
-		AckInterval:           s.cfg.Stream.AckInterval.Time(),
-		RetransmitTimeout:     s.cfg.Stream.RetransmitTimeout.Time(),
-		RecoveryTimeout:       s.cfg.RecoveryTimeout.Time(),
-		NotifyPeerOnActivate:  true,
+		BoundedRescue: func() *smp3core.StreamBoundedRescueConfig {
+			if s.cfg.Stream.BoundedRescueMode != "bounded" {
+				return nil
+			}
+			return &smp3core.StreamBoundedRescueConfig{
+				Enabled: true, BudgetBasisPoints: s.cfg.Stream.BoundedRescueBudgetBasisPoints,
+				BurstBytes: s.cfg.Stream.BoundedRescueBurstBytes,
+			}
+		}(),
+		PathRole:             smp3core.StreamPathRoleServer,
+		ChunkSize:            s.cfg.Stream.ChunkSize,
+		QueueFrames:          s.cfg.Stream.QueueFrames,
+		ThresholdBytesPS:     uint64(s.cfg.Stream.ActivationThresholdMbps) * 125000,
+		ActivationWindow:     s.cfg.Stream.ActivationWindow.Time(),
+		BandwidthMbps:        append([]uint32(nil), s.cfg.Stream.BandwidthMbps...),
+		MaxActiveLegs:        s.cfg.Stream.MaxActiveLegs,
+		MaxReorderFrames:     s.cfg.Stream.MaxReorderFrames,
+		MaxInflightFrames:    s.cfg.Stream.MaxInflightFrames,
+		AckInterval:          s.cfg.Stream.AckInterval.Time(),
+		RetransmitTimeout:    s.cfg.Stream.RetransmitTimeout.Time(),
+		RecoveryTimeout:      s.cfg.RecoveryTimeout.Time(),
+		NotifyPeerOnActivate: true,
 		DrainEventObserver: func(event smp3core.StreamDrainEvent) {
 			if s.cfg.drainEventObserver != nil {
 				s.cfg.drainEventObserver(event)

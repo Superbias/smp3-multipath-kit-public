@@ -301,6 +301,9 @@ func TestSocksLocalConnectRoundTripsThroughStandaloneServer(t *testing.T) {
 	cfg.SMP3.Routes.Leg0 = serverAddresses[1]
 	cfg.SMP3.Routes.Leg1 = "127.0.0.1:1"
 	cfg.SMP3.Stream.SchedulerMode = "static"
+	cfg.SMP3.Stream.CapacityMode = "fixed"
+	cfg.SMP3.Stream.ActivationMode = "legacy"
+	cfg.SMP3.Stream.HOLMode = "legacy"
 	instance, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -379,6 +382,7 @@ func TestSocksLocalConnectActivatesSecondStreamLeg(t *testing.T) {
 	cfg.SMP3.Routes.Leg1 = serverAddresses[2]
 	cfg.SMP3.Stream.ActivationThresholdMbps = 1
 	cfg.SMP3.Stream.ActivationWindow = Duration(20 * time.Millisecond)
+	cfg.SMP3.Stream.ActivationMode = "legacy"
 	cfg.SMP3.Stream.ChunkSize = 1024
 	instance, err := New(cfg)
 	if err != nil {

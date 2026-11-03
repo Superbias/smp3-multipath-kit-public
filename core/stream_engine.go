@@ -171,8 +171,11 @@ type StreamConfig struct {
 	// It runs synchronously on the Core goroutine and must not block.
 	DrainEventObserver    func(StreamDrainEvent)
 	ExperimentalPathAware bool
-	// ExperimentalBoundedRescue is an opt-in Phase 22 experiment. No production
-	// host config maps to it, and nil preserves the frozen Policy B behavior.
+	// BoundedRescue enables the session-wide, byte-bounded HOL Rescue policy.
+	// Host configuration defaults this on; nil preserves the legacy policy.
+	BoundedRescue *StreamBoundedRescueConfig
+	// ExperimentalBoundedRescue is retained for source compatibility with the
+	// Phase 22-41 experiment APIs. New callers should use BoundedRescue.
 	ExperimentalBoundedRescue *StreamBoundedRescueConfig
 	rescueEventHook           func(StreamRescueEvent) // experiment/test observer; nil in ordinary operation
 	boundedRescueClock        func() time.Time        // deterministic tests only
@@ -201,6 +204,16 @@ func normalizeMaxActiveStreamLegs(configured int) (int, string) {
 		return DefaultMaxActiveStreamLegs, fmt.Sprintf("max_active_legs must be between 1 and %d", MaxStreamLegIDCount)
 	}
 	return configured, ""
+}
+
+func (cfg StreamConfig) boundedRescueConfiguration() (*StreamBoundedRescueConfig, string) {
+	if cfg.BoundedRescue != nil && cfg.ExperimentalBoundedRescue != nil {
+		return nil, "bounded_rescue and deprecated experimental_bounded_rescue cannot both be set"
+	}
+	if cfg.BoundedRescue != nil {
+		return cfg.BoundedRescue, ""
+	}
+	return cfg.ExperimentalBoundedRescue, ""
 }
 
 type streamCloseTraceStage uint8
@@ -760,11 +773,12 @@ type StreamEngine struct {
 func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 	maxActiveLegs, configError := normalizeMaxActiveStreamLegs(cfg.MaxActiveLegs)
 	cfg.MaxActiveLegs = maxActiveLegs
+	boundedRescueConfig, boundedRescueConfigError := cfg.boundedRescueConfiguration()
+	if boundedRescueConfigError != "" {
+		configError = boundedRescueConfigError
+	}
 	if int(cfg.StartupPreferredLeg) >= maxActiveLegs {
 		configError = fmt.Sprintf("startup_preferred_leg must be less than max_active_legs (%d)", maxActiveLegs)
-	}
-	if cfg.ExperimentalBoundedRescue != nil && cfg.ExperimentalBoundedRescue.Enabled && maxActiveLegs > 2 {
-		configError = "bounded rescue currently supports at most two active legs"
 	}
 	if cfg.SchedulerMode == StreamSchedulerAggregation {
 		// Production aggregation is an explicit mode. Keep the older benchmark
@@ -852,8 +866,8 @@ func NewStreamEngine(cfg StreamConfig) (*StreamEngine, net.Conn) {
 		frontierRescueCh:       make(chan struct{}, 1),
 		ackWakeCh:              make(chan struct{}, 1),
 	}
-	if cfg.ExperimentalBoundedRescue != nil && cfg.ExperimentalBoundedRescue.Enabled {
-		manager, err := newStreamBoundedRescueBudget(*cfg.ExperimentalBoundedRescue, uint64(cfg.ChunkSize), cfg.boundedRescueClock, cfg.rescueEventHook)
+	if boundedRescueConfig != nil && boundedRescueConfig.Enabled {
+		manager, err := newStreamBoundedRescueBudget(*boundedRescueConfig, uint64(cfg.ChunkSize), maxActiveLegs, cfg.boundedRescueClock, cfg.rescueEventHook)
 		if err != nil {
 			c.boundedRescueConfigError = err.Error()
 		} else {

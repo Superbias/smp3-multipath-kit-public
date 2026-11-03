@@ -75,6 +75,7 @@ func TestStandaloneClientCloseTerminatesAppSocketAndReleasesSession(t *testing.T
 	config.SMP3.Routes.Leg1 = serverAddresses[2]
 	config.SMP3.Stream.ActivationThresholdMbps = 1
 	config.SMP3.Stream.ActivationWindow = Duration(20 * time.Millisecond)
+	config.SMP3.Stream.ActivationMode = "legacy"
 	config.SMP3.Stream.ChunkSize = 1024
 	instance, err := New(config)
 	if err != nil {

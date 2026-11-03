@@ -36,20 +36,24 @@ type SMP3UDPOption struct {
 // the existing udp.enabled option is set.
 type SMP3Option struct {
 	BasicOption
-	Name                string          `proxy:"name"`
-	Server              string          `proxy:"server"`
-	Port                int             `proxy:"port"`
-	Password            string          `proxy:"password,omitempty"`
-	Legs                []SMP3LegOption `proxy:"legs"`
-	MaxActiveLegs       int             `proxy:"max-active-legs,omitempty"`
-	Leg1Fallback        string          `proxy:"leg1-fallback,omitempty"`
-	SchedulerMode       string          `proxy:"scheduler-mode,omitempty"`
-	CapacityMode        string          `proxy:"capacity-mode,omitempty"`
-	ActivationMode      string          `proxy:"activation-mode,omitempty"`
-	HOLMode             string          `proxy:"hol-mode,omitempty"`
-	StartupPolicy       string          `proxy:"startup-policy,omitempty"`
-	StartupPreferredLeg uint8           `proxy:"startup-preferred-leg,omitempty"`
-	StartupGrace        string          `proxy:"startup-grace,omitempty"`
+	Name                           string          `proxy:"name"`
+	Server                         string          `proxy:"server"`
+	Port                           int             `proxy:"port"`
+	Password                       string          `proxy:"password,omitempty"`
+	Legs                           []SMP3LegOption `proxy:"legs"`
+	MaxActiveLegs                  int             `proxy:"max-active-legs,omitempty"`
+	Leg1Fallback                   string          `proxy:"leg1-fallback,omitempty"`
+	SchedulerMode                  string          `proxy:"scheduler-mode,omitempty"`
+	CapacityMode                   string          `proxy:"capacity-mode,omitempty"`
+	ActivationMode                 string          `proxy:"activation-mode,omitempty"`
+	HOLMode                        string          `proxy:"hol-mode,omitempty"`
+	PathAwareMode                  string          `proxy:"path-aware-mode,omitempty"`
+	BoundedRescueMode              string          `proxy:"bounded-rescue-mode,omitempty"`
+	BoundedRescueBudgetBasisPoints uint16          `proxy:"bounded-rescue-budget-basis-points,omitempty"`
+	BoundedRescueBurstBytes        uint64          `proxy:"bounded-rescue-burst-bytes,omitempty"`
+	StartupPolicy                  string          `proxy:"startup-policy,omitempty"`
+	StartupPreferredLeg            uint8           `proxy:"startup-preferred-leg,omitempty"`
+	StartupGrace                   string          `proxy:"startup-grace,omitempty"`
 
 	ActivationThresholdMbps uint64   `proxy:"activation-threshold-mbps,omitempty"`
 	ActivationWindow        string   `proxy:"activation-window,omitempty"`
@@ -690,19 +694,23 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	if err != nil {
 		return smp3core.StreamConfig{}, err
 	}
-	mode := smp3core.StreamSchedulerAdaptive
-	switch option.SchedulerMode {
-	case "", "adaptive":
+	mode := smp3core.StreamSchedulerAggregation
+	switch strings.ToLower(strings.TrimSpace(option.SchedulerMode)) {
+	case "", "aggregation":
+	case "adaptive":
+		mode = smp3core.StreamSchedulerAdaptive
 	case "static":
 		mode = smp3core.StreamSchedulerStatic
-	case "aggregation":
-		mode = smp3core.StreamSchedulerAggregation
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: scheduler-mode must be adaptive, static, or aggregation")
 	}
 	capacityMode := smp3core.StreamCapacityFixed
 	switch strings.ToLower(strings.TrimSpace(option.CapacityMode)) {
-	case "", "fixed":
+	case "":
+		if mode == smp3core.StreamSchedulerAggregation {
+			capacityMode = smp3core.StreamCapacityDynamic
+		}
+	case "fixed":
 	case "dynamic":
 		if mode != smp3core.StreamSchedulerAggregation {
 			return smp3core.StreamConfig{}, fmt.Errorf("smp3: capacity-mode dynamic requires scheduler-mode aggregation")
@@ -713,7 +721,11 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	}
 	activationMode := smp3core.StreamActivationLegacy
 	switch strings.ToLower(strings.TrimSpace(option.ActivationMode)) {
-	case "", "legacy":
+	case "":
+		if mode == smp3core.StreamSchedulerAggregation {
+			activationMode = smp3core.StreamActivationDynamic
+		}
+	case "legacy":
 	case "dynamic":
 		if mode != smp3core.StreamSchedulerAggregation {
 			return smp3core.StreamConfig{}, fmt.Errorf("smp3: activation-mode dynamic requires scheduler-mode aggregation")
@@ -724,7 +736,11 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 	}
 	holMode := smp3core.StreamHOLLegacy
 	switch strings.ToLower(strings.TrimSpace(option.HOLMode)) {
-	case "", "legacy", "disabled":
+	case "":
+		if mode == smp3core.StreamSchedulerAggregation {
+			holMode = smp3core.StreamHOLCompletion
+		}
+	case "legacy", "disabled":
 	case "completion":
 		if mode != smp3core.StreamSchedulerAggregation {
 			return smp3core.StreamConfig{}, fmt.Errorf("smp3: hol-mode completion requires scheduler-mode aggregation")
@@ -732,6 +748,45 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 		holMode = smp3core.StreamHOLCompletion
 	default:
 		return smp3core.StreamConfig{}, fmt.Errorf("smp3: hol-mode must be legacy, disabled, or completion")
+	}
+	pathAware := true
+	switch strings.ToLower(strings.TrimSpace(option.PathAwareMode)) {
+	case "", "enabled":
+	case "disabled":
+		pathAware = false
+	default:
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: path-aware-mode must be enabled or disabled")
+	}
+	if option.ExperimentalPathAware {
+		if strings.EqualFold(strings.TrimSpace(option.PathAwareMode), "disabled") {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: experimental-path-aware conflicts with path-aware-mode disabled")
+		}
+		pathAware = true
+	}
+	boundedRescueMode := strings.ToLower(strings.TrimSpace(option.BoundedRescueMode))
+	if boundedRescueMode == "" {
+		boundedRescueMode = "bounded"
+	}
+	if boundedRescueMode != "bounded" && boundedRescueMode != "disabled" {
+		return smp3core.StreamConfig{}, fmt.Errorf("smp3: bounded-rescue-mode must be bounded or disabled")
+	}
+	boundedRescueBPS := option.BoundedRescueBudgetBasisPoints
+	if boundedRescueBPS == 0 {
+		boundedRescueBPS = 300
+	}
+	var boundedRescue *smp3core.StreamBoundedRescueConfig
+	if boundedRescueMode == "bounded" {
+		boundedRescue = &smp3core.StreamBoundedRescueConfig{
+			Enabled: true, BudgetBasisPoints: boundedRescueBPS,
+			BurstBytes: option.BoundedRescueBurstBytes,
+		}
+		chunkSize := option.ChunkSize
+		if chunkSize <= 0 {
+			chunkSize = 64 * 1024
+		}
+		if err := smp3core.ValidateStreamBoundedRescueConfig(*boundedRescue, uint64(chunkSize), maxActiveLegs); err != nil {
+			return smp3core.StreamConfig{}, fmt.Errorf("smp3: invalid bounded rescue configuration: %w", err)
+		}
 	}
 	threshold := option.ActivationThresholdMbps
 	if threshold == 0 {
@@ -742,6 +797,7 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 		CapacityMode:          capacityMode,
 		ActivationMode:        activationMode,
 		HOLMode:               holMode,
+		BoundedRescue:         boundedRescue,
 		ChunkSize:             option.ChunkSize,
 		QueueFrames:           option.QueueFrames,
 		ThresholdBytesPS:      threshold * 1000 * 1000 / 8,
@@ -753,7 +809,7 @@ func makeStreamConfig(option SMP3Option) (smp3core.StreamConfig, error) {
 		AckInterval:           ackInterval,
 		RetransmitTimeout:     retransmitTimeout,
 		RecoveryTimeout:       recoveryTimeout,
-		ExperimentalPathAware: option.ExperimentalPathAware,
+		ExperimentalPathAware: pathAware,
 		PathRole:              smp3core.StreamPathRoleClient,
 		StartupPolicy:         startupPolicy,
 		StartupPreferredLeg:   smp3core.LegID(option.StartupPreferredLeg),

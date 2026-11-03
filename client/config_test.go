@@ -24,6 +24,12 @@ func TestLoadConfigDefaultsAndStrictValidation(t *testing.T) {
 	if cfg.Listen != "127.0.0.1:18080" || cfg.UpstreamSocks.ConnectTimeout.Time() != 10*time.Second || cfg.SMP3.CarrierReadyTimeout.Time() != 5*time.Second || cfg.SMP3.Stream.ActivationThresholdMbps != 80 || cfg.SMP3.Stream.StartupPolicy != "first-ready" || cfg.SMP3.UDP.MaxDatagramSize != 16384 {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
+	if cfg.SMP3.Stream.SchedulerMode != "aggregation" || cfg.SMP3.Stream.CapacityMode != "dynamic" ||
+		cfg.SMP3.Stream.ActivationMode != "dynamic" || cfg.SMP3.Stream.HOLMode != "completion" ||
+		!cfg.SMP3.Stream.ExperimentalPathAware || cfg.SMP3.Stream.BoundedRescueMode != "bounded" ||
+		cfg.SMP3.Stream.BoundedRescueBudgetBasisPoints != 300 {
+		t.Fatalf("latest host stream defaults not applied: %+v", cfg.SMP3.Stream)
+	}
 	withTimeout := strings.Replace(config, `"address": "127.0.0.1:7898"`, `"address": "127.0.0.1:7898", "connect_timeout": "250ms"`, 1)
 	custom, err := LoadConfig(strings.NewReader(withTimeout))
 	if err != nil {
@@ -82,6 +88,46 @@ func TestLoadConfigTransportFallbackRequiresExplicitOptIn(t *testing.T) {
 	}
 	if defaults.SMP3.Stream.AllowPathRTTV4Fallback || defaults.SMP3.Stream.AllowPathRTTV4FallbackOnTransportError {
 		t.Fatalf("V4 transport fallback must default off: %+v", defaults.SMP3.Stream)
+	}
+}
+
+func TestStandaloneDefaultsEnableLatestStreamFeaturesAndAllowExplicitOptOut(t *testing.T) {
+	defaults := DefaultConfig()
+	defaults.SMP3.Password = "default-feature-test-password"
+	defaults.SMP3.Routes = RouteOptions{Leg0: "127.0.0.1:24441", Leg1: "127.0.0.1:24442"}
+	defaults.SMP3.Stream.MaxActiveLegs = 4
+	if err := defaults.NormalizeAndValidate(); err != nil {
+		t.Fatal(err)
+	}
+	coreConfig := defaults.SMP3.streamConfig(nil, nil)
+	if coreConfig.SchedulerMode != smp3core.StreamSchedulerAggregation || coreConfig.CapacityMode != smp3core.StreamCapacityDynamic ||
+		coreConfig.ActivationMode != smp3core.StreamActivationDynamic || coreConfig.HOLMode != smp3core.StreamHOLCompletion ||
+		!coreConfig.ExperimentalPathAware || coreConfig.BoundedRescue == nil || !coreConfig.BoundedRescue.Enabled ||
+		coreConfig.BoundedRescue.BudgetBasisPoints != 300 || coreConfig.BoundedRescue.BurstBytes != 0 {
+		t.Fatalf("standalone defaults do not enable the latest features: %+v", coreConfig)
+	}
+	engine, app := smp3core.NewStreamEngine(coreConfig)
+	if identity := engine.RuntimePolicyIdentity(); identity.ConfigError != "" || identity.Candidate != smp3core.StreamPolicyB1 {
+		_ = engine.Close()
+		_ = app.Close()
+		t.Fatalf("Standalone did not activate canonical Bounded Rescue: %+v", identity)
+	}
+	if stats := engine.Snapshot().BoundedRescue; len(stats.AcceptedByTargetLegN) != 4 {
+		_ = engine.Close()
+		_ = app.Close()
+		t.Fatalf("Standalone Core budget did not cover N active legs: %+v", stats)
+	}
+	_ = engine.Close()
+	_ = app.Close()
+
+	config := `{"smp3":{"password":"test-password","routes":{"leg0":"127.0.0.1:24441","leg1":"127.0.0.1:24442"},"stream":{"experimental_path_aware":false,"bounded_rescue_mode":"disabled"}}}`
+	loaded, err := LoadConfig(strings.NewReader(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	optOut := loaded.SMP3.streamConfig(nil, nil)
+	if optOut.ExperimentalPathAware || optOut.BoundedRescue != nil {
+		t.Fatalf("explicit feature opt-out was ignored: %+v", optOut)
 	}
 }
 
@@ -258,6 +304,11 @@ func TestStreamSchedulerModes(t *testing.T) {
 	for _, mode := range []string{"adaptive", "static", "aggregation"} {
 		cfg := validTestConfig()
 		cfg.SMP3.Stream.SchedulerMode = mode
+		if mode != "aggregation" {
+			cfg.SMP3.Stream.CapacityMode = "fixed"
+			cfg.SMP3.Stream.ActivationMode = "legacy"
+			cfg.SMP3.Stream.HOLMode = "legacy"
+		}
 		if err := cfg.NormalizeAndValidate(); err != nil {
 			t.Fatalf("scheduler mode %q rejected: %v", mode, err)
 		}
@@ -269,6 +320,7 @@ func TestStreamSchedulerModes(t *testing.T) {
 		t.Fatalf("dynamic aggregation rejected: %v", err)
 	}
 	invalidCapacity := validTestConfig()
+	invalidCapacity.SMP3.Stream.SchedulerMode = "adaptive"
 	invalidCapacity.SMP3.Stream.CapacityMode = "dynamic"
 	if err := invalidCapacity.NormalizeAndValidate(); err == nil {
 		t.Fatal("dynamic capacity without aggregation was accepted")
