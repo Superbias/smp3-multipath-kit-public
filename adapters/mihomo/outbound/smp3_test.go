@@ -819,6 +819,7 @@ func TestSMP3DialContextLocalInteropAndLeg1Rejoin(t *testing.T) {
 		Port:           24444,
 		Password:       password,
 		Legs:           []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
+		ActivationMode: "legacy", // This test covers immediate two-leg interop/rejoin, not dynamic activation.
 		Leg1Fallback:   "public-snell",
 		RedialInterval: "100ms",
 	})
@@ -912,6 +913,7 @@ func TestSMP3RXActivationJoinsLeg1(t *testing.T) {
 		Port:                    24444,
 		Password:                password,
 		Legs:                    []SMP3LegOption{{Proxy: "line-path"}, {Proxy: "public-hy2"}},
+		ActivationMode:          "legacy", // This test exercises the fixed-rate RX activation threshold.
 		ActivationThresholdMbps: 1,
 		ActivationWindow:        "100ms",
 		RedialInterval:          "100ms",
