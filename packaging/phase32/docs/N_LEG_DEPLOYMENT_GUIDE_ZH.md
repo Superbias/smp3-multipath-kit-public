@@ -1,5 +1,7 @@
 # SMP3 v2.7 N-Leg 自用部署指南
 
+> 这是历史阶段的部署样板。首选[现有代理节点汇入落地 SMP3 的拓扑](../../../../README-zh_CN.md#首选部署拓扑)，前置无需运行 SMP3；Realm 仅为可选转发工具。前置代理可以经 WG 出站到落地，客户端无需加入 WG。历史测试结论不因此扩大为 WG/WAN 验收。
+
 本包提供 Standalone Client 与 Landing Server。默认采用 B0（共享 Core 的 N 路聚合调度）；实验性 B1 不从这些 Standalone 配置暴露。该构建适合维护者自用试运行，不代表 v2.7 GA 已通过。
 
 ## 部署拓扑
@@ -16,9 +18,9 @@ Client 为一条本地应用连接创建一个 SMP3 Core Session，再按 `smp3.
 4. 限制 Landing 8443/TCP 到可信 Client/Realm 出口地址。TLS 和 HELLO HMAC 都要启用；不要公开未限制的任意目标转发。
 5. 以服务方式安装：`sudo bash scripts/install-landing.sh`。安装脚本保留现有配置；修改后执行 `sudo systemctl enable --now smp3-landing`。
 
-## 2. 配置 Realm TCP 转发
+## 2. 可选：配置 Realm TCP 转发
 
-按 `REALM_TCP_FORWARDING_REFERENCE.md` 建立纯 TCP 监听转发，目标是同一个 Landing `IP:8443`。每个 Realm 前置提供一个 Client 可连接的地址。不得使用 UDP 隧道或 TLS 终止；转发侧不需要 SMP3 认证或调度状态。Realm 自身的配置语法请使用对应 Realm 版本文档，本包不猜测或生成未经验证的 Realm 配置。
+按 `REALM_TCP_FORWARDING_REFERENCE.md` 建立纯 TCP 监听转发，目标是同一个 Landing `IP:8443`。每个 Realm 前置提供一个 Client 可连接的地址。本文示例使用 TCP 转发；底层可经 WG 等 IP 隧道承载，但不得终止端到端 TLS；转发侧不需要 SMP3 认证或调度状态。Realm 自身的配置语法请使用对应 Realm 版本文档，本包不猜测或生成未经验证的 Realm 配置。
 
 ## 3. 配置 Client 的 N 条 Leg
 

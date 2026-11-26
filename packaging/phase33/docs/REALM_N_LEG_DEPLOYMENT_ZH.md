@@ -1,5 +1,7 @@
 # Realm TCP 多路部署参考（中文）
 
+> Realm 是可选方案。首选[现有代理节点汇入落地 SMP3 的拓扑](../../../../README-zh_CN.md#首选部署拓扑)：前置无需运行 SMP3，前置代理可经 WG 出站到落地。下方历史验证范围保持原样。
+
 ## 验证状态
 
 本次没有安装或发现 Realm 可执行文件，因此 Realm 真实版本、配置语法、单 Realm、多 Realm、断线重连均为 **NOT EXERCISED**。本文只说明部署拓扑与操作前提，不提供未经解析器验证的 Realm TOML。
@@ -11,7 +13,7 @@ Client 的每条 Leg 建立独立 TCP Carrier。可以将直连路线和一个�
 ## 上线前检查
 
 1. 记录实际 Realm 版本和官方配置文档版本。
-2. 在 Realm 自带配置校验器中验证纯 TCP listener/forward 配置；确认没有 UDP 隧道、TLS 终止或协议改写。
+2. 在 Realm 自带配置校验器中验证纯 TCP listener/forward 配置；确认不终止端到端 TLS、不改写 SMP3 字节流；底层 WG 路由、回程和 MTU 需独立配置及验证。
 3. 确认多条 Leg 到 Landing 的实际路由确实不同；不同 Realm 地址或 TCP Established 状态不能证明物理路径独立。
 4. 保护 Landing TLS 私钥和 SMP3 密码；限制 Landing listener 来源地址。
 5. 先进行单个新应用连接的小流量验证，观察每 Leg 唯一 DATA、ACK、EOF、重试、资源和错误；任何数据完整性问题立即停止扩展。

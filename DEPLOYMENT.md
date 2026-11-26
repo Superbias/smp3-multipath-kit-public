@@ -1,5 +1,31 @@
 # SMP3 v2.6.2 Deployment and Usage
 
+## Preferred deployment topology
+
+Use existing proxy nodes to carry independent SMP3 legs to one Landing SMP3 server. Deploy `smp3-server` on the Landing; a front machine only needs its existing proxy service and a working outbound route to that server.
+
+```text
+Application -> SMP3 client (Native Mihomo or Standalone)
+              |-- Leg 0 -> front-machine proxy node
+              |             -> WireGuard / IP routing / another forwarding path --+
+              |-- Leg 1 -> proxy node on the Landing -----------------------------+-> Landing SMP3 listener
+              `-- Leg N -> another independently selected proxy path -------------+        -> application_target
+```
+
+**Realm and `smp3-front` are optional. Front machines do not need to run SMP3.** In the WireGuard example, only the front machine and Landing are WireGuard peers; the client connects to the front proxy node normally and does not need to join WireGuard. The front proxy's outbound routing sends the connection to the Landing SMP3 listener through WireGuard. The other leg reaches that listener through a proxy node on the Landing.
+
+- **Native Mihomo:** `legs[].proxy` selects the existing proxy node for each leg. The common `server` and `port` identify the Landing SMP3 endpoint to dial through those nodes, not the front proxy's listening port.
+- **Standalone:** each `upstream_socks.legs[]` selects a local SOCKS5 endpoint supplied by external proxy software; the corresponding `smp3.routes.legs[].address` is the SMP3 endpoint reached through it. Node credentials and the remote front-to-Landing route belong to that proxy software and the operating system.
+- Choose an SMP3 endpoint reachable from every selected proxy exit. A Landing WireGuard IP can work if both the front proxy and Landing-local proxy can reach it; a public or routed private address can also work. `127.0.0.1` refers to the host making the final dial, so it is unsuitable as a common endpoint when one exit is on the front machine.
+- The client creates the carriers with the same authenticated Session ID and distinct Leg IDs. Client and Landing Core instances perform scheduling, ACK handling, reassembly and recovery. Arbitrary unrelated connections reaching the listener are not automatically combined.
+- Preserve the SMP3 byte stream and its configured end-to-end authentication/TLS. `application_target` is the application destination after SMP3 terminates, not the SMP3 listener or the front node address. Fixed-target destination checks still apply.
+
+SMP3 does not configure WireGuard, routes or remote proxy egress. This topology describes the supported carrier abstraction, not a claim that a particular WireGuard/WAN deployment has passed qualification. Shared bottlenecks can limit aggregation gains. Realm TCP forwarding remains an alternative when a transparent forwarding endpoint is useful.
+
+
+> The remaining v2.6.2 instructions below are historical. Use the [current README](README.md) for v2.7.0 configuration.
+
+
 This is the short operational guide for the current release. Keep production
 passwords, PSKs, Reality keys, subscriptions, and real node configs outside
 the repository.

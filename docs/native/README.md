@@ -1,5 +1,7 @@
 # SMP3 Native
 
+See the [preferred deployment topology](../../README.md#preferred-deployment-topology): each leg can use an existing front-machine proxy or a Landing-local proxy. The front proxy may route its outbound connection to the Landing SMP3 listener over WireGuard. Neither Realm nor SMP3 on the front machine is required; remote routing is configured outside SMP3.
+
 Native is **High-Performance Mihomo Integration**. The canonical artifact is
 `mihomo-smp3`; it embeds the SMP3 Native adapter and uses Mihomo child
 outbounds directly.

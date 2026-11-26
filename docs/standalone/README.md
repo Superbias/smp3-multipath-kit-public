@@ -1,5 +1,7 @@
 # SMP3 Standalone
 
+See the [preferred deployment topology](../../README.md#preferred-deployment-topology): each leg can use an existing front-machine proxy or a Landing-local proxy. The front proxy may route its outbound connection to the Landing SMP3 listener over WireGuard. Neither Realm nor SMP3 on the front machine is required; remote routing is configured outside SMP3.
+
 Standalone provides a local application SOCKS5 ingress and a vendor-neutral
 two-leg SMP3 client. Its positioning is **Universal External Proxy
 Compatibility**.
