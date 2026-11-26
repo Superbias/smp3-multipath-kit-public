@@ -1,5 +1,8 @@
 # SMP3 v2.6.2 Deployment and Usage
 
+> **v2.7.0 recommended tutorial:** [Existing proxy paths → encrypted Landing proxy → local SMP3](docs/native/PROXY_CONVERGENCE.md). Includes a sanitized Native configuration and verification/rollback steps. The v2.6.2 steps below are historical.
+
+
 ## Preferred deployment topology
 
 Use existing proxy nodes to carry independent SMP3 legs to one Landing SMP3 server. Deploy `smp3-server` on the Landing; a front machine only needs its existing proxy service and a working outbound route to that server.

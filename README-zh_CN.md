@@ -36,24 +36,21 @@ Standalone 与 Native 的流式传输共用 core/ 中的 canonical Core。宿主
 
 ## 首选部署拓扑
 
-优先复用现有代理节点，让多条独立的 SMP3 Leg 最终汇入同一个落地 SMP3 服务。落地机运行 `smp3-server`；前置机只需保留现有代理服务，并具备到落地 SMP3 入口的出站路径。
+**推荐实用样例：[Native Mihomo / Clash Party 经落地加密代理汇入 SMP3](docs/native/PROXY_CONVERGENCE.zh-CN.md)。** 包含脱敏的服务端/客户端配置、安全边界、持久化、验证与回退步骤。
 
 ```text
-应用 -> SMP3 客户端（Native Mihomo 或 Standalone）
-        |-- Leg 0 -> 前置机代理节点 -> WG / IP 路由 / 其他转发路径 --+
-        |-- Leg 1 -> 落地机上的代理节点 ----------------------------+-> 落地 SMP3 监听入口
-        `-- Leg N -> 另一条独立选择的代理路径 ----------------------+       -> application_target
+应用 -> Native SMP3
+        |-- 前置代理 A -> 落地加密代理 --+
+        `-- 前置代理 B -> 落地加密代理 --+-> 落地本机 SMP3 -> 真实业务目标
 ```
 
-**不要求前置机运行 SMP3，Realm 和 `smp3-front` 都是可选项。** 以 WireGuard 为例，WG 仅建立在前置机与落地机之间；客户端正常连接前置机的代理节点，无需加入 WG。前置节点的出站通过 WG 访问落地 SMP3 入口，另一条 Leg 则经落地机上的代理节点访问该入口。
+复用现有代理路径，只在落地机部署 SMP3。**前置机不需要运行 SMP3，Realm 和 smp3-front 都是可选项。** 样例中的两个子代理最终都终止于落地加密代理，由它在落地机拨号，因此共同目标可填 `127.0.0.1:24444`。若子代理只终止在前置机，就不能使用这个 loopback 目标。
 
-- **Native Mihomo：**`legs[].proxy` 为每条 Leg 选择现有代理节点。共同的 `server`、`port` 填写经这些节点拨号的落地 SMP3 目标，不是前置代理节点的监听端口。
-- **Standalone：**`upstream_socks.legs[]` 分别选择外部代理软件提供的本地 SOCKS5 入口；对应的 `smp3.routes.legs[].address` 是经该入口到达的 SMP3 目标。节点凭据、前置到落地的路由由代理软件和操作系统配置。
-- SMP3 目标必须对各代理出口可达。若前置节点和落地本机节点都能访问落地 WG 地址，就可以使用该地址；也可以使用公网或其他可路由私网地址。`127.0.0.1` 指最终发起拨号的主机自身，有前置出口时不宜把它当作共同目标。
-- 客户端为同一业务连接创建具有相同认证 Session ID、不同 Leg ID 的 Carrier。客户端与落地端的共享 Core 负责调度、ACK、重组和恢复；普通无关连接不会因为到达同一端口就自动聚合。
-- 中间路径须保留 SMP3 字节流及配置的端到端认证/TLS。`application_target` 是 SMP3 终止后的应用目标，与 SMP3 监听入口、前置节点地址不同；固定目标校验仍然生效。
+SMP3 不需要关心前置到落地具体使用代理链、WG 还是普通路由。WG 的两端是前置机和落地机，客户端无需加入 WG；关键是所有选定代理出口均能到达配置的落地 SMP3 目标。客户端使用相同认证会话、不同 Leg ID 建立 Carrier，共享 Core 负责聚合、ACK、重组和恢复。
 
-SMP3 不负责配置 WG、系统路由或远端代理出站。此拓扑说明当前 Carrier 抽象支持的接入方式，不表示某个 WG/WAN 部署已经通过实测验收；路径共享瓶颈时，带宽收益也可能受限。需要透明端口转发时，仍可选用 Realm。
+Native 通过 `legs[].proxy` 选择节点；Standalone 通过 `upstream_socks.legs[]` 选择外部 SOCKS5 入口，通过 `smp3.routes.legs[].address` 设置目标。两者使用同一服务端与 Core。共享瓶颈可能限制带宽收益。
+
+推荐样例将 SMP3 的 loopback 监听置于经过认证、加密的落地代理之后，不设置 application_target。公网/非 loopback SMP3 监听仍要求固定 application_target 和 Carrier TLS；不能靠公开中继绕过这些检查。最终拨号位置和访问安全前提详见[完整教程](docs/native/PROXY_CONVERGENCE.zh-CN.md)。
 
 ## 本版包含什么
 

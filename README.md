@@ -36,25 +36,21 @@ Standalone and Native stream traffic use the same canonical Core in core/. Host 
 
 ## Preferred deployment topology
 
-Use existing proxy nodes to carry independent SMP3 legs to one Landing SMP3 server. Deploy `smp3-server` on the Landing; a front machine only needs its existing proxy service and a working outbound route to that server.
+**Recommended working example: [Native Mihomo / Clash Party through encrypted Landing proxy nodes](docs/native/PROXY_CONVERGENCE.md).** It includes sanitized server/client configuration, access boundaries, persistence, verification and rollback.
 
 ```text
-Application -> SMP3 client (Native Mihomo or Standalone)
-              |-- Leg 0 -> front-machine proxy node
-              |             -> WireGuard / IP routing / another forwarding path --+
-              |-- Leg 1 -> proxy node on the Landing -----------------------------+-> Landing SMP3 listener
-              `-- Leg N -> another independently selected proxy path -------------+        -> application_target
+Application -> Native SMP3
+               |-- front proxy A -> encrypted Landing proxy --+
+               `-- front proxy B -> encrypted Landing proxy --+-> Landing-local SMP3 -> requested destination
 ```
 
-**Realm and `smp3-front` are optional. Front machines do not need to run SMP3.** In the WireGuard example, only the front machine and Landing are WireGuard peers; the client connects to the front proxy node normally and does not need to join WireGuard. The front proxy's outbound routing sends the connection to the Landing SMP3 listener through WireGuard. The other leg reaches that listener through a proxy node on the Landing.
+Reuse existing proxy paths; deploy SMP3 only on the Landing. Realm and smp3-front are optional. The Landing proxy makes the final dial, so both child outbounds in this example can reach `127.0.0.1:24444` on that machine. A child that terminates on a front machine cannot use that loopback target.
 
-- **Native Mihomo:** `legs[].proxy` selects the existing proxy node for each leg. The common `server` and `port` identify the Landing SMP3 endpoint to dial through those nodes, not the front proxy's listening port.
-- **Standalone:** each `upstream_socks.legs[]` selects a local SOCKS5 endpoint supplied by external proxy software; the corresponding `smp3.routes.legs[].address` is the SMP3 endpoint reached through it. Node credentials and the remote front-to-Landing route belong to that proxy software and the operating system.
-- Choose an SMP3 endpoint reachable from every selected proxy exit. A Landing WireGuard IP can work if both the front proxy and Landing-local proxy can reach it; a public or routed private address can also work. `127.0.0.1` refers to the host making the final dial, so it is unsuitable as a common endpoint when one exit is on the front machine.
-- The client creates the carriers with the same authenticated Session ID and distinct Leg IDs. Client and Landing Core instances perform scheduling, ACK handling, reassembly and recovery. Arbitrary unrelated connections reaching the listener are not automatically combined.
-- Preserve the SMP3 byte stream and its configured end-to-end authentication/TLS. `application_target` is the application destination after SMP3 terminates, not the SMP3 listener or the front node address. Fixed-target destination checks still apply.
+SMP3 does not need to know how the front-to-Landing route is implemented: existing proxy chaining, WireGuard or IP routing can carry it. With WG, the front machine and Landing are the peers; the client need not join WG. Every chosen proxy exit must be able to reach the configured Landing SMP3 endpoint. The same authenticated session and distinct leg IDs bind the carriers; the shared Core performs aggregation, ACK handling, reassembly and recovery.
 
-SMP3 does not configure WireGuard, routes or remote proxy egress. This topology describes the supported carrier abstraction, not a claim that a particular WireGuard/WAN deployment has passed qualification. Shared bottlenecks can limit aggregation gains. Realm TCP forwarding remains an alternative when a transparent forwarding endpoint is useful.
+Native selects carrier nodes with `legs[].proxy`. Standalone selects external SOCKS5 endpoints with `upstream_socks.legs[]` and destinations with `smp3.routes.legs[].address`; it uses the same server/Core. Shared bottlenecks can limit gains.
+
+The recommended example keeps SMP3 loopback behind an authenticated encrypted Landing proxy and omits application_target. A public/non-loopback SMP3 listener has different requirements: fixed application_target plus carrier TLS. Do not expose unrestricted loopback through a public relay to bypass those checks. See the [step-by-step example](docs/native/PROXY_CONVERGENCE.md) for the exact final-dial and security assumptions.
 
 ## What is included
 
