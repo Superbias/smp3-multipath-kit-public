@@ -146,7 +146,18 @@ SMP3 listener 绑定到**非 loopback** 地址时，必须同时配置 Carrier T
 }
 ~~~
 
-固定目标适用于只允许访问指定服务的部署。若需更广泛的代理用途，请仔细设计服务器、Front 和防火墙边界，不要通过移除校验把服务端变成公网任意目的地址代理。
+### 通用上网与固定目标边界
+
+固定 `application_target` 不一定是某个网站，也可以是落地侧 SOCKS5 服务，例如 `127.0.0.1:9080`。SMP3 HELLO 中的目标必须与该值完全一致；应用层 SOCKS 握手随后通过 SMP3 到达该服务，再由它连接最终网站。
+
+```text
+应用 -> 应用层 SOCKS 出站 -> 多 Leg SMP3 传输
+     -> 落地 SMP3 -> 固定 application_target（落地 SOCKS 服务）-> 最终网站
+```
+
+这需要客户端配置匹配的应用层 SOCKS 链；直接选择 Native `type: smp3` 代理访问任意网站，并不会自动增加这层握手。Native 无需单独启动 `smp3-client`，但其应用目标仍须满足服务端白名单。还需核实所选宿主/适配器能建立配置要求的 SMP3 Carrier TLS；连接子代理节点所用的 TLS，不会自动成为到 SMP3 listener 的 TLS。另见 [Release 部署澄清](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.7.0)。
+
+**不要为了绕过非 loopback 校验而增加 Front 或 DNAT。** 将不限制目标的 loopback SMP3 服务经公网中继暴露后，实际访问边界已改变，即使 `-check` 仍只看到 loopback 监听。Front 不增加 TLS，也不认证中继到落地的字节流；`allowed_sources` 是 IP 过滤，不是加密。DNAT 同理。若通过现有代理访问 loopback listener，也必须审查实际可达范围和传输保护。当前不增加应用层代理、直接在 HELLO 中使用任意目标的行为，仅在不限制目标的 loopback 配置下放行；项目没有文档化的公网 unrestricted 模式。如需改变该策略，应单独设计实现和安全边界，不能以转发绕过校验代替。
 
 ### 2. 准备客户端
 

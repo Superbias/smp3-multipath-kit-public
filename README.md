@@ -147,7 +147,19 @@ Example public-listener fields (replace all paths and values; this is not a comp
 }
 ~~~
 
-A fixed target is suitable for a deployment that authorizes one destination. For broader proxy use, design the server, Front, firewall, and access boundary deliberately rather than removing validation to create a public catch-all listener.
+### General web access and the fixed-target boundary
+
+A fixed `application_target` does not have to be one website. It can be a SOCKS5 service on the Landing, for example `127.0.0.1:9080`. The SMP3 HELLO destination must exactly match that value; the application-level SOCKS handshake then travels inside SMP3 to that service, which connects to the final website.
+
+```text
+Application -> application SOCKS outbound -> SMP3 transport over multiple legs
+            -> Landing SMP3 -> fixed application_target (Landing SOCKS service)
+            -> requested website
+```
+
+This requires a matching client-side application SOCKS chain; simply selecting a Native `type: smp3` proxy for arbitrary website destinations does not automatically add that chain. Native does not need a separate `smp3-client` process, but the application destination still has to satisfy the server allowlist. Also verify the chosen host/adapter can establish the configured SMP3 Carrier TLS: TLS to a child proxy node alone is not automatically TLS to the SMP3 listener. See the [Release deployment clarification](https://github.com/Superbias/smp3-multipath-kit-public/releases/tag/v2.7.0).
+
+**Do not add Front or DNAT merely to bypass non-loopback validation.** Exposing a loopback, unrestricted SMP3 server through a public relay changes its actual access boundary even though `-check` sees a loopback listener. Front does not add TLS or authenticate the relay-to-Landing stream; `allowed_sources` is an IP filter, not encryption. The same concern applies to DNAT. If a loopback listener is reached through an existing proxy, its actual reachability and transport protection still require review. Arbitrary HELLO destinations without an inner application proxy are allowed only by the current unrestricted loopback configuration; there is no documented public unrestricted mode. Changing that policy requires a separate implementation and security decision, not a forwarding workaround.
 
 ### 2. Prepare the client
 
