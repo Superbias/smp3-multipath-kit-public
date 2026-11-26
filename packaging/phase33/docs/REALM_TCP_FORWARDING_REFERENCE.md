@@ -1,6 +1,6 @@
 # Realm TCP Forwarding Reference
 
-> Optional transparent-forwarding recipe. Start with the [preferred proxy-node topology](../../../../README.md#preferred-deployment-topology). Front machines need not run SMP3 or Realm; a proxy outbound can reach the Landing over WireGuard or ordinary IP routing. The historical phase results do not qualify a WireGuard deployment.
+> Optional transparent-forwarding recipe. Start with the [preferred proxy-node topology](../../../README.md#preferred-deployment-topology). Front machines need not run SMP3 or Realm; a proxy outbound can reach the Landing over WireGuard or ordinary IP routing. The historical phase results do not qualify a WireGuard deployment.
 
 SMP3 N-leg Client can reach the same Landing TCP/TLS listener through multiple Realm TCP forwarding endpoints. Each forwarding endpoint must preserve the byte stream in both directions and must not parse or modify SMP3 frames.
 
